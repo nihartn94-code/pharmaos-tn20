@@ -1,0 +1,6 @@
+{
+  "name": "PharmaOS",
+  "description": "B2B pharmaceutical trading and supply management platform connecting manufacturers, brands, stockists, and administrators with intelligent basket optimization and shortage alerts.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

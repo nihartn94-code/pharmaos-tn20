@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Center medical pill capsule -->
+    <path
+        android:fillColor="#E0FBFC"
+        android:pathData="M38,36 h32 a18,18 0 0 1 18,18 v0 a18,18 0 0 1 -18,18 h-32 a18,18 0 0 1 -18,-18 v0 a18,18 0 0 1 18,-18 z" />
+    <!-- Half pill accent -->
+    <path
+        android:fillColor="#94D2BD"
+        android:pathData="M54,36 h16 a18,18 0 0 1 18,18 v0 a18,18 0 0 1 -18,18 h-16 z" />
+    <!-- Cross element in center -->
+    <path
+        android:fillColor="#005F73"
+        android:pathData="M51,44 h6 v20 h-6 z M44,51 h20 v6 h-20 z" />
+    <!-- Accent indicator -->
+    <path
+        android:fillColor="#EE9B00"
+        android:pathData="M74,34 a4,4 0 1 0 0.01,0 z" />
+</vector>
