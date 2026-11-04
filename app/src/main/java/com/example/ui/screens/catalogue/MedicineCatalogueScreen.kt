@@ -85,7 +85,10 @@ import com.example.ui.components.EmptyState
 import com.example.ui.components.LoadingState
 import java.util.Locale
 
-@OptIn(ExperimentalMaterial3Api::class)
+import android.content.res.Configuration
+import androidx.compose.ui.tooling.preview.Preview
+import com.example.ui.theme.PharmaOSTheme
+
 @Composable
 fun MedicineCatalogueScreen(
     viewModel: CatalogueViewModel,
@@ -100,20 +103,66 @@ fun MedicineCatalogueScreen(
     onNavigateToSearch: () -> Unit = {}
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+    MedicineCatalogueContent(
+        uiState = uiState,
+        onNavigateBack = onNavigateBack,
+        onProductClick = onProductClick,
+        onAddProductClick = onAddProductClick,
+        onSearchQueryChanged = { viewModel.onSearchQueryChanged(it) },
+        onSelectCategoryChip = { viewModel.selectCategoryChip(it) },
+        onClearFilters = { viewModel.clearFilters() },
+        onAddToCart = { product, qty -> viewModel.addToCart(product, quantity = qty) },
+        onIncrementQuantity = { product -> viewModel.incrementQuantity(product) },
+        onDecrementQuantity = { product -> viewModel.decrementQuantity(product) },
+        onSetPendingQuantity = { productId, qty -> viewModel.setPendingQuantity(productId, qty) },
+        onSetFilters = { dosage, cat, storage, rx, inStock, sort -> viewModel.setFilters(dosage, cat, storage, rx, inStock, sort) },
+        onClearMessages = { viewModel.clearMessages() },
+        onNavigateToBasket = onNavigateToBasket,
+        onNavigateToDashboard = onNavigateToDashboard,
+        onNavigateToOrders = onNavigateToOrders,
+        onNavigateToProfile = onNavigateToProfile,
+        onNavigateToOcr = onNavigateToOcr,
+        onNavigateToSearch = onNavigateToSearch
+    )
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun MedicineCatalogueContent(
+    uiState: CatalogueUiState,
+    onNavigateBack: () -> Unit,
+    onProductClick: (Long) -> Unit,
+    onAddProductClick: () -> Unit,
+    onSearchQueryChanged: (String) -> Unit,
+    onSelectCategoryChip: (String) -> Unit,
+    onClearFilters: () -> Unit,
+    onAddToCart: (ProductDetail, Int) -> Unit,
+    onIncrementQuantity: (ProductDetail) -> Unit,
+    onDecrementQuantity: (ProductDetail) -> Unit,
+    onSetPendingQuantity: (Long, Int) -> Unit,
+    onSetFilters: (DosageForm?, String?, StorageCondition?, Boolean?, Boolean, SortOption) -> Unit,
+    onClearMessages: () -> Unit,
+    onNavigateToBasket: () -> Unit = {},
+    onNavigateToDashboard: () -> Unit = {},
+    onNavigateToOrders: () -> Unit = {},
+    onNavigateToProfile: () -> Unit = {},
+    onNavigateToOcr: () -> Unit = {},
+    onNavigateToSearch: () -> Unit = {}
+) {
     var showFilterSheet by remember { mutableStateOf(false) }
     val snackbarHostState = remember { SnackbarHostState() }
 
     LaunchedEffect(uiState.errorMessage) {
         uiState.errorMessage?.let { msg ->
             snackbarHostState.showSnackbar(msg)
-            viewModel.clearMessages()
+            onClearMessages()
         }
     }
 
     LaunchedEffect(uiState.successMessage) {
         uiState.successMessage?.let { msg ->
             snackbarHostState.showSnackbar(msg)
-            viewModel.clearMessages()
+            onClearMessages()
         }
     }
 
@@ -179,7 +228,7 @@ fun MedicineCatalogueScreen(
                 // Search Input
                 CatalogueSearchBar(
                     query = uiState.searchQuery,
-                    onQueryChange = { viewModel.onSearchQueryChanged(it) },
+                    onQueryChange = { onSearchQueryChanged(it) },
                     onNavigateToSearch = onNavigateToSearch
                 )
 
@@ -187,7 +236,7 @@ fun MedicineCatalogueScreen(
                 CategoryChipsRow(
                     categories = categories,
                     selectedCategory = uiState.selectedCategoryChip,
-                    onCategorySelect = { viewModel.selectCategoryChip(it) }
+                    onCategorySelect = { onSelectCategoryChip(it) }
                 )
 
                 Spacer(modifier = Modifier.height(10.dp))
@@ -206,9 +255,9 @@ fun MedicineCatalogueScreen(
                         actionLabel = if (uiState.allProducts.isEmpty()) "Seed Reference Stock" else "Clear Search",
                         onActionClick = {
                             if (uiState.allProducts.isEmpty()) {
-                                viewModel.selectCategoryChip("Capsules")
+                                onSelectCategoryChip("Capsules")
                             } else {
-                                viewModel.clearFilters()
+                                onClearFilters()
                             }
                         }
                     )
@@ -230,20 +279,20 @@ fun MedicineCatalogueScreen(
                                 pendingQty = pendingQty,
                                 onCardClick = { onProductClick(product.id) },
                                 onAddClick = {
-                                    viewModel.addToCart(product, quantity = pendingQty)
+                                    onAddToCart(product, pendingQty)
                                 },
                                 onIncrement = {
                                     if (cartQty > 0) {
-                                        viewModel.incrementQuantity(product)
+                                        onIncrementQuantity(product)
                                     } else {
-                                        viewModel.setPendingQuantity(product.id, pendingQty + 1)
+                                        onSetPendingQuantity(product.id, pendingQty + 1)
                                     }
                                 },
                                 onDecrement = {
                                     if (cartQty > 0) {
-                                        viewModel.decrementQuantity(product)
+                                        onDecrementQuantity(product)
                                     } else {
-                                        viewModel.setPendingQuantity(product.id, (pendingQty - 1).coerceAtLeast(1))
+                                        onSetPendingQuantity(product.id, (pendingQty - 1).coerceAtLeast(1))
                                     }
                                 }
                             )
@@ -270,11 +319,11 @@ fun MedicineCatalogueScreen(
                 uiState = uiState,
                 onDismiss = { showFilterSheet = false },
                 onApply = { dosage, cat, storage, rx, inStock, sort ->
-                    viewModel.setFilters(dosage, cat, storage, rx, inStock, sort)
+                    onSetFilters(dosage, cat, storage, rx, inStock, sort)
                     showFilterSheet = false
                 },
                 onClear = {
-                    viewModel.clearFilters()
+                    onClearFilters()
                     showFilterSheet = false
                 }
             )
@@ -1159,3 +1208,73 @@ fun FilterBottomSheet(
         }
     }
 }
+
+@Preview(name = "Medicine Catalogue - Light Mode", showBackground = true)
+@Preview(name = "Medicine Catalogue - Dark Mode", uiMode = Configuration.UI_MODE_NIGHT_YES, showBackground = true)
+@Composable
+fun MedicineCatalogueScreenPreview() {
+    PharmaOSTheme {
+        MedicineCatalogueContent(
+            uiState = CatalogueUiState(
+                isLoading = false,
+                cartItemsCount = 3,
+                cartTotalPrice = 1420.0,
+                filteredProducts = listOf(
+                    ProductDetail(
+                        id = 1L,
+                        name = "Augmentin 625 Duo Tablet",
+                        brand = "Augmentin 625 Duo",
+                        saltComposition = "Amoxicillin (500mg) + Clavulanic Acid (125mg)",
+                        strength = "625mg",
+                        dosageForm = DosageForm.TABLET,
+                        therapeuticCategory = "Antibiotics",
+                        manufacturerName = "GlaxoSmithKline",
+                        packSize = "10 Tablets/Strip",
+                        hsnCode = "3004",
+                        gstRatePercent = 12.0,
+                        storageCondition = StorageCondition.ROOM_TEMPERATURE,
+                        isRx = true,
+                        isActive = true,
+                        createdBy = 1L,
+                        minOfferPrice = 168.50,
+                        minMrp = 201.0,
+                        bestOfferId = 1L
+                    ),
+                    ProductDetail(
+                        id = 2L,
+                        name = "Pantocid 40 Tablet",
+                        brand = "Pantocid 40",
+                        saltComposition = "Pantoprazole (40mg)",
+                        strength = "40mg",
+                        dosageForm = DosageForm.TABLET,
+                        therapeuticCategory = "Gastrointestinal",
+                        manufacturerName = "Sun Pharma",
+                        packSize = "15 Tablets/Strip",
+                        hsnCode = "3004",
+                        gstRatePercent = 12.0,
+                        storageCondition = StorageCondition.ROOM_TEMPERATURE,
+                        isRx = true,
+                        isActive = true,
+                        createdBy = 1L,
+                        minOfferPrice = 112.00,
+                        minMrp = 155.0,
+                        bestOfferId = 2L
+                    )
+                )
+            ),
+            onNavigateBack = {},
+            onProductClick = {},
+            onAddProductClick = {},
+            onSearchQueryChanged = {},
+            onSelectCategoryChip = {},
+            onClearFilters = {},
+            onAddToCart = { _, _ -> },
+            onIncrementQuantity = {},
+            onDecrementQuantity = {},
+            onSetPendingQuantity = { _, _ -> },
+            onSetFilters = { _, _, _, _, _, _ -> },
+            onClearMessages = {}
+        )
+    }
+}
+

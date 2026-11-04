@@ -46,9 +46,14 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.domain.model.UserRole
+import com.example.domain.model.AuthUser
+import com.example.domain.model.AccountStatus
 import com.example.ui.components.AppTopBar
 
-@OptIn(ExperimentalMaterial3Api::class)
+import android.content.res.Configuration
+import androidx.compose.ui.tooling.preview.Preview
+import com.example.ui.theme.PharmaOSTheme
+
 @Composable
 fun ProfileSettingsScreen(
     viewModel: SettingsViewModel,
@@ -59,6 +64,28 @@ fun ProfileSettingsScreen(
     onLoggedOut: () -> Unit
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+    ProfileSettingsContent(
+        uiState = uiState,
+        onNavigateBack = onNavigateBack,
+        onNavigateToSupplierSettings = onNavigateToSupplierSettings,
+        onNavigateToCsv = onNavigateToCsv,
+        onNavigateToAdminUsers = onNavigateToAdminUsers,
+        onToggleDarkTheme = { viewModel.setDarkTheme(it) },
+        onLogout = { viewModel.logout(onLoggedOut) }
+    )
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun ProfileSettingsContent(
+    uiState: SettingsUiState,
+    onNavigateBack: () -> Unit,
+    onNavigateToSupplierSettings: () -> Unit,
+    onNavigateToCsv: () -> Unit,
+    onNavigateToAdminUsers: () -> Unit,
+    onToggleDarkTheme: (Boolean) -> Unit,
+    onLogout: () -> Unit
+) {
     val user = uiState.currentUser
 
     Scaffold(
@@ -136,7 +163,7 @@ fun ProfileSettingsScreen(
                     }
                     Switch(
                         checked = uiState.isDarkTheme,
-                        onCheckedChange = { viewModel.setDarkTheme(it) },
+                        onCheckedChange = { onToggleDarkTheme(it) },
                         modifier = Modifier.testTag("dark_theme_toggle")
                     )
                 }
@@ -174,7 +201,7 @@ fun ProfileSettingsScreen(
 
             // Logout & Account Switch Button
             Button(
-                onClick = { viewModel.logout(onLoggedOut) },
+                onClick = onLogout,
                 colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
                 modifier = Modifier
                     .fillMaxWidth()
@@ -216,3 +243,34 @@ fun SettingsActionCard(
         }
     }
 }
+
+@Preview(name = "Settings - Light Mode", showBackground = true)
+@Preview(name = "Settings - Dark Mode", uiMode = Configuration.UI_MODE_NIGHT_YES, showBackground = true)
+@Composable
+fun ProfileSettingsScreenPreview() {
+    PharmaOSTheme {
+        ProfileSettingsContent(
+            uiState = SettingsUiState(
+                currentUser = AuthUser(
+                    id = 1L,
+                    fullName = "Rohan Sharma",
+                    businessName = "Apex Pharma Distributors",
+                    email = "rohan.sharma@apexpharma.com",
+                    phone = "+919876543210",
+                    gstin = "27ABCDE1234F1Z5",
+                    address = "Shop 12, Medical Market, Mumbai, MH",
+                    role = UserRole.STOCKIST,
+                    status = AccountStatus.ACTIVE
+                ),
+                isDarkTheme = false
+            ),
+            onNavigateBack = {},
+            onNavigateToSupplierSettings = {},
+            onNavigateToCsv = {},
+            onNavigateToAdminUsers = {},
+            onToggleDarkTheme = {},
+            onLogout = {}
+        )
+    }
+}
+

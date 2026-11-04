@@ -55,8 +55,10 @@ import com.example.ui.components.LoadingState
 import com.example.ui.components.PriceText
 import com.example.ui.components.StorageConditionBadge
 import com.example.util.Formatters
+import android.content.res.Configuration
+import androidx.compose.ui.tooling.preview.Preview
+import com.example.ui.theme.PharmaOSTheme
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun BatchExpiryScreen(
     viewModel: InventoryViewModel,
@@ -65,7 +67,26 @@ fun BatchExpiryScreen(
     onAddBatchClick: () -> Unit
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+    BatchExpiryContent(
+        uiState = uiState,
+        onNavigateBack = onNavigateBack,
+        onNavigateToRecalls = onNavigateToRecalls,
+        onAddBatchClick = onAddBatchClick,
+        onSearchQueryChanged = { viewModel.onSearchQueryChanged(it) },
+        onFilterSelected = { viewModel.setFilter(it) }
+    )
+}
 
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun BatchExpiryContent(
+    uiState: InventoryUiState,
+    onNavigateBack: () -> Unit,
+    onNavigateToRecalls: () -> Unit,
+    onAddBatchClick: () -> Unit,
+    onSearchQueryChanged: (String) -> Unit,
+    onFilterSelected: (BatchFilter) -> Unit
+) {
     Scaffold(
         topBar = {
             AppTopBar(
@@ -139,7 +160,7 @@ fun BatchExpiryScreen(
 
             OutlinedTextField(
                 value = uiState.searchQuery,
-                onValueChange = { viewModel.onSearchQueryChanged(it) },
+                onValueChange = { onSearchQueryChanged(it) },
                 placeholder = { Text("Search by Batch Number, Medicine, Brand...") },
                 singleLine = true,
                 modifier = Modifier
@@ -157,7 +178,7 @@ fun BatchExpiryScreen(
                 items(BatchFilter.values()) { f ->
                     FilterChip(
                         selected = uiState.selectedFilter == f,
-                        onClick = { viewModel.setFilter(f) },
+                        onClick = { onFilterSelected(f) },
                         label = { Text(f.label) }
                     )
                 }
@@ -238,3 +259,44 @@ fun BatchExpiryScreen(
         }
     }
 }
+
+@Preview(name = "Batch Expiry - Light Mode", showBackground = true)
+@Preview(name = "Batch Expiry - Dark Mode", uiMode = Configuration.UI_MODE_NIGHT_YES, showBackground = true)
+@Composable
+fun BatchExpiryScreenPreview() {
+    PharmaOSTheme {
+        BatchExpiryContent(
+            uiState = InventoryUiState(
+                isLoading = false,
+                filteredBatches = listOf(
+                    com.example.domain.repository.BatchWithProduct(
+                        batch = com.example.data.local.entity.BatchEntity(
+                            id = 1L,
+                            productId = 1L,
+                            supplierId = 1L,
+                            batchNumber = "AUG-24B01",
+                            mfgDateEpochMillis = System.currentTimeMillis() - 86400000L * 60,
+                            expiryDateEpochMillis = System.currentTimeMillis() + 86400000L * 24,
+                            initialQuantity = 500,
+                            remainingQuantity = 48,
+                            storageCondition = "ROOM_TEMPERATURE",
+                            mrp = 201.0,
+                            ptr = 168.5
+                        ),
+                        productName = "Amoxicillin & Clavulanate",
+                        brand = "Augmentin 625 Duo",
+                        saltComposition = "Amoxicillin + Clavulanic Acid",
+                        daysUntilExpiry = 24
+                    )
+                ),
+                selectedFilter = BatchFilter.ALL
+            ),
+            onNavigateBack = {},
+            onNavigateToRecalls = {},
+            onAddBatchClick = {},
+            onSearchQueryChanged = {},
+            onFilterSelected = {}
+        )
+    }
+}
+

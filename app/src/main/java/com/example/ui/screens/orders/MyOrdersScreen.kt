@@ -75,6 +75,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import android.content.res.Configuration
+import androidx.compose.ui.tooling.preview.Preview
+import com.example.ui.theme.PharmaOSTheme
 
 @Composable
 fun MyOrdersScreen(
@@ -87,7 +90,35 @@ fun MyOrdersScreen(
     onNavigateToProfile: () -> Unit = {}
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+    MyOrdersContent(
+        uiState = uiState,
+        onNavigateBack = onNavigateBack,
+        onOrderClick = onOrderClick,
+        onSearchQueryChanged = { viewModel.onSearchQueryChanged(it) },
+        onClearSearch = { viewModel.onClearSearchQuery() },
+        onSelectFilterTab = { viewModel.selectFilterTab(it) },
+        onSelectSortOption = { viewModel.selectSortOption(it) },
+        onNavigateToDashboard = onNavigateToDashboard,
+        onNavigateToCatalogue = onNavigateToCatalogue,
+        onNavigateToOcr = onNavigateToOcr,
+        onNavigateToProfile = onNavigateToProfile
+    )
+}
 
+@Composable
+fun MyOrdersContent(
+    uiState: OrdersUiState,
+    onNavigateBack: () -> Unit,
+    onOrderClick: (Long) -> Unit,
+    onSearchQueryChanged: (String) -> Unit,
+    onClearSearch: () -> Unit,
+    onSelectFilterTab: (String) -> Unit,
+    onSelectSortOption: (String) -> Unit,
+    onNavigateToDashboard: () -> Unit = {},
+    onNavigateToCatalogue: () -> Unit = {},
+    onNavigateToOcr: () -> Unit = {},
+    onNavigateToProfile: () -> Unit = {}
+) {
     var showTrackingDialog by remember { mutableStateOf<OrderPipelineItem?>(null) }
     var showDossierDialog by remember { mutableStateOf<OrderPipelineItem?>(null) }
     var showManageDialog by remember { mutableStateOf<OrderPipelineItem?>(null) }
@@ -143,12 +174,12 @@ fun MyOrdersScreen(
             item {
                 OrderSearchAndFilterRow(
                     query = uiState.searchQuery,
-                    onQueryChange = { viewModel.onSearchQueryChanged(it) },
-                    onClear = { viewModel.onClearSearchQuery() },
+                    onQueryChange = { onSearchQueryChanged(it) },
+                    onClear = { onClearSearch() },
                     onFilterClick = {
                         // Toggle quick filter between All and In Transit
                         val next = if (uiState.selectedFilterTab.startsWith("All")) "In Transit (8)" else "All Orders (24)"
-                        viewModel.selectFilterTab(next)
+                        onSelectFilterTab(next)
                     }
                 )
             }
@@ -165,7 +196,7 @@ fun MyOrdersScreen(
                 OrderStatusTabsRow(
                     tabs = filterTabs,
                     selectedTab = uiState.selectedFilterTab,
-                    onTabSelect = { viewModel.selectFilterTab(it) }
+                    onTabSelect = { onSelectFilterTab(it) }
                 )
             }
 
@@ -174,7 +205,7 @@ fun MyOrdersScreen(
                 item {
                     EmptyPipelineCard(
                         searchQuery = uiState.searchQuery,
-                        onReset = { viewModel.onClearSearchQuery() }
+                        onReset = { onClearSearch() }
                     )
                 }
             } else {
@@ -257,21 +288,21 @@ fun MyOrdersScreen(
                             DropdownMenuItem(
                                 text = { Text("Sort by ETA") },
                                 onClick = {
-                                    viewModel.selectSortOption("Sort by ETA")
+                                    onSelectSortOption("Sort by ETA")
                                     showSortMenu = false
                                 }
                             )
                             DropdownMenuItem(
                                 text = { Text("Sort by Progress") },
                                 onClick = {
-                                    viewModel.selectSortOption("Sort by Progress")
+                                    onSelectSortOption("Sort by Progress")
                                     showSortMenu = false
                                 }
                             )
                             DropdownMenuItem(
                                 text = { Text("Sort by Order ID") },
                                 onClick = {
-                                    viewModel.selectSortOption("Sort by Order ID")
+                                    onSelectSortOption("Sort by Order ID")
                                     showSortMenu = false
                                 }
                             )
@@ -1375,3 +1406,75 @@ private fun BottomNavItem(
         )
     }
 }
+
+@Preview(name = "Order Pipeline - Light Mode", showBackground = true)
+@Preview(name = "Order Pipeline - Dark Mode", uiMode = Configuration.UI_MODE_NIGHT_YES, showBackground = true)
+@Composable
+fun MyOrdersScreenPreview() {
+    PharmaOSTheme {
+        MyOrdersContent(
+            uiState = OrdersUiState(
+                isLoading = false,
+                kpis = PipelineKpis(),
+                filteredPipelineItems = listOf(
+                    OrderPipelineItem(
+                        id = 1L,
+                        orderNumber = "PO-44820",
+                        buyerName = "MedPlus Wholesale Ltd.",
+                        productSummary = "Paracetamol 500mg",
+                        status = PipelineStatusType.IN_TRANSIT,
+                        stageName = "Hub 2 Passed",
+                        progressPercent = 65,
+                        tag1 = "BlueDart",
+                        tag2 = "4.2°C",
+                        tag3 = "Tomorrow, 11:30 AM",
+                        actionText = "Track >",
+                        iconKind = PipelineIconKind.CAPSULE,
+                        isColdChain = true
+                    ),
+                    OrderPipelineItem(
+                        id = 2L,
+                        orderNumber = "PO-44815",
+                        buyerName = "Fortis Healthcare Chain",
+                        productSummary = "Amoxicillin 250mg",
+                        status = PipelineStatusType.QA_CHECK,
+                        stageName = "Batch Serialization",
+                        progressPercent = 44,
+                        tag1 = "+DT-0020",
+                        tag2 = "COA Verified",
+                        tag3 = "19 Nov, 9 AM",
+                        actionText = "Dossier >",
+                        iconKind = PipelineIconKind.VIAL
+                    )
+                ),
+                activeConsignments = listOf(
+                    OrderPipelineItem(
+                        id = 3L,
+                        orderNumber = "PO-44809",
+                        buyerName = "Zydus Distribution",
+                        productSummary = "Cefixime 200mg",
+                        status = PipelineStatusType.STAGING,
+                        stageName = "Pallet Staging",
+                        progressPercent = 16,
+                        tag1 = "₹8.5L",
+                        tag2 = "12 Pallets",
+                        tag3 = "Bay 3",
+                        actionText = "Manage >",
+                        iconKind = PipelineIconKind.PALLET
+                    )
+                )
+            ),
+            onNavigateBack = {},
+            onOrderClick = {},
+            onSearchQueryChanged = {},
+            onClearSearch = {},
+            onSelectFilterTab = {},
+            onSelectSortOption = {},
+            onNavigateToDashboard = {},
+            onNavigateToCatalogue = {},
+            onNavigateToOcr = {},
+            onNavigateToProfile = {}
+        )
+    }
+}
+

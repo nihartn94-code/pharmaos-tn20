@@ -70,18 +70,87 @@ app/src/main/java/com/example/
 
 ---
 
-## 📦 Building & Running
+## 📦 Environment Requirements & SDK Configuration
 
-### Requirements
-- Android SDK 34+
-- Java 17+
-- Gradle 8.0+
+The project targets modern Android devices with backward compatibility down to Android 7.0:
 
-### Build Commands
+| Property | Value | Notes |
+| :--- | :--- | :--- |
+| **`compileSdk`** | **36** (Android 15) | Configured in `app/build.gradle.kts` |
+| **`targetSdk`** | **36** (Android 15) | Strict Android 15 edge-to-edge & privacy compliance |
+| **`minSdk`** | **24** (Android 7.0 Nougat) | Broad market compatibility |
+| **Java Version** | **Java 11 / 17** | `sourceCompatibility = JavaVersion.VERSION_11`, `targetCompatibility = JavaVersion.VERSION_11` |
+| **Gradle / AGP** | **Gradle 8.13+**, AGP 8.9.0+ | Kotlin 2.0+ with Compose Compiler plugin |
+
+---
+
+## 🔑 First-Time Developer Setup (Cloning from GitHub)
+
+### ⚠️ Resolving `debug.keystore` Missing Error
+When opening the project in Android Studio after cloning, you might encounter:
+```text
+Execution failed for task ':app:validateSigningDebug'.
+Keystore file: '.../debug.keystore' not found for signing config 'debugConfig'.
+```
+
+This happens because `.gitignore` intentionally excludes binary `debug.keystore` files from being pushed to Git repositories to prevent repo bloat and permission issues.
+
+### 🛠️ One-Click Fix: Run Keystore Setup Script
+Before running the first build in Android Studio or via Gradle, execute the appropriate setup script from the root directory:
+
+#### On Windows:
+Double-click or run from Command Prompt / PowerShell:
+```cmd
+setup-debug-keystore.bat
+```
+
+#### On macOS / Linux:
+Run in terminal:
 ```bash
+chmod +x setup-debug-keystore.sh
+./setup-debug-keystore.sh
+```
+
+**What the script does:**
+1. Verifies if `debug.keystore` already exists (leaves existing keystore untouched).
+2. If `debug.keystore.base64` is present in the repository, it automatically decodes and restores the exact debug keystore.
+3. If not, it automatically runs JDK `keytool` to generate a fresh `debug.keystore` using the exact alias (`androiddebugkey`) and password (`android`) expected by `debugConfig`.
+
+---
+
+## 🎨 Jetpack Compose Design Previews in Android Studio
+
+All major screens and reusable UI components include isolated `@Preview` functions supporting both **Light Mode** and **Dark Mode**:
+
+- **Login Screen:** `LoginScreenPreview()` in `LoginScreen.kt`
+- **Registration Screen:** `RegisterScreenPreview()` in `RegisterScreen.kt`
+- **Dashboard & KPIs:** `DashboardScreenPreview()` in `DashboardScreen.kt`
+- **Real-Time Inventory Dashboard:** `InventoryDashboardScreenPreview()` in `InventoryDashboardScreen.kt`
+- **Batch & Expiry Management:** `BatchExpiryScreenPreview()` in `BatchExpiryScreen.kt`
+- **Order Pipeline & Tracking:** `MyOrdersScreenPreview()` in `MyOrdersScreen.kt`
+- **Order Checkout & Review:** `CheckoutScreenPreview()` in `CheckoutScreen.kt`
+- **Medicine Catalogue:** `MedicineCatalogueScreenPreview()` in `MedicineCatalogueScreen.kt`
+- **Settings & Profile:** `ProfileSettingsScreenPreview()` in `ProfileSettingsScreen.kt`
+- **Design System Components:** `CommonComponentsPreview()` in `CommonComponents.kt`
+
+### How to View Previews:
+1. Open any of the files listed above in **Android Studio**.
+2. Click the **"Split"** or **"Design"** button in the top right corner of the editor window.
+3. The preview will render instantly using sample data and the official `PharmaOSTheme`, allowing real-time design inspection and UI tweaking without running an emulator or hitting real backend/database services.
+
+---
+
+## 🏗️ Build Commands
+
+```bash
+# Generate/verify debug keystore (first time only)
+./setup-debug-keystore.sh   # On Linux/macOS
+setup-debug-keystore.bat     # On Windows
+
 # Compile debug APK
 gradle assembleDebug
 
 # Run unit and local JVM tests
 gradle testDebugUnitTest
 ```
+

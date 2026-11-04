@@ -96,10 +96,12 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import android.content.res.Configuration
+import androidx.compose.ui.tooling.preview.Preview
+import com.example.ui.theme.PharmaOSTheme
 import com.example.domain.model.UserRole
 import kotlinx.coroutines.launch
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun LoginScreen(
     viewModel: AuthViewModel,
@@ -107,6 +109,28 @@ fun LoginScreen(
     onLoginSuccess: () -> Unit
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+    LoginScreenContent(
+        uiState = uiState,
+        onRoleSelected = { viewModel.selectRole(it) },
+        onLogin = { id, pass, role, onSuccess -> viewModel.login(id, pass, role, onSuccess) },
+        onGoogleSignIn = { email, name, role, onSuccess -> viewModel.signInWithGoogle(email, name, role, onSuccess) },
+        onClearMessages = { viewModel.clearMessages() },
+        onNavigateToRegister = onNavigateToRegister,
+        onLoginSuccess = onLoginSuccess
+    )
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun LoginScreenContent(
+    uiState: AuthUiState,
+    onRoleSelected: (UserRole) -> Unit,
+    onLogin: (String, String, UserRole, () -> Unit) -> Unit,
+    onGoogleSignIn: (String, String, UserRole, () -> Unit) -> Unit,
+    onClearMessages: () -> Unit,
+    onNavigateToRegister: () -> Unit,
+    onLoginSuccess: () -> Unit
+) {
     val snackbarHostState = remember { SnackbarHostState() }
     val coroutineScope = rememberCoroutineScope()
 
@@ -125,7 +149,7 @@ fun LoginScreen(
     LaunchedEffect(uiState.errorMessage) {
         uiState.errorMessage?.let {
             snackbarHostState.showSnackbar(it)
-            viewModel.clearMessages()
+            onClearMessages()
         }
     }
 
@@ -301,7 +325,7 @@ fun LoginScreen(
                         modifier = Modifier
                             .weight(1f)
                             .testTag("role_tab_stockist"),
-                        onClick = { viewModel.selectRole(UserRole.STOCKIST) }
+                        onClick = { onRoleSelected(UserRole.STOCKIST) }
                     )
 
                     RoleTabItem(
@@ -312,7 +336,7 @@ fun LoginScreen(
                         modifier = Modifier
                             .weight(1f)
                             .testTag("role_tab_company"),
-                        onClick = { viewModel.selectRole(UserRole.PHARMA_COMPANY) }
+                        onClick = { onRoleSelected(UserRole.PHARMA_COMPANY) }
                     )
 
                     RoleTabItem(
@@ -323,7 +347,7 @@ fun LoginScreen(
                         modifier = Modifier
                             .weight(1f)
                             .testTag("role_tab_manufacturer"),
-                        onClick = { viewModel.selectRole(UserRole.MANUFACTURER) }
+                        onClick = { onRoleSelected(UserRole.MANUFACTURER) }
                     )
 
                     RoleTabItem(
@@ -334,7 +358,7 @@ fun LoginScreen(
                         modifier = Modifier
                             .weight(1f)
                             .testTag("role_tab_admin"),
-                        onClick = { viewModel.selectRole(UserRole.ADMIN) }
+                        onClick = { onRoleSelected(UserRole.ADMIN) }
                     )
                 }
             }
@@ -530,7 +554,7 @@ fun LoginScreen(
                             ),
                             keyboardActions = KeyboardActions(
                                 onDone = {
-                                    viewModel.login(identifier, password, selectedRole, onLoginSuccess)
+                                    onLogin(identifier, password, selectedRole, onLoginSuccess)
                                 }
                             ),
                             colors = OutlinedTextFieldDefaults.colors(
@@ -570,7 +594,7 @@ fun LoginScreen(
                     // Primary "Sign In ->" Button (Vibrant Royal Blue Pill Button)
                     Button(
                         onClick = {
-                            viewModel.login(identifier, password, selectedRole, onLoginSuccess)
+                            onLogin(identifier, password, selectedRole, onLoginSuccess)
                         },
                         enabled = !uiState.isLoading,
                         shape = RoundedCornerShape(26.dp),
@@ -1007,11 +1031,11 @@ fun LoginScreen(
                                     modifier = Modifier
                                         .fillMaxWidth()
                                         .clickable {
-                                            viewModel.signInWithGoogle(
-                                                email = regUser.email,
-                                                displayName = regUser.fullName,
-                                                role = try { UserRole.valueOf(regUser.role) } catch (_: Exception) { selectedRole },
-                                                onSuccess = {
+                                            onGoogleSignIn(
+                                                regUser.email,
+                                                regUser.fullName,
+                                                try { UserRole.valueOf(regUser.role) } catch (_: Exception) { selectedRole },
+                                                {
                                                     showGoogleAccountPicker = false
                                                     onLoginSuccess()
                                                 }
@@ -1142,11 +1166,11 @@ fun LoginScreen(
                                                 .joinToString(" ") { it.replaceFirstChar { c -> c.uppercase() } }
                                                 .ifBlank { "Enterprise Partner" }
                                         }
-                                        viewModel.signInWithGoogle(
-                                            email = cleanEmail,
-                                            displayName = cleanName,
-                                            role = selectedRole,
-                                            onSuccess = {
+                                        onGoogleSignIn(
+                                            cleanEmail,
+                                            cleanName,
+                                            selectedRole,
+                                            {
                                                 showGoogleAccountPicker = false
                                                 onLoginSuccess()
                                             }
@@ -1494,3 +1518,24 @@ internal fun GoogleIcon(modifier: Modifier = Modifier) {
         )
     }
 }
+
+@Preview(name = "Login Screen - Light Mode", showBackground = true)
+@Preview(name = "Login Screen - Dark Mode", uiMode = Configuration.UI_MODE_NIGHT_YES, showBackground = true)
+@Composable
+fun LoginScreenPreview() {
+    PharmaOSTheme {
+        LoginScreenContent(
+            uiState = AuthUiState(
+                isLoading = false,
+                selectedRole = UserRole.STOCKIST
+            ),
+            onRoleSelected = {},
+            onLogin = { _, _, _, _ -> },
+            onGoogleSignIn = { _, _, _, _ -> },
+            onClearMessages = {},
+            onNavigateToRegister = {},
+            onLoginSuccess = {}
+        )
+    }
+}
+

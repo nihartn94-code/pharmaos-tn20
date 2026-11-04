@@ -57,6 +57,9 @@ import androidx.compose.ui.unit.sp
 import com.example.domain.model.OrderStatus
 import com.example.domain.model.ShortageRiskLevel
 import com.example.domain.model.StorageCondition
+import android.content.res.Configuration
+import androidx.compose.ui.tooling.preview.Preview
+import com.example.ui.theme.PharmaOSTheme
 import com.example.ui.theme.PharmaError
 import com.example.ui.theme.PharmaInfo
 import com.example.ui.theme.PharmaSuccess
@@ -539,4 +542,40 @@ fun ConfirmDialog(
             }
         }
     )
+}
+
+@Preview(name = "Components - Light Mode", showBackground = true)
+@Preview(name = "Components - Dark Mode", uiMode = Configuration.UI_MODE_NIGHT_YES, showBackground = true)
+@Composable
+fun CommonComponentsPreview() {
+    PharmaOSTheme {
+        Surface(color = MaterialTheme.colorScheme.background) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                AppTopBar(title = "PharmaOS", subtitle = "Inventory Control")
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    StatusChip(statusString = "DISPATCHED")
+                    ExpiryChip(daysUntilExpiry = 28)
+                    StorageConditionBadge(storageCondition = StorageCondition.ROOM_TEMPERATURE)
+                }
+                QuantityStepper(
+                    quantity = 24,
+                    minQuantity = 1,
+                    maxQuantity = 100,
+                    step = 5,
+                    onQuantityChanged = {}
+                )
+                EmptyState(
+                    title = "No Inventory Found",
+                    message = "Add new products or import catalog to view stock.",
+                    actionLabel = "Add Product",
+                    onActionClick = {}
+                )
+            }
+        }
+    }
 }

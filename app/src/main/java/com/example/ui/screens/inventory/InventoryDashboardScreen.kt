@@ -98,7 +98,10 @@ import com.example.ui.components.LoadingState
 import com.example.ui.components.StorageConditionBadge
 import com.example.util.Formatters
 
-@OptIn(ExperimentalMaterial3Api::class)
+import android.content.res.Configuration
+import androidx.compose.ui.tooling.preview.Preview
+import com.example.ui.theme.PharmaOSTheme
+
 @Composable
 fun InventoryDashboardScreen(
     viewModel: InventoryViewModel,
@@ -107,6 +110,40 @@ fun InventoryDashboardScreen(
     onNavigateToBasket: () -> Unit
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+    InventoryDashboardContent(
+        uiState = uiState,
+        onNavigateBack = onNavigateBack,
+        onNavigateToRecalls = onNavigateToRecalls,
+        onNavigateToBasket = onNavigateToBasket,
+        onInventoryTabChanged = { viewModel.onInventoryTabChanged(it) },
+        onInventorySortChanged = { viewModel.onInventorySortChanged(it) },
+        onSearchQueryChanged = { viewModel.onSearchQueryChanged(it) },
+        onQuickRestock = { viewModel.quickRestock(it) },
+        onAdjustBatchStock = { batchId, newQty, reason, onDone ->
+            viewModel.adjustBatchStock(batchId, newQty, reason, onDone)
+        },
+        onCreateBatch = { batch, onDone ->
+            viewModel.createBatch(batch, onDone)
+        },
+        onClearMessages = { viewModel.clearMessages() }
+    )
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun InventoryDashboardContent(
+    uiState: InventoryUiState,
+    onNavigateBack: () -> Unit,
+    onNavigateToRecalls: () -> Unit,
+    onNavigateToBasket: () -> Unit,
+    onInventoryTabChanged: (InventoryTab) -> Unit,
+    onInventorySortChanged: (InventorySort) -> Unit,
+    onSearchQueryChanged: (String) -> Unit,
+    onQuickRestock: (InventoryStockItem) -> Unit,
+    onAdjustBatchStock: (Long, Int, String, () -> Unit) -> Unit,
+    onCreateBatch: (BatchEntity, () -> Unit) -> Unit,
+    onClearMessages: () -> Unit
+) {
     val snackbarHostState = remember { SnackbarHostState() }
 
     var itemToAdjust by remember { mutableStateOf<InventoryStockItem?>(null) }
@@ -116,14 +153,14 @@ fun InventoryDashboardScreen(
     LaunchedEffect(uiState.errorMessage) {
         uiState.errorMessage?.let {
             snackbarHostState.showSnackbar(it)
-            viewModel.clearMessages()
+            onClearMessages()
         }
     }
 
     LaunchedEffect(uiState.successMessage) {
         uiState.successMessage?.let {
             snackbarHostState.showSnackbar(it)
-            viewModel.clearMessages()
+            onClearMessages()
         }
     }
 
@@ -212,7 +249,7 @@ fun InventoryDashboardScreen(
                                         }
                                     },
                                     onClick = {
-                                        viewModel.onInventorySortChanged(sortOption)
+                                        onInventorySortChanged(sortOption)
                                         showSortMenu = false
                                     }
                                 )
@@ -251,7 +288,7 @@ fun InventoryDashboardScreen(
             // KPI Summary Row
             InventorySummaryCardsRow(
                 summary = uiState.inventorySummary,
-                onCardClick = { tab -> viewModel.onInventoryTabChanged(tab) }
+                onCardClick = { tab -> onInventoryTabChanged(tab) }
             )
 
             Spacer(modifier = Modifier.height(6.dp))
@@ -259,7 +296,7 @@ fun InventoryDashboardScreen(
             // Search Bar
             OutlinedTextField(
                 value = uiState.searchQuery,
-                onValueChange = { viewModel.onSearchQueryChanged(it) },
+                onValueChange = { onSearchQueryChanged(it) },
                 placeholder = { Text("Search by Medicine, Brand, Salt, Batch Lot...") },
                 leadingIcon = {
                     Icon(
@@ -270,7 +307,7 @@ fun InventoryDashboardScreen(
                 },
                 trailingIcon = {
                     if (uiState.searchQuery.isNotBlank()) {
-                        IconButton(onClick = { viewModel.onSearchQueryChanged("") }) {
+                        IconButton(onClick = { onSearchQueryChanged("") }) {
                             Icon(Icons.Default.Close, contentDescription = "Clear search")
                         }
                     }
@@ -305,7 +342,7 @@ fun InventoryDashboardScreen(
 
                     FilterChip(
                         selected = isSelected,
-                        onClick = { viewModel.onInventoryTabChanged(tab) },
+                        onClick = { onInventoryTabChanged(tab) },
                         label = {
                             Text("${tab.label} ($count)")
                         },
@@ -326,8 +363,8 @@ fun InventoryDashboardScreen(
                     else "No stock records found for this filter tab.",
                     actionLabel = "Clear Filter",
                     onActionClick = {
-                        viewModel.onSearchQueryChanged("")
-                        viewModel.onInventoryTabChanged(InventoryTab.ALL)
+                        onSearchQueryChanged("")
+                        onInventoryTabChanged(InventoryTab.ALL)
                     }
                 )
             } else {
@@ -340,7 +377,7 @@ fun InventoryDashboardScreen(
                         InventoryStockItemCard(
                             item = item,
                             onAdjustStock = { itemToAdjust = item },
-                            onQuickRestock = { viewModel.quickRestock(item) }
+                            onQuickRestock = { onQuickRestock(item) }
                         )
                     }
                 }
@@ -354,11 +391,11 @@ fun InventoryDashboardScreen(
             item = item,
             onDismiss = { itemToAdjust = null },
             onConfirmAdjustment = { newQty, reason ->
-                viewModel.adjustBatchStock(
-                    batchId = item.id,
-                    newQuantity = newQty,
-                    reason = reason,
-                    onDone = { itemToAdjust = null }
+                onAdjustBatchStock(
+                    item.id,
+                    newQty,
+                    reason,
+                    { itemToAdjust = null }
                 )
             }
         )
@@ -370,7 +407,7 @@ fun InventoryDashboardScreen(
             catalogue = uiState.catalogueProducts,
             onDismiss = { showAddBatchDialog = false },
             onAddBatch = { batch ->
-                viewModel.createBatch(batch) {
+                onCreateBatch(batch) {
                     showAddBatchDialog = false
                 }
             }
@@ -1056,3 +1093,83 @@ private fun AddStockBatchDialog(
         }
     )
 }
+
+@Preview(name = "Inventory Dashboard - Light Mode", showBackground = true)
+@Preview(name = "Inventory Dashboard - Dark Mode", uiMode = Configuration.UI_MODE_NIGHT_YES, showBackground = true)
+@Composable
+fun InventoryDashboardScreenPreview() {
+    PharmaOSTheme {
+        InventoryDashboardContent(
+            uiState = InventoryUiState(
+                isLoading = false,
+                inventorySummary = InventoryDashboardSummary(
+                    totalStockUnits = 2400,
+                    totalInventoryValue = 485200.0,
+                    totalSkusCount = 48,
+                    criticalItemsCount = 2,
+                    outOfStockCount = 1,
+                    lowStockCount = 1,
+                    nearExpiryCount = 2,
+                    recalledCount = 0,
+                    healthyCount = 44
+                ),
+                filteredInventoryItems = listOf(
+                    InventoryStockItem(
+                        id = 1L,
+                        productId = 1L,
+                        productName = "Augmentin 625 Duo Tablet",
+                        brand = "Augmentin 625 Duo",
+                        saltComposition = "Amoxicillin (500mg) + Clavulanic Acid (125mg)",
+                        dosageForm = "Tablet",
+                        therapeuticCategory = "Antibiotics",
+                        batchNumber = "AUG-24B01",
+                        remainingQuantity = 12,
+                        initialQuantity = 100,
+                        reorderThreshold = 50,
+                        stockStatus = StockLevelStatus.CRITICAL_LOW,
+                        expiryDateEpochMillis = System.currentTimeMillis() + 86400000L * 18,
+                        daysUntilExpiry = 18,
+                        expiryStatus = ExpiryRiskStatus.EXPIRING_CRITICAL,
+                        storageCondition = StorageCondition.ROOM_TEMPERATURE,
+                        mrp = 201.0,
+                        ptr = 168.5,
+                        totalValuation = 2022.0
+                    ),
+                    InventoryStockItem(
+                        id = 2L,
+                        productId = 2L,
+                        productName = "Human Mixtard 30/70",
+                        brand = "Mixtard 30/70",
+                        saltComposition = "Biphasic Isophane Insulin (40 IU/ml)",
+                        dosageForm = "Injection",
+                        therapeuticCategory = "Diabetology",
+                        batchNumber = "MIX-90A04",
+                        remainingQuantity = 45,
+                        initialQuantity = 50,
+                        reorderThreshold = 30,
+                        stockStatus = StockLevelStatus.HEALTHY,
+                        expiryDateEpochMillis = System.currentTimeMillis() + 86400000L * 180,
+                        daysUntilExpiry = 180,
+                        expiryStatus = ExpiryRiskStatus.HEALTHY,
+                        storageCondition = StorageCondition.REFRIGERATED_2_8,
+                        mrp = 240.0,
+                        ptr = 180.0,
+                        totalValuation = 8100.0
+                    )
+                ),
+                selectedTab = InventoryTab.ALL
+            ),
+            onNavigateBack = {},
+            onNavigateToRecalls = {},
+            onNavigateToBasket = {},
+            onInventoryTabChanged = {},
+            onInventorySortChanged = {},
+            onSearchQueryChanged = {},
+            onQuickRestock = {},
+            onAdjustBatchStock = { _, _, _, _ -> },
+            onCreateBatch = { _, _ -> },
+            onClearMessages = {}
+        )
+    }
+}
+

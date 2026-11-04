@@ -96,10 +96,12 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import android.content.res.Configuration
+import androidx.compose.ui.tooling.preview.Preview
+import com.example.ui.theme.PharmaOSTheme
 import com.example.domain.model.UserRole
 import kotlinx.coroutines.launch
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun RegisterScreen(
     viewModel: AuthViewModel,
@@ -107,6 +109,32 @@ fun RegisterScreen(
     onRegisterSuccess: (UserRole) -> Unit
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+    RegisterScreenContent(
+        uiState = uiState,
+        onRoleSelected = { viewModel.selectRole(it) },
+        onRegister = { fullName, businessName, email, phone, gstin, address, password, confirmPassword, role, onSuccess ->
+            viewModel.register(fullName, businessName, email, phone, gstin, address, password, confirmPassword, role, onSuccess)
+        },
+        onGoogleSignIn = { email, displayName, role, onSuccess ->
+            viewModel.signInWithGoogle(email, displayName, role, onSuccess)
+        },
+        onClearMessages = { viewModel.clearMessages() },
+        onNavigateBack = onNavigateBack,
+        onRegisterSuccess = onRegisterSuccess
+    )
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun RegisterScreenContent(
+    uiState: AuthUiState,
+    onRoleSelected: (UserRole) -> Unit,
+    onRegister: (String, String, String, String, String?, String, String, String, UserRole, () -> Unit) -> Unit,
+    onGoogleSignIn: (String, String, UserRole, () -> Unit) -> Unit,
+    onClearMessages: () -> Unit,
+    onNavigateBack: () -> Unit,
+    onRegisterSuccess: (UserRole) -> Unit
+) {
     val snackbarHostState = remember { SnackbarHostState() }
     val coroutineScope = rememberCoroutineScope()
 
@@ -145,7 +173,7 @@ fun RegisterScreen(
     LaunchedEffect(uiState.errorMessage) {
         uiState.errorMessage?.let {
             snackbarHostState.showSnackbar(it)
-            viewModel.clearMessages()
+            onClearMessages()
         }
     }
 
@@ -317,7 +345,7 @@ fun RegisterScreen(
                             .testTag("register_role_stockist"),
                         onClick = {
                             selectedRole = UserRole.STOCKIST
-                            viewModel.selectRole(UserRole.STOCKIST)
+                            onRoleSelected(UserRole.STOCKIST)
                         }
                     )
 
@@ -330,7 +358,7 @@ fun RegisterScreen(
                             .testTag("register_role_company"),
                         onClick = {
                             selectedRole = UserRole.PHARMA_COMPANY
-                            viewModel.selectRole(UserRole.PHARMA_COMPANY)
+                            onRoleSelected(UserRole.PHARMA_COMPANY)
                         }
                     )
 
@@ -343,7 +371,7 @@ fun RegisterScreen(
                             .testTag("register_role_manufacturer"),
                         onClick = {
                             selectedRole = UserRole.MANUFACTURER
-                            viewModel.selectRole(UserRole.MANUFACTURER)
+                            onRoleSelected(UserRole.MANUFACTURER)
                         }
                     )
 
@@ -357,7 +385,7 @@ fun RegisterScreen(
                                 .testTag("register_role_admin"),
                             onClick = {
                                 selectedRole = UserRole.ADMIN
-                                viewModel.selectRole(UserRole.ADMIN)
+                                onRoleSelected(UserRole.ADMIN)
                             }
                         )
                     }
@@ -646,17 +674,17 @@ fun RegisterScreen(
                                 keyboardActions = KeyboardActions(
                                     onDone = {
                                         if (agreedToTerms) {
-                                            viewModel.register(
-                                                fullName = if (contactPersonName.isNotBlank()) contactPersonName else enterpriseName,
-                                                businessName = enterpriseName,
-                                                email = emailAddress,
-                                                phone = mobileNumber,
-                                                gstin = drugLicenseOrGstin.ifBlank { null },
-                                                address = registeredAddress.ifBlank { "Registered Commercial Premises, India" },
-                                                password = password,
-                                                confirmPassword = password,
-                                                role = selectedRole,
-                                                onSuccess = { onRegisterSuccess(selectedRole) }
+                                            onRegister(
+                                                if (contactPersonName.isNotBlank()) contactPersonName else enterpriseName,
+                                                enterpriseName,
+                                                emailAddress,
+                                                mobileNumber,
+                                                drugLicenseOrGstin.ifBlank { null },
+                                                registeredAddress.ifBlank { "Registered Commercial Premises, India" },
+                                                password,
+                                                password,
+                                                selectedRole,
+                                                { onRegisterSuccess(selectedRole) }
                                             )
                                         }
                                     }
@@ -841,17 +869,17 @@ fun RegisterScreen(
                         }
                         return@Button
                     }
-                    viewModel.register(
-                        fullName = if (contactPersonName.isNotBlank()) contactPersonName else enterpriseName,
-                        businessName = enterpriseName,
-                        email = emailAddress,
-                        phone = mobileNumber,
-                        gstin = drugLicenseOrGstin.ifBlank { null },
-                        address = registeredAddress.ifBlank { "Registered Commercial Premises, India" },
-                        password = password,
-                        confirmPassword = password,
-                        role = selectedRole,
-                        onSuccess = { onRegisterSuccess(selectedRole) }
+                    onRegister(
+                        if (contactPersonName.isNotBlank()) contactPersonName else enterpriseName,
+                        enterpriseName,
+                        emailAddress,
+                        mobileNumber,
+                        drugLicenseOrGstin.ifBlank { null },
+                        registeredAddress.ifBlank { "Registered Commercial Premises, India" },
+                        password,
+                        password,
+                        selectedRole,
+                        { onRegisterSuccess(selectedRole) }
                     )
                 },
                 enabled = !uiState.isLoading,
@@ -1226,11 +1254,11 @@ fun RegisterScreen(
                                                     .ifBlank { "Enterprise Partner" }
                                             }
                                         }
-                                        viewModel.signInWithGoogle(
-                                            email = cleanEmail,
-                                            displayName = cleanName,
-                                            role = selectedRole,
-                                            onSuccess = {
+                                        onGoogleSignIn(
+                                            cleanEmail,
+                                            cleanName,
+                                            selectedRole,
+                                            {
                                                 showGoogleAccountPicker = false
                                                 onRegisterSuccess(selectedRole)
                                             }
@@ -1632,3 +1660,24 @@ private fun RegisterGoogleIcon(modifier: Modifier = Modifier) {
         )
     }
 }
+
+@Preview(name = "Register Screen - Light Mode", showBackground = true)
+@Preview(name = "Register Screen - Dark Mode", uiMode = Configuration.UI_MODE_NIGHT_YES, showBackground = true)
+@Composable
+fun RegisterScreenPreview() {
+    PharmaOSTheme {
+        RegisterScreenContent(
+            uiState = AuthUiState(
+                isLoading = false,
+                selectedRole = UserRole.STOCKIST
+            ),
+            onRoleSelected = {},
+            onRegister = { _, _, _, _, _, _, _, _, _, _ -> },
+            onGoogleSignIn = { _, _, _, _ -> },
+            onClearMessages = {},
+            onNavigateBack = {},
+            onRegisterSuccess = {}
+        )
+    }
+}
+

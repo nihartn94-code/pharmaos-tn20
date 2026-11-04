@@ -62,7 +62,10 @@ import com.example.ui.components.AppTopBar
 import com.example.ui.components.PriceText
 import com.example.util.Formatters
 
-@OptIn(ExperimentalMaterial3Api::class)
+import android.content.res.Configuration
+import androidx.compose.ui.tooling.preview.Preview
+import com.example.ui.theme.PharmaOSTheme
+
 @Composable
 fun CheckoutScreen(
     viewModel: OrdersViewModel,
@@ -70,6 +73,27 @@ fun CheckoutScreen(
     onOrderPlaced: (List<Long>) -> Unit
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+    LaunchedEffect(Unit) {
+        viewModel.loadBasketForCheckout()
+    }
+    CheckoutScreenContent(
+        uiState = uiState,
+        onNavigateBack = onNavigateBack,
+        onPlaceOrders = { addr, notes ->
+            viewModel.placeOrders(addr, notes, onOrderPlaced)
+        },
+        onClearMessages = { viewModel.clearMessages() }
+    )
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun CheckoutScreenContent(
+    uiState: OrdersUiState,
+    onNavigateBack: () -> Unit,
+    onPlaceOrders: (String, String) -> Unit,
+    onClearMessages: () -> Unit
+) {
     val snackbarHostState = remember { SnackbarHostState() }
     val keyboardController = LocalSoftwareKeyboardController.current
     val focusManager = LocalFocusManager.current
@@ -79,10 +103,6 @@ fun CheckoutScreen(
         mutableStateOf(uiState.currentUser?.address?.ifBlank { defaultAddress } ?: defaultAddress)
     }
     var notes by remember { mutableStateOf("") }
-
-    LaunchedEffect(Unit) {
-        viewModel.loadBasketForCheckout()
-    }
 
     LaunchedEffect(uiState.currentUser) {
         val userAddr = uiState.currentUser?.address
@@ -94,7 +114,7 @@ fun CheckoutScreen(
     LaunchedEffect(uiState.errorMessage) {
         uiState.errorMessage?.let {
             snackbarHostState.showSnackbar(it)
-            viewModel.clearMessages()
+            onClearMessages()
         }
     }
 
@@ -104,7 +124,7 @@ fun CheckoutScreen(
         keyboardController?.hide()
         focusManager.clearFocus()
         val finalAddress = deliveryAddress.ifBlank { defaultAddress }
-        viewModel.placeOrders(finalAddress, notes, onOrderPlaced)
+        onPlaceOrders(finalAddress, notes)
     }
 
     Scaffold(
@@ -438,3 +458,41 @@ fun CheckoutScreen(
         }
     }
 }
+
+@Preview(name = "Checkout - Light Mode", showBackground = true)
+@Preview(name = "Checkout - Dark Mode", uiMode = Configuration.UI_MODE_NIGHT_YES, showBackground = true)
+@Composable
+fun CheckoutScreenPreview() {
+    PharmaOSTheme {
+        CheckoutScreenContent(
+            uiState = OrdersUiState(
+                isLoading = false,
+                basketForCheckout = com.example.domain.repository.BasketWithDetails(
+                    basketId = 1L,
+                    items = emptyList(),
+                    subtotal = 822.0,
+                    totalGst = 98.64,
+                    totalDeliveryCharges = 0.0,
+                    grandTotal = 920.64,
+                    totalSavings = 110.0,
+                    supplierSubtotals = mapOf(
+                        10L to com.example.domain.repository.SupplierSubtotal(
+                            supplierId = 10L,
+                            supplierName = "Alkem Lab Private Limited",
+                            subtotal = 822.0,
+                            gstAmount = 98.64,
+                            deliveryCharge = 0.0,
+                            freeDeliveryThreshold = 500.0,
+                            total = 920.64,
+                            isFreeDeliveryMet = true
+                        )
+                    )
+                )
+            ),
+            onNavigateBack = {},
+            onPlaceOrders = { _, _ -> },
+            onClearMessages = {}
+        )
+    }
+}
+

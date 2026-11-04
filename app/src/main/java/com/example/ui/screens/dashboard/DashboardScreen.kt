@@ -109,9 +109,11 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import android.content.res.Configuration
+import androidx.compose.ui.tooling.preview.Preview
+import com.example.ui.theme.PharmaOSTheme
 import kotlinx.coroutines.launch
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun DashboardScreen(
     viewModel: DashboardViewModel,
@@ -133,6 +135,48 @@ fun DashboardScreen(
     onLoggedOut: () -> Unit = {}
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+    DashboardScreenContent(
+        uiState = uiState,
+        onNavigateToCatalogue = onNavigateToCatalogue,
+        onNavigateToBasket = onNavigateToBasket,
+        onNavigateToOrders = onNavigateToOrders,
+        onNavigateToBatches = onNavigateToBatches,
+        onNavigateToShortages = onNavigateToShortages,
+        onNavigateToLedger = onNavigateToLedger,
+        onNavigateToOcr = onNavigateToOcr,
+        onNavigateToOffers = onNavigateToOffers,
+        onNavigateToTrustScore = onNavigateToTrustScore,
+        onNavigateToNotifications = onNavigateToNotifications,
+        onNavigateToSettings = onNavigateToSettings,
+        onNavigateToReturns = onNavigateToReturns,
+        onNavigateToOptimizer = onNavigateToOptimizer,
+        onNavigateToCompliance = onNavigateToCompliance,
+        onNavigateToSearch = onNavigateToSearch,
+        onLogout = { viewModel.logout(onLoggedOut) }
+    )
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun DashboardScreenContent(
+    uiState: DashboardUiState,
+    onNavigateToCatalogue: () -> Unit,
+    onNavigateToBasket: () -> Unit,
+    onNavigateToOrders: () -> Unit,
+    onNavigateToBatches: () -> Unit,
+    onNavigateToShortages: () -> Unit,
+    onNavigateToLedger: () -> Unit,
+    onNavigateToOcr: () -> Unit,
+    onNavigateToOffers: () -> Unit,
+    onNavigateToTrustScore: () -> Unit,
+    onNavigateToNotifications: () -> Unit,
+    onNavigateToSettings: () -> Unit,
+    onNavigateToReturns: () -> Unit = {},
+    onNavigateToOptimizer: () -> Unit = {},
+    onNavigateToCompliance: () -> Unit = {},
+    onNavigateToSearch: () -> Unit = onNavigateToCatalogue,
+    onLogout: () -> Unit = {}
+) {
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
     val coroutineScope = rememberCoroutineScope()
     var selectedTab by remember { mutableStateOf("home") }
@@ -205,7 +249,7 @@ fun DashboardScreen(
                     },
                     onLogout = {
                         coroutineScope.launch { drawerState.close() }
-                        viewModel.logout(onLoggedOut)
+                        onLogout()
                     }
                 )
             }
@@ -2060,3 +2104,54 @@ private fun DashboardDrawerContent(
         )
     }
 }
+
+@Preview(name = "Dashboard - Light Mode", showBackground = true)
+@Preview(name = "Dashboard - Dark Mode", uiMode = Configuration.UI_MODE_NIGHT_YES, showBackground = true)
+@Composable
+fun DashboardScreenPreview() {
+    PharmaOSTheme {
+        DashboardScreenContent(
+            uiState = DashboardUiState(
+                isLoading = false,
+                currentUser = com.example.domain.model.AuthUser(
+                    id = 1L,
+                    fullName = "Rohan Sharma",
+                    businessName = "Apex Pharma Distributors",
+                    email = "rohan.sharma@apexpharma.com",
+                    phone = "+919876543210",
+                    gstin = "27ABCDE1234F1Z5",
+                    address = "Shop 12, Medical Market, Mumbai, MH",
+                    role = com.example.domain.model.UserRole.STOCKIST,
+                    status = com.example.domain.model.AccountStatus.ACTIVE
+                ),
+                kpis = com.example.domain.repository.DashboardKpis(
+                    role = com.example.domain.model.UserRole.STOCKIST,
+                    openOrdersCount = 12,
+                    basketItemsCount = 3,
+                    nearExpiryBatchesCount = 4,
+                    shortageAlertsCount = 2,
+                    ledgerBalance = 64800.0
+                ),
+                cartItemCount = 3,
+                unreadNotificationsCount = 2
+            ),
+            onNavigateToCatalogue = {},
+            onNavigateToBasket = {},
+            onNavigateToOrders = {},
+            onNavigateToBatches = {},
+            onNavigateToShortages = {},
+            onNavigateToLedger = {},
+            onNavigateToOcr = {},
+            onNavigateToOffers = {},
+            onNavigateToTrustScore = {},
+            onNavigateToNotifications = {},
+            onNavigateToSettings = {},
+            onNavigateToReturns = {},
+            onNavigateToOptimizer = {},
+            onNavigateToCompliance = {},
+            onNavigateToSearch = {},
+            onLogout = {}
+        )
+    }
+}
+
