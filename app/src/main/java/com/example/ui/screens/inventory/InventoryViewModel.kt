@@ -14,6 +14,8 @@ import com.example.domain.model.StorageCondition
 import com.example.domain.repository.BatchWithProduct
 import com.example.domain.repository.PharmaRepository
 import com.example.domain.repository.RecallWithAffectedStock
+import com.example.service.InventoryMonitorManager
+import com.example.service.InventoryMonitorState
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -53,7 +55,9 @@ data class InventoryUiState(
     val inventorySummary: InventoryDashboardSummary = InventoryDashboardSummary(),
     val selectedTab: InventoryTab = InventoryTab.ALL,
     val selectedSort: InventorySort = InventorySort.CRITICAL_FIRST,
+    val monitorState: InventoryMonitorState = InventoryMonitorState(),
     val isRestocking: Boolean = false,
+    val isScanning: Boolean = false,
     val errorMessage: String? = null,
     val successMessage: String? = null
 )
@@ -67,7 +71,8 @@ enum class BatchFilter(val label: String) {
 }
 
 class InventoryViewModel(
-    private val repository: PharmaRepository
+    private val repository: PharmaRepository,
+    private val monitorManager: InventoryMonitorManager? = null
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(InventoryUiState())
@@ -75,6 +80,17 @@ class InventoryViewModel(
 
     init {
         loadData()
+        observeMonitor()
+    }
+
+    private fun observeMonitor() {
+        if (monitorManager != null) {
+            viewModelScope.launch {
+                monitorManager.monitorState.collect { mState ->
+                    _uiState.update { it.copy(monitorState = mState) }
+                }
+            }
+        }
     }
 
     private fun loadData() {
@@ -208,6 +224,43 @@ class InventoryViewModel(
                     _uiState.update { it.copy(errorMessage = err.message ?: "Restock failed") }
                 }
             )
+        }
+    }
+
+    fun triggerManualScan() {
+        viewModelScope.launch {
+            _uiState.update { it.copy(isScanning = true) }
+            val count = monitorManager?.runManualDepletionCheck() ?: 0
+            _uiState.update {
+                it.copy(
+                    isScanning = false,
+                    successMessage = "Depletion scan complete! Verified $count critical/depleted medicine(s)."
+                )
+            }
+        }
+    }
+
+    fun updateCriticalThreshold(threshold: Int) {
+        monitorManager?.setCriticalThreshold(threshold)
+        _uiState.update {
+            it.copy(successMessage = "Critical stock depletion threshold updated to $threshold units")
+        }
+    }
+
+    fun toggleAutoNotifications(enabled: Boolean) {
+        monitorManager?.setNotificationsEnabled(enabled)
+        _uiState.update {
+            it.copy(successMessage = if (enabled) "Automated stock depletion push alerts enabled" else "Automated push alerts paused")
+        }
+    }
+
+    fun toggleMonitoring(active: Boolean) {
+        if (active) {
+            monitorManager?.startMonitoring()
+            _uiState.update { it.copy(successMessage = "Inventory depletion monitoring activated") }
+        } else {
+            monitorManager?.stopMonitoring()
+            _uiState.update { it.copy(successMessage = "Inventory depletion monitoring paused") }
         }
     }
 

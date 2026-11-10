@@ -31,6 +31,18 @@ class AuthViewModel(
     init {
         checkSession()
         observeUsers()
+        viewModelScope.launch {
+            repository.ensureDefaultManufacturerUser()
+        }
+    }
+
+    fun seedManufacturerTestingAccount(onReady: (com.example.data.local.entity.UserEntity) -> Unit = {}) {
+        viewModelScope.launch {
+            _uiState.update { it.copy(isLoading = true) }
+            val mfg = repository.ensureDefaultManufacturerUser()
+            _uiState.update { it.copy(isLoading = false, successMessage = "Manufacturer test account ready: ${mfg.email}") }
+            onReady(mfg)
+        }
     }
 
     private fun checkSession() {

@@ -51,7 +51,7 @@ class PharmaViewModelFactory(
                 OrdersViewModel(repo) as T
             }
             modelClass.isAssignableFrom(InventoryViewModel::class.java) -> {
-                InventoryViewModel(repo) as T
+                InventoryViewModel(repo, app.inventoryMonitorManager) as T
             }
             modelClass.isAssignableFrom(ReturnsViewModel::class.java) -> {
                 ReturnsViewModel(repo) as T
@@ -73,6 +73,9 @@ class PharmaViewModelFactory(
             }
             modelClass.isAssignableFrom(com.example.ui.screens.search.SearchViewModel::class.java) -> {
                 com.example.ui.screens.search.SearchViewModel(repo) as T
+            }
+            modelClass.isAssignableFrom(com.example.ui.screens.products.ProductListViewModel::class.java) -> {
+                com.example.ui.screens.products.ProductListViewModel(app.productRepository) as T
             }
             else -> throw IllegalArgumentException("Unknown ViewModel class: ${modelClass.name}")
         }

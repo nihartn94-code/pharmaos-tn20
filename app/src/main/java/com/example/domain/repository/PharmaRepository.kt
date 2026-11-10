@@ -8,6 +8,7 @@ import com.example.data.local.entity.OrderEntity
 import com.example.data.local.entity.OrderItemEntity
 import com.example.data.local.entity.OrderStatusHistoryEntity
 import com.example.data.local.entity.ProductEntity
+import com.example.data.local.entity.ProductInventoryEntity
 import com.example.data.local.entity.ProofOfDeliveryEntity
 import com.example.data.local.entity.RecallEntity
 import com.example.data.local.entity.ReturnEntity
@@ -48,6 +49,16 @@ interface PharmaRepository {
     fun getApiUsersFlow(): Flow<List<UserEntity>>
     suspend fun patchApiUserStatus(userId: Long, status: String): Result<Unit>
     suspend fun getFirstUserRegistrationCheck(): Boolean
+    suspend fun ensureDefaultManufacturerUser(): UserEntity
+    suspend fun createManufacturerTestingUser(
+        fullName: String = "Dr. Vikram Malhotra (VP Manufacturing)",
+        businessName: String = "Bharat Bio-Pharma Formulations Pvt. Ltd.",
+        email: String = "manufacturer@pharmaos.com",
+        phone: String = "9876543220",
+        password: String = "Password@123",
+        gstin: String = "27AAACB1234F1Z9",
+        address: String = "Plant 1, Plot 88, MIDC Tarapur Industrial Area, Boisar, Palghar, Maharashtra 401506"
+    ): UserEntity
     suspend fun saveComplianceVerification(
         userId: Long,
         gstin: String,
@@ -130,6 +141,7 @@ interface PharmaRepository {
         damagedQuantity: Int
     ): Result<Unit>
     suspend fun postApiOrderReorder(pastOrderId: Long): Result<Unit>
+    fun getOrderHistoryTransactionsFlow(): Flow<List<com.example.ui.components.OrderTransactionUiModel>>
 
     // Batches & Real-Time Inventory
     fun getApiBatchesFlow(): Flow<List<BatchWithProduct>>
@@ -139,6 +151,14 @@ interface PharmaRepository {
     fun getInventorySummaryFlow(): Flow<InventoryDashboardSummary>
     suspend fun adjustBatchStock(batchId: Long, newQuantity: Int, reason: String): Result<Unit>
     suspend fun quickRestockToBasket(productId: Long, quantity: Int = 50): Result<Unit>
+
+    // Product Inventory Level Management (Room)
+    fun getProductInventoryFlow(): Flow<List<ProductInventoryEntity>>
+    fun getLowStockProductInventoryFlow(): Flow<List<ProductInventoryEntity>>
+    suspend fun getProductInventoryBySku(sku: String): ProductInventoryEntity?
+    suspend fun insertOrUpdateProductInventory(inventory: ProductInventoryEntity): Long
+    suspend fun updateProductInventoryStock(sku: String, newStock: Int): Result<Unit>
+    suspend fun updateProductInventoryReorderThreshold(sku: String, newThreshold: Int): Result<Unit>
 
     // Notifications
     fun getApiNotificationsFlow(): Flow<List<NotificationEntity>>

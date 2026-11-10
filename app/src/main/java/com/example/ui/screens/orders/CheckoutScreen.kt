@@ -66,11 +66,15 @@ import android.content.res.Configuration
 import androidx.compose.ui.tooling.preview.Preview
 import com.example.ui.theme.PharmaOSTheme
 
+import androidx.compose.material.icons.automirrored.filled.ArrowForward
+import androidx.compose.material.icons.filled.Payment
+
 @Composable
 fun CheckoutScreen(
     viewModel: OrdersViewModel,
     onNavigateBack: () -> Unit,
-    onOrderPlaced: (List<Long>) -> Unit
+    onProceedToPayment: (String, String) -> Unit,
+    onOrderPlaced: ((List<Long>) -> Unit)? = null
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     LaunchedEffect(Unit) {
@@ -79,8 +83,13 @@ fun CheckoutScreen(
     CheckoutScreenContent(
         uiState = uiState,
         onNavigateBack = onNavigateBack,
+        onProceedToPayment = onProceedToPayment,
         onPlaceOrders = { addr, notes ->
-            viewModel.placeOrders(addr, notes, onOrderPlaced)
+            if (onOrderPlaced != null) {
+                viewModel.placeOrders(addr, notes, onOrderPlaced)
+            } else {
+                onProceedToPayment(addr, notes)
+            }
         },
         onClearMessages = { viewModel.clearMessages() }
     )
@@ -91,7 +100,8 @@ fun CheckoutScreen(
 fun CheckoutScreenContent(
     uiState: OrdersUiState,
     onNavigateBack: () -> Unit,
-    onPlaceOrders: (String, String) -> Unit,
+    onProceedToPayment: (String, String) -> Unit,
+    onPlaceOrders: (String, String) -> Unit = onProceedToPayment,
     onClearMessages: () -> Unit
 ) {
     val snackbarHostState = remember { SnackbarHostState() }
@@ -124,7 +134,7 @@ fun CheckoutScreenContent(
         keyboardController?.hide()
         focusManager.clearFocus()
         val finalAddress = deliveryAddress.ifBlank { defaultAddress }
-        onPlaceOrders(finalAddress, notes)
+        onProceedToPayment(finalAddress, notes)
     }
 
     Scaffold(
@@ -134,7 +144,7 @@ fun CheckoutScreenContent(
                 subtitle = "Multi-supplier split order placement",
                 onBackClick = onNavigateBack,
                 actions = {
-                    // Header Submit Action: Always available even with keyboard open
+                    // Header Action: Always available even with keyboard open
                     Button(
                         onClick = { submitOrder() },
                         enabled = !uiState.isPlacingOrder,
@@ -154,9 +164,9 @@ fun CheckoutScreenContent(
                                 strokeWidth = 2.dp
                             )
                         } else {
-                            Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = null, modifier = Modifier.size(16.dp))
                             Spacer(modifier = Modifier.width(4.dp))
-                            Text("Submit", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                            Text("Payment", fontWeight = FontWeight.Bold, fontSize = 13.sp)
                         }
                     }
                 }
@@ -227,10 +237,10 @@ fun CheckoutScreenContent(
                                     strokeWidth = 2.5.dp
                                 )
                             } else {
-                                Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(20.dp))
+                                Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = null, modifier = Modifier.size(20.dp))
                                 Spacer(modifier = Modifier.width(8.dp))
                                 Text(
-                                    text = "Confirm & Place Orders (${basket.supplierSubtotals.size} Suppliers)",
+                                    text = "Proceed to Payment → (${basket.supplierSubtotals.size} Suppliers)",
                                     fontWeight = FontWeight.Bold,
                                     fontSize = 15.sp
                                 )
@@ -444,10 +454,10 @@ fun CheckoutScreenContent(
                         strokeWidth = 2.5.dp
                     )
                 } else {
-                    Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(20.dp))
+                    Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = null, modifier = Modifier.size(20.dp))
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(
-                        text = "Confirm & Place Orders (${basket?.supplierSubtotals?.size ?: 1} Suppliers)",
+                        text = "Proceed to Payment → (${basket?.supplierSubtotals?.size ?: 1} Suppliers)",
                         fontWeight = FontWeight.Bold,
                         fontSize = 15.sp
                     )
@@ -490,6 +500,7 @@ fun CheckoutScreenPreview() {
                 )
             ),
             onNavigateBack = {},
+            onProceedToPayment = { _, _ -> },
             onPlaceOrders = { _, _ -> },
             onClearMessages = {}
         )

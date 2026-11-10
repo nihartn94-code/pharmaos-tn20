@@ -32,6 +32,14 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <service
+            android:name=".service.InventoryMonitoringService"
+            android:exported="false" />
+
+        <service
+            android:name=".service.NotificationManagementService"
+            android:exported="false" />
     </application>
 
 </manifest>

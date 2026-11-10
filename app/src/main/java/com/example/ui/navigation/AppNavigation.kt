@@ -54,6 +54,8 @@ import com.example.ui.screens.orders.MyOrdersScreen
 import com.example.ui.screens.orders.OrderConfirmationScreen
 import com.example.ui.screens.orders.OrderDetailsScreen
 import com.example.ui.screens.orders.OrdersViewModel
+import com.example.ui.screens.orders.PaymentScreen
+import com.example.ui.screens.orders.SelectedProductsOrderSummaryScreen
 import com.example.ui.screens.returns.ReturnsCreditNotesScreen
 import com.example.ui.screens.returns.ReturnsViewModel
 import com.example.ui.screens.settings.AdminUserManagementScreen
@@ -185,7 +187,7 @@ fun AppNavigation() {
                 viewModel = catalogueViewModel,
                 onNavigateBack = { navController.popBackStack() },
                 onProductClick = { id -> navController.navigate(NavRoutes.medicineDetails(id)) },
-                onAddProductClick = { navController.navigate(NavRoutes.ADD_EDIT_PRODUCT) },
+                onAddProductClick = { navController.navigate(NavRoutes.PRODUCT_INVENTORY_LIST) },
                 onNavigateToBasket = { navController.navigate(NavRoutes.BASKET) },
                 onNavigateToDashboard = {
                     navController.navigate(NavRoutes.DASHBOARD) {
@@ -273,7 +275,18 @@ fun AppNavigation() {
                 onNavigateBack = { navController.popBackStack() },
                 onNavigateToOptimizer = { navController.navigate(NavRoutes.BEST_BUY_OPTIMIZER) },
                 onNavigateToCheckout = { navController.navigate(NavRoutes.CHECKOUT) },
-                onNavigateToCatalogue = { navController.navigate(NavRoutes.MEDICINE_CATALOGUE) }
+                onNavigateToCatalogue = { navController.navigate(NavRoutes.MEDICINE_CATALOGUE) },
+                onNavigateToSelectedProductsSummary = { navController.navigate(NavRoutes.SELECTED_PRODUCTS_SUMMARY) }
+            )
+        }
+
+        composable(NavRoutes.SELECTED_PRODUCTS_SUMMARY) {
+            val basketViewModel: BasketViewModel = viewModel(factory = factory)
+            SelectedProductsOrderSummaryScreen(
+                viewModel = basketViewModel,
+                onNavigateBack = { navController.popBackStack() },
+                onProceedToCheckout = { navController.navigate(NavRoutes.CHECKOUT) },
+                onExploreCatalogue = { navController.navigate(NavRoutes.MEDICINE_CATALOGUE) }
             )
         }
 
@@ -309,12 +322,15 @@ fun AppNavigation() {
             )
         }
 
-        // Orders & Checkout
+        // Orders & Checkout & Payment
         composable(NavRoutes.CHECKOUT) {
             val ordersViewModel: OrdersViewModel = viewModel(factory = factory)
             CheckoutScreen(
                 viewModel = ordersViewModel,
                 onNavigateBack = { navController.popBackStack() },
+                onProceedToPayment = { addr, notes ->
+                    navController.navigate(NavRoutes.payment(addr, notes))
+                },
                 onOrderPlaced = { ids ->
                     navController.navigate(NavRoutes.orderConfirmation(ids)) {
                         popUpTo(NavRoutes.BASKET) { inclusive = true }
@@ -324,13 +340,62 @@ fun AppNavigation() {
         }
 
         composable(
+            route = NavRoutes.PAYMENT,
+            arguments = listOf(
+                navArgument("address") {
+                    type = NavType.StringType
+                    nullable = true
+                    defaultValue = ""
+                },
+                navArgument("notes") {
+                    type = NavType.StringType
+                    nullable = true
+                    defaultValue = ""
+                }
+            )
+        ) { backStackEntry ->
+            val address = java.net.URLDecoder.decode(backStackEntry.arguments?.getString("address") ?: "", "UTF-8")
+            val notes = java.net.URLDecoder.decode(backStackEntry.arguments?.getString("notes") ?: "", "UTF-8")
+            val ordersViewModel: OrdersViewModel = viewModel(factory = factory)
+            PaymentScreen(
+                viewModel = ordersViewModel,
+                deliveryAddress = address,
+                orderNotes = notes,
+                onNavigateBack = { navController.popBackStack() },
+                onPaymentSuccess = { orderIds, paymentMethod, txnId ->
+                    navController.navigate(NavRoutes.orderConfirmation(orderIds, paymentMethod, txnId)) {
+                        popUpTo(NavRoutes.BASKET) { inclusive = true }
+                    }
+                }
+            )
+        }
+
+        composable(
             route = NavRoutes.ORDER_CONFIRMATION,
-            arguments = listOf(navArgument("orderIds") { type = NavType.StringType })
+            arguments = listOf(
+                navArgument("orderIds") { type = NavType.StringType },
+                navArgument("paymentMethod") {
+                    type = NavType.StringType
+                    nullable = true
+                    defaultValue = ""
+                },
+                navArgument("txnId") {
+                    type = NavType.StringType
+                    nullable = true
+                    defaultValue = ""
+                }
+            )
         ) { backStackEntry ->
             val idsStr = backStackEntry.arguments?.getString("orderIds") ?: ""
+            val rawMethod = backStackEntry.arguments?.getString("paymentMethod")
+            val rawTxn = backStackEntry.arguments?.getString("txnId")
+            val paymentMethod = if (!rawMethod.isNullOrBlank()) java.net.URLDecoder.decode(rawMethod, "UTF-8") else null
+            val txnId = if (!rawTxn.isNullOrBlank()) java.net.URLDecoder.decode(rawTxn, "UTF-8") else null
             val ids = idsStr.split(",").mapNotNull { it.toLongOrNull() }
             OrderConfirmationScreen(
                 orderIds = ids,
+                paymentMethod = paymentMethod,
+                transactionId = txnId,
                 onNavigateToOrders = {
                     navController.navigate(NavRoutes.MY_ORDERS) {
                         popUpTo(NavRoutes.DASHBOARD)
@@ -382,7 +447,17 @@ fun AppNavigation() {
                 viewModel = inventoryViewModel,
                 onNavigateBack = { navController.popBackStack() },
                 onNavigateToRecalls = { navController.navigate(NavRoutes.RECALLS) },
-                onNavigateToBasket = { navController.navigate(NavRoutes.BASKET) }
+                onNavigateToBasket = { navController.navigate(NavRoutes.BASKET) },
+                onNavigateToProducts = { navController.navigate(NavRoutes.PRODUCT_INVENTORY_LIST) }
+            )
+        }
+
+        // Product Inventory List (Room Database using ProductRepository)
+        composable(NavRoutes.PRODUCT_INVENTORY_LIST) {
+            val productViewModel: com.example.ui.screens.products.ProductListViewModel = viewModel(factory = factory)
+            com.example.ui.screens.products.ProductListScreen(
+                viewModel = productViewModel,
+                onNavigateBack = { navController.popBackStack() }
             )
         }
 

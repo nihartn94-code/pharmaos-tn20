@@ -77,6 +77,7 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import android.content.res.Configuration
 import androidx.compose.ui.tooling.preview.Preview
+import androidx.compose.material.icons.filled.ReceiptLong
 import com.example.ui.theme.PharmaOSTheme
 
 @Composable
@@ -98,6 +99,12 @@ fun MyOrdersScreen(
         onClearSearch = { viewModel.onClearSearchQuery() },
         onSelectFilterTab = { viewModel.selectFilterTab(it) },
         onSelectSortOption = { viewModel.selectSortOption(it) },
+        onSelectViewMode = { viewModel.setActiveViewMode(it) },
+        onReorderClick = { orderId ->
+            viewModel.reorderPastOrder(orderId) {
+                onNavigateToCatalogue()
+            }
+        },
         onNavigateToDashboard = onNavigateToDashboard,
         onNavigateToCatalogue = onNavigateToCatalogue,
         onNavigateToOcr = onNavigateToOcr,
@@ -114,6 +121,8 @@ fun MyOrdersContent(
     onClearSearch: () -> Unit,
     onSelectFilterTab: (String) -> Unit,
     onSelectSortOption: (String) -> Unit,
+    onSelectViewMode: (String) -> Unit = {},
+    onReorderClick: ((Long) -> Unit)? = null,
     onNavigateToDashboard: () -> Unit = {},
     onNavigateToCatalogue: () -> Unit = {},
     onNavigateToOcr: () -> Unit = {},
@@ -135,9 +144,82 @@ fun MyOrdersContent(
     Scaffold(
         containerColor = Color(0xFFF8FAFC),
         topBar = {
-            OrderPipelineTopBar(
-                onBackClick = onNavigateBack
-            )
+            Column {
+                OrderPipelineTopBar(
+                    onBackClick = onNavigateBack
+                )
+
+                // View Mode Toggle: Order History (Room) vs Live Manufacturing Pipeline
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 6.dp)
+                        .background(Color(0xFFE2E8F0), RoundedCornerShape(12.dp))
+                        .padding(3.dp),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    val isHistory = uiState.activeViewMode == "HISTORY"
+                    Surface(
+                        shape = RoundedCornerShape(9.dp),
+                        color = if (isHistory) Color.White else Color.Transparent,
+                        shadowElevation = if (isHistory) 1.dp else 0.dp,
+                        modifier = Modifier
+                            .weight(1f)
+                            .clickable { onSelectViewMode("HISTORY") }
+                            .testTag("tab_order_history_mode")
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(vertical = 8.dp),
+                            horizontalArrangement = Arrangement.Center,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.ReceiptLong,
+                                contentDescription = null,
+                                tint = if (isHistory) Color(0xFF1D64EC) else Color(0xFF64748B),
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = "Order History (${uiState.transactions.size})",
+                                fontSize = 13.sp,
+                                fontWeight = if (isHistory) FontWeight.Bold else FontWeight.Medium,
+                                color = if (isHistory) Color(0xFF1D64EC) else Color(0xFF64748B)
+                            )
+                        }
+                    }
+
+                    Surface(
+                        shape = RoundedCornerShape(9.dp),
+                        color = if (!isHistory) Color.White else Color.Transparent,
+                        shadowElevation = if (!isHistory) 1.dp else 0.dp,
+                        modifier = Modifier
+                            .weight(1f)
+                            .clickable { onSelectViewMode("PIPELINE") }
+                            .testTag("tab_pipeline_mode")
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(vertical = 8.dp),
+                            horizontalArrangement = Arrangement.Center,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.LocalShipping,
+                                contentDescription = null,
+                                tint = if (!isHistory) Color(0xFF1D64EC) else Color(0xFF64748B),
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = "Live Pipeline",
+                                fontSize = 13.sp,
+                                fontWeight = if (!isHistory) FontWeight.Bold else FontWeight.Medium,
+                                color = if (!isHistory) Color(0xFF1D64EC) else Color(0xFF64748B)
+                            )
+                        }
+                    }
+                }
+            }
         },
         bottomBar = {
             OrderPipelineBottomBar(
@@ -154,14 +236,34 @@ fun MyOrdersContent(
             )
         }
     ) { paddingValues ->
-        LazyColumn(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(paddingValues)
-                .testTag("order_pipeline_screen"),
-            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp)
-        ) {
+        if (uiState.activeViewMode == "HISTORY") {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(paddingValues)
+            ) {
+                com.example.ui.components.OrderHistoryList(
+                    transactions = uiState.transactions,
+                    onOrderClick = onOrderClick,
+                    onReorderClick = onReorderClick,
+                    onTrackClick = onOrderClick,
+                    headerContent = {
+                        PipelineHeaderSection(
+                            companyName = uiState.currentUser?.businessName ?: "Apex Life Sciences",
+                            activeCount = uiState.transactions.size
+                        )
+                    }
+                )
+            }
+        } else {
+            LazyColumn(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(paddingValues)
+                    .testTag("order_pipeline_screen"),
+                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
+                verticalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
             // 1. Order Pipeline Header & Live Dispatch Badge
             item {
                 PipelineHeaderSection(
@@ -344,6 +446,7 @@ fun MyOrdersContent(
             item {
                 Spacer(modifier = Modifier.height(16.dp))
             }
+        }
         }
     }
 

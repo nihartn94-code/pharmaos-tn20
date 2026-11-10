@@ -1,6 +1,7 @@
 package com.example.data.local.dao
 
 import androidx.room.Dao
+import androidx.room.Delete
 import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
@@ -18,6 +19,15 @@ interface ProductDao {
 
     @Update
     suspend fun updateProduct(product: ProductEntity)
+
+    @Delete
+    suspend fun deleteProduct(product: ProductEntity)
+
+    @Query("DELETE FROM products WHERE id = :productId")
+    suspend fun deleteProductById(productId: Long)
+
+    @Query("DELETE FROM products")
+    suspend fun deleteAllProducts()
 
     @Query("SELECT * FROM products WHERE id = :productId LIMIT 1")
     suspend fun getProductById(productId: Long): ProductEntity?
@@ -49,4 +59,16 @@ interface ProductDao {
 
     @Query("UPDATE products SET isActive = :isActive WHERE id = :productId")
     suspend fun setProductActiveStatus(productId: Long, isActive: Boolean)
+
+    @Query("""
+        SELECT * FROM products 
+        WHERE isActive = 1 AND (
+            name LIKE '%' || :query || '%' OR 
+            brand LIKE '%' || :query || '%' OR 
+            saltComposition LIKE '%' || :query || '%' OR 
+            therapeuticCategory LIKE '%' || :query || '%'
+        ) 
+        ORDER BY name ASC
+    """)
+    fun searchProductsFlow(query: String): Flow<List<ProductEntity>>
 }

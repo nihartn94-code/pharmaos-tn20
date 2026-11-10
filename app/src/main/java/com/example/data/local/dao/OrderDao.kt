@@ -57,6 +57,12 @@ interface OrderDao {
     @Query("SELECT * FROM order_items WHERE orderId = :orderId")
     suspend fun getOrderItems(orderId: Long): List<OrderItemEntity>
 
+    @Query("SELECT * FROM order_items")
+    fun getAllOrderItemsFlow(): Flow<List<OrderItemEntity>>
+
+    @Query("SELECT * FROM order_items")
+    suspend fun getAllOrderItems(): List<OrderItemEntity>
+
     @Query("SELECT * FROM order_items WHERE id = :orderItemId LIMIT 1")
     suspend fun getOrderItemById(orderItemId: Long): OrderItemEntity?
 

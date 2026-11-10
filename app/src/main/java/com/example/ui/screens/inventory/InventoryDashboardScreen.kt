@@ -1,5 +1,10 @@
 package com.example.ui.screens.inventory
 
+import android.Manifest
+import android.content.pm.PackageManager
+import android.os.Build
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
@@ -28,17 +33,21 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.FilterList
 import androidx.compose.material.icons.filled.Inventory
 import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.NotificationsActive
+import androidx.compose.material.icons.filled.NotificationsOff
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.ShoppingCart
 import androidx.compose.material.icons.filled.Thermostat
+import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Badge
@@ -64,10 +73,15 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.ui.platform.LocalContext
+import androidx.core.content.ContextCompat
+import com.example.service.InventoryMonitorState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -107,14 +121,31 @@ fun InventoryDashboardScreen(
     viewModel: InventoryViewModel,
     onNavigateBack: () -> Unit,
     onNavigateToRecalls: () -> Unit,
-    onNavigateToBasket: () -> Unit
+    onNavigateToBasket: () -> Unit,
+    onNavigateToProducts: () -> Unit = {}
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+    val context = LocalContext.current
+
+    // Request runtime notification permission on Android 13+ (API 33+)
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        val permissionLauncher = rememberLauncherForActivityResult(
+            ActivityResultContracts.RequestPermission()
+        ) { _ -> }
+
+        LaunchedEffect(Unit) {
+            if (ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+                permissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+            }
+        }
+    }
+
     InventoryDashboardContent(
         uiState = uiState,
         onNavigateBack = onNavigateBack,
         onNavigateToRecalls = onNavigateToRecalls,
         onNavigateToBasket = onNavigateToBasket,
+        onNavigateToProducts = onNavigateToProducts,
         onInventoryTabChanged = { viewModel.onInventoryTabChanged(it) },
         onInventorySortChanged = { viewModel.onInventorySortChanged(it) },
         onSearchQueryChanged = { viewModel.onSearchQueryChanged(it) },
@@ -125,6 +156,10 @@ fun InventoryDashboardScreen(
         onCreateBatch = { batch, onDone ->
             viewModel.createBatch(batch, onDone)
         },
+        onTriggerManualScan = { viewModel.triggerManualScan() },
+        onUpdateCriticalThreshold = { viewModel.updateCriticalThreshold(it) },
+        onToggleAutoNotifications = { viewModel.toggleAutoNotifications(it) },
+        onToggleMonitoring = { viewModel.toggleMonitoring(it) },
         onClearMessages = { viewModel.clearMessages() }
     )
 }
@@ -136,12 +171,17 @@ fun InventoryDashboardContent(
     onNavigateBack: () -> Unit,
     onNavigateToRecalls: () -> Unit,
     onNavigateToBasket: () -> Unit,
+    onNavigateToProducts: () -> Unit = {},
     onInventoryTabChanged: (InventoryTab) -> Unit,
     onInventorySortChanged: (InventorySort) -> Unit,
     onSearchQueryChanged: (String) -> Unit,
     onQuickRestock: (InventoryStockItem) -> Unit,
     onAdjustBatchStock: (Long, Int, String, () -> Unit) -> Unit,
     onCreateBatch: (BatchEntity, () -> Unit) -> Unit,
+    onTriggerManualScan: () -> Unit = {},
+    onUpdateCriticalThreshold: (Int) -> Unit = {},
+    onToggleAutoNotifications: (Boolean) -> Unit = {},
+    onToggleMonitoring: (Boolean) -> Unit = {},
     onClearMessages: () -> Unit
 ) {
     val snackbarHostState = remember { SnackbarHostState() }
@@ -149,6 +189,7 @@ fun InventoryDashboardContent(
     var itemToAdjust by remember { mutableStateOf<InventoryStockItem?>(null) }
     var showAddBatchDialog by remember { mutableStateOf(false) }
     var showSortMenu by remember { mutableStateOf(false) }
+    var showMonitorSettingsDialog by remember { mutableStateOf(false) }
 
     LaunchedEffect(uiState.errorMessage) {
         uiState.errorMessage?.let {
@@ -188,6 +229,18 @@ fun InventoryDashboardContent(
                     }
                 },
                 actions = {
+                    // Products & Stock Inventory button
+                    IconButton(
+                        onClick = onNavigateToProducts,
+                        modifier = Modifier.testTag("nav_to_products_inventory_button")
+                    ) {
+                        Icon(
+                            Icons.Default.Inventory,
+                            contentDescription = "Products Inventory (Room)",
+                            tint = Color(0xFF2563EB)
+                        )
+                    }
+
                     // Recalls badge button
                     IconButton(
                         onClick = onNavigateToRecalls,
@@ -289,6 +342,15 @@ fun InventoryDashboardContent(
             InventorySummaryCardsRow(
                 summary = uiState.inventorySummary,
                 onCardClick = { tab -> onInventoryTabChanged(tab) }
+            )
+
+            // Automated Stock Depletion Monitor Banner
+            InventoryDepletionMonitorBanner(
+                monitorState = uiState.monitorState,
+                isScanning = uiState.isScanning,
+                onTriggerScan = onTriggerManualScan,
+                onOpenSettings = { showMonitorSettingsDialog = true },
+                onFilterCritical = { onInventoryTabChanged(InventoryTab.CRITICAL) }
             )
 
             Spacer(modifier = Modifier.height(6.dp))
@@ -411,6 +473,19 @@ fun InventoryDashboardContent(
                     showAddBatchDialog = false
                 }
             }
+        )
+    }
+
+    // Dialog for configuring automated critical depletion thresholds and alerts
+    if (showMonitorSettingsDialog) {
+        DepletionThresholdSettingsDialog(
+            currentThreshold = uiState.monitorState.criticalThreshold,
+            isMonitoringActive = uiState.monitorState.isMonitoringActive,
+            notificationsEnabled = uiState.monitorState.notificationsEnabled,
+            onUpdateThreshold = onUpdateCriticalThreshold,
+            onToggleNotifications = onToggleAutoNotifications,
+            onToggleMonitoring = onToggleMonitoring,
+            onDismiss = { showMonitorSettingsDialog = false }
         )
     }
 }
@@ -1094,6 +1169,311 @@ private fun AddStockBatchDialog(
     )
 }
 
+@Composable
+private fun InventoryDepletionMonitorBanner(
+    monitorState: InventoryMonitorState,
+    isScanning: Boolean,
+    onTriggerScan: () -> Unit,
+    onOpenSettings: () -> Unit,
+    onFilterCritical: () -> Unit
+) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 6.dp)
+            .testTag("inventory_depletion_monitor_card"),
+        shape = RoundedCornerShape(14.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = if (monitorState.activeDepletionAlertsCount > 0) {
+                Color(0xFFFEF2F2)
+            } else {
+                MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
+            }
+        ),
+        border = BorderStroke(
+            1.dp,
+            if (monitorState.activeDepletionAlertsCount > 0) Color(0xFFFCA5A5)
+            else MaterialTheme.colorScheme.outline.copy(alpha = 0.25f)
+        )
+    ) {
+        Column(modifier = Modifier.padding(14.dp)) {
+            // Header: Live Indicator & Config Badges
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Surface(
+                        shape = CircleShape,
+                        color = if (monitorState.isMonitoringActive) Color(0xFF10B981) else Color(0xFF94A3B8),
+                        modifier = Modifier.size(10.dp)
+                    ) {}
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = if (monitorState.isMonitoringActive) "Auto-Depletion Monitor: Active" else "Depletion Monitor: Paused",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = if (monitorState.activeDepletionAlertsCount > 0) Color(0xFF991B1B) else MaterialTheme.colorScheme.onSurface
+                    )
+                }
+
+                Surface(
+                    shape = RoundedCornerShape(6.dp),
+                    color = if (monitorState.notificationsEnabled) Color(0xFFDCFCE7) else Color(0xFFF1F5F9)
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = if (monitorState.notificationsEnabled) Icons.Default.NotificationsActive else Icons.Default.NotificationsOff,
+                            contentDescription = null,
+                            tint = if (monitorState.notificationsEnabled) Color(0xFF15803D) else Color(0xFF64748B),
+                            modifier = Modifier.size(13.dp)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(
+                            text = if (monitorState.notificationsEnabled) "Push ON" else "Push OFF",
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = if (monitorState.notificationsEnabled) Color(0xFF15803D) else Color(0xFF64748B)
+                        )
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(6.dp))
+
+            // Body explanation & alert count
+            if (monitorState.activeDepletionAlertsCount > 0) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Warning,
+                        contentDescription = null,
+                        tint = Color(0xFFDC2626),
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = "${monitorState.activeDepletionAlertsCount} critical item(s) ≤ ${monitorState.criticalThreshold} units threshold. Automated alerts active.",
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = Color(0xFFB91C1C),
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+            } else {
+                Text(
+                    text = "Automated background service actively evaluates Room stock flows. Threshold: ≤ ${monitorState.criticalThreshold} units.",
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            // Action Buttons Row
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Button(
+                    onClick = onTriggerScan,
+                    enabled = !isScanning,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = if (monitorState.activeDepletionAlertsCount > 0) Color(0xFFDC2626) else MaterialTheme.colorScheme.primary,
+                        contentColor = Color.White
+                    ),
+                    shape = RoundedCornerShape(10.dp),
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                    modifier = Modifier
+                        .height(38.dp)
+                        .testTag("run_depletion_scan_button")
+                ) {
+                    if (isScanning) {
+                        CircularProgressIndicator(
+                            color = Color.White,
+                            strokeWidth = 2.dp,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Scanning...", fontSize = 12.sp)
+                    } else {
+                        Icon(Icons.Default.Bolt, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("Scan Stock Now", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
+
+                OutlinedButton(
+                    onClick = onOpenSettings,
+                    shape = RoundedCornerShape(10.dp),
+                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
+                    modifier = Modifier
+                        .height(38.dp)
+                        .testTag("threshold_settings_button")
+                ) {
+                    Icon(Icons.Default.Tune, contentDescription = null, modifier = Modifier.size(15.dp))
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text("Threshold (≤${monitorState.criticalThreshold})", fontSize = 12.sp)
+                }
+
+                if (monitorState.activeDepletionAlertsCount > 0) {
+                    TextButton(
+                        onClick = onFilterCritical,
+                        modifier = Modifier.height(38.dp)
+                    ) {
+                        Text("View Critical", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Color(0xFFDC2626))
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun DepletionThresholdSettingsDialog(
+    currentThreshold: Int,
+    isMonitoringActive: Boolean,
+    notificationsEnabled: Boolean,
+    onUpdateThreshold: (Int) -> Unit,
+    onToggleNotifications: (Boolean) -> Unit,
+    onToggleMonitoring: (Boolean) -> Unit,
+    onDismiss: () -> Unit
+) {
+    var selectedThreshold by remember { mutableIntStateOf(currentThreshold) }
+    var autoNotify by remember { mutableStateOf(notificationsEnabled) }
+    var monitorActive by remember { mutableStateOf(isMonitoringActive) }
+
+    val thresholdOptions = listOf(5, 10, 15, 20, 25, 30)
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    imageVector = Icons.Default.Tune,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(24.dp)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text("Stock Depletion Thresholds", fontWeight = FontWeight.Bold)
+            }
+        },
+        text = {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(14.dp)
+            ) {
+                Text(
+                    text = "Configure when the automated background service fires high-priority push notifications and flags critical items for restock.",
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+
+                Text(
+                    text = "Alert Depletion Threshold (Units):",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.Bold
+                )
+
+                // Quick Threshold Selection Chips
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    thresholdOptions.take(3).forEach { option ->
+                        FilterChip(
+                            selected = selectedThreshold == option,
+                            onClick = { selectedThreshold = option },
+                            label = { Text("≤ $option" + if (option == 10) " (Default)" else "") }
+                        )
+                    }
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    thresholdOptions.drop(3).forEach { option ->
+                        FilterChip(
+                            selected = selectedThreshold == option,
+                            onClick = { selectedThreshold = option },
+                            label = { Text("≤ $option") }
+                        )
+                    }
+                }
+
+                HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+
+                // Toggle Push Notifications
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("Automated Push Alerts", fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+                        Text(
+                            "Deliver heads-up push notifications with sound/vibration",
+                            fontSize = 11.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Switch(
+                        checked = autoNotify,
+                        onCheckedChange = { autoNotify = it }
+                    )
+                }
+
+                // Toggle Continuous Background Monitor
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("Real-time Room Stream Monitor", fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+                        Text(
+                            "Continuously evaluate batch quantity changes",
+                            fontSize = 11.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Switch(
+                        checked = monitorActive,
+                        onCheckedChange = { monitorActive = it }
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = {
+                    onUpdateThreshold(selectedThreshold)
+                    onToggleNotifications(autoNotify)
+                    onToggleMonitoring(monitorActive)
+                    onDismiss()
+                }
+            ) {
+                Text("Save Settings")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Cancel")
+            }
+        }
+    )
+}
+
 @Preview(name = "Inventory Dashboard - Light Mode", showBackground = true)
 @Preview(name = "Inventory Dashboard - Dark Mode", uiMode = Configuration.UI_MODE_NIGHT_YES, showBackground = true)
 @Composable
@@ -1112,6 +1492,12 @@ fun InventoryDashboardScreenPreview() {
                     nearExpiryCount = 2,
                     recalledCount = 0,
                     healthyCount = 44
+                ),
+                monitorState = InventoryMonitorState(
+                    isMonitoringActive = true,
+                    criticalThreshold = 10,
+                    notificationsEnabled = true,
+                    activeDepletionAlertsCount = 2
                 ),
                 filteredInventoryItems = listOf(
                     InventoryStockItem(
@@ -1168,6 +1554,10 @@ fun InventoryDashboardScreenPreview() {
             onQuickRestock = {},
             onAdjustBatchStock = { _, _, _, _ -> },
             onCreateBatch = { _, _ -> },
+            onTriggerManualScan = {},
+            onUpdateCriticalThreshold = {},
+            onToggleAutoNotifications = {},
+            onToggleMonitoring = {},
             onClearMessages = {}
         )
     }

@@ -29,15 +29,11 @@ import androidx.compose.material3.TextButton
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccountBalanceWallet
-import androidx.compose.material.icons.filled.Bedtime
 import androidx.compose.material.icons.filled.ChevronRight
-import androidx.compose.material.icons.filled.DirectionsWalk
-import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.HourglassBottom
 import androidx.compose.material.icons.filled.Inventory2
 import androidx.compose.material.icons.filled.KeyboardArrowDown
-import androidx.compose.material.icons.filled.LocalFireDepartment
 import androidx.compose.material.icons.filled.LocalShipping
 import androidx.compose.material.icons.filled.Logout
 import androidx.compose.material.icons.filled.Menu
@@ -51,11 +47,9 @@ import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.ShoppingCart
 import androidx.compose.material.icons.filled.VerifiedUser
 import androidx.compose.material.icons.filled.Warning
-import androidx.compose.material.icons.filled.WaterDrop
 import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Medication
-import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.outlined.Assignment
 import androidx.compose.material.icons.outlined.Description
 import androidx.compose.material.icons.outlined.HelpOutline
@@ -382,11 +376,6 @@ fun DashboardScreenContent(
                     onOfferClick = onNavigateToCatalogue
                 )
 
-                // Health Overview Section
-                HealthOverviewSection(
-                    onViewDetails = onNavigateToCatalogue
-                )
-
                 // Search Bar
                 SearchBarPill(
                     onClick = onNavigateToSearch
@@ -406,6 +395,70 @@ fun DashboardScreenContent(
                 // Track Your Orders Banner
                 TrackOrdersBanner(
                     onClick = onNavigateToOrders
+                )
+
+                Spacer(modifier = Modifier.height(14.dp))
+
+                // Reusable Order History Compact Widget
+                com.example.ui.components.OrderHistoryCompactWidget(
+                    transactions = listOf(
+                        com.example.ui.components.OrderTransactionUiModel(
+                            orderId = 1L,
+                            orderNumber = "PO-44820",
+                            formattedDate = "Today, 02:45 PM",
+                            rawEpochMillis = System.currentTimeMillis() - 4 * 3600 * 1000L,
+                            status = com.example.domain.model.OrderStatus.DISPATCHED,
+                            statusStageDescription = "Hub 2 Passed",
+                            buyerName = "Apex Regional Stockist",
+                            supplierName = "MedPlus Wholesale Ltd.",
+                            totalAmount = 71904.0,
+                            formattedTotalAmount = "₹71,904.00",
+                            subtotal = 64200.0,
+                            gstAmount = 7704.0,
+                            deliveryCharge = 0.0,
+                            itemCount = 1500,
+                            itemsSummary = "Paracetamol 500mg (Batch PCM-2024-B1)",
+                            transporterName = "BlueDart Express",
+                            vehicleNumber = "DL-01-AB-4200",
+                            expectedDeliveryDate = "Tomorrow, 11:30 AM"
+                        ),
+                        com.example.ui.components.OrderTransactionUiModel(
+                            orderId = 2L,
+                            orderNumber = "PO-44815",
+                            formattedDate = "Yesterday, 11:15 AM",
+                            rawEpochMillis = System.currentTimeMillis() - 24 * 3600 * 1000L,
+                            status = com.example.domain.model.OrderStatus.PACKED,
+                            statusStageDescription = "Serialization & QC Done",
+                            buyerName = "Apex Regional Stockist",
+                            supplierName = "Fortis Healthcare Chain",
+                            totalAmount = 140000.0,
+                            formattedTotalAmount = "₹1,40,000.00",
+                            subtotal = 125000.0,
+                            gstAmount = 15000.0,
+                            deliveryCharge = 0.0,
+                            itemCount = 2000,
+                            itemsSummary = "Amoxicillin 250mg (Batch AMX-2024-C9)"
+                        ),
+                        com.example.ui.components.OrderTransactionUiModel(
+                            orderId = 3L,
+                            orderNumber = "PO-44780",
+                            formattedDate = "10 Nov 2026, 09:20 AM",
+                            rawEpochMillis = System.currentTimeMillis() - 120 * 3600 * 1000L,
+                            status = com.example.domain.model.OrderStatus.DELIVERED,
+                            statusStageDescription = "Delivered & Verified with digital invoice & POD",
+                            buyerName = "Apex Regional Stockist",
+                            supplierName = "Apollo Pharmacy Hub",
+                            totalAmount = 100128.0,
+                            formattedTotalAmount = "₹1,00,128.00",
+                            subtotal = 89400.0,
+                            gstAmount = 10728.0,
+                            deliveryCharge = 0.0,
+                            itemCount = 1200,
+                            itemsSummary = "Azithromycin 500mg, Azithral 500"
+                        )
+                    ),
+                    onOrderClick = { onNavigateToOrders() },
+                    onViewAllClick = onNavigateToOrders
                 )
 
                 Spacer(modifier = Modifier.height(16.dp))
@@ -621,154 +674,6 @@ private fun GreetingAndOfferRow(
                     modifier = Modifier.size(16.dp)
                 )
             }
-        }
-    }
-}
-
-@Composable
-private fun HealthOverviewSection(
-    onViewDetails: () -> Unit
-) {
-    Column(
-        modifier = Modifier.fillMaxWidth(),
-        verticalArrangement = Arrangement.spacedBy(10.dp)
-    ) {
-        // Section Header
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clickable { onViewDetails() }
-                .testTag("dashboard_health_overview"),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Box(
-                modifier = Modifier
-                    .size(26.dp)
-                    .clip(CircleShape)
-                    .background(Color(0xFFDCFCE7)),
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(
-                    imageVector = Icons.Default.Favorite,
-                    contentDescription = null,
-                    tint = Color(0xFF16A34A),
-                    modifier = Modifier.size(14.dp)
-                )
-            }
-            Spacer(modifier = Modifier.width(8.dp))
-            Text(
-                text = "Health Overview",
-                fontSize = 15.sp,
-                fontWeight = FontWeight.Bold,
-                color = Color(0xFF0F172A)
-            )
-            Spacer(modifier = Modifier.weight(1f))
-            Icon(
-                imageVector = Icons.Default.ChevronRight,
-                contentDescription = "View Details",
-                tint = Color(0xFF94A3B8),
-                modifier = Modifier.size(18.dp)
-            )
-        }
-
-        // 4 Metric Cards in horizontal row
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            HealthMetricCard(
-                title = "Calories Today",
-                value = "1,240",
-                subtitle = "/ 2,500 kcal",
-                icon = Icons.Default.LocalFireDepartment,
-                iconColor = Color(0xFFEA580C),
-                iconBg = Color(0xFFFFEDD5),
-                modifier = Modifier.weight(1f)
-            )
-            HealthMetricCard(
-                title = "Steps",
-                value = "6,842",
-                subtitle = "/ 10,000",
-                icon = Icons.Default.DirectionsWalk,
-                iconColor = Color(0xFF0284C7),
-                iconBg = Color(0xFFE0F2FE),
-                modifier = Modifier.weight(1f)
-            )
-            HealthMetricCard(
-                title = "Water",
-                value = "6",
-                subtitle = "/ 8 glasses",
-                icon = Icons.Default.WaterDrop,
-                iconColor = Color(0xFF2563EB),
-                iconBg = Color(0xFFDBEAFE),
-                modifier = Modifier.weight(1f)
-            )
-            HealthMetricCard(
-                title = "Sleep",
-                value = "7h 20m",
-                subtitle = "/ 8h",
-                icon = Icons.Default.Bedtime,
-                iconColor = Color(0xFF7C3AED),
-                iconBg = Color(0xFFEDE9FE),
-                modifier = Modifier.weight(1f)
-            )
-        }
-    }
-}
-
-@Composable
-private fun HealthMetricCard(
-    title: String,
-    value: String,
-    subtitle: String,
-    icon: ImageVector,
-    iconColor: Color,
-    iconBg: Color,
-    modifier: Modifier = Modifier
-) {
-    Card(
-        shape = RoundedCornerShape(12.dp),
-        colors = CardDefaults.cardColors(containerColor = Color.White),
-        border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFE2E8F0)),
-        modifier = modifier
-    ) {
-        Column(
-            modifier = Modifier.padding(horizontal = 8.dp, vertical = 10.dp)
-        ) {
-            Box(
-                modifier = Modifier
-                    .size(24.dp)
-                    .clip(CircleShape)
-                    .background(iconBg),
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(
-                    imageVector = icon,
-                    contentDescription = null,
-                    tint = iconColor,
-                    modifier = Modifier.size(14.dp)
-                )
-            }
-            Spacer(modifier = Modifier.height(8.dp))
-            Text(
-                text = title,
-                fontSize = 9.sp,
-                color = Color(0xFF64748B),
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
-            Spacer(modifier = Modifier.height(2.dp))
-            Text(
-                text = value,
-                fontSize = 13.sp,
-                fontWeight = FontWeight.Bold,
-                color = Color(0xFF0F172A)
-            )
-            Text(
-                text = subtitle,
-                fontSize = 8.5.sp,
-                color = Color(0xFF94A3B8)
-            )
         }
     }
 }
@@ -1448,7 +1353,6 @@ private fun DashboardDrawerContent(
 ) {
     val isDark = MaterialTheme.colorScheme.background.luminance() < 0.5f
     var showSupportDialog by remember { mutableStateOf(false) }
-    var showSubscriptionDialog by remember { mutableStateOf(false) }
 
     val fullName = currentUser?.fullName?.ifBlank { "Rohan Sharma" } ?: "Rohan Sharma"
     val initials = remember(fullName) {
@@ -1703,78 +1607,7 @@ private fun DashboardDrawerContent(
 
                 Spacer(modifier = Modifier.height(6.dp))
 
-                // 5. Premium Subscription (warm amber card with PRO badge)
-                Card(
-                    shape = RoundedCornerShape(16.dp),
-                    colors = CardDefaults.cardColors(
-                        containerColor = if (isDark) Color(0xFF3B2A10) else Color(0xFFFFFBEB)
-                    ),
-                    border = BorderStroke(
-                        1.dp,
-                        if (isDark) Color(0xFF78350F) else Color(0xFFFDE68A)
-                    ),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable { showSubscriptionDialog = true }
-                        .testTag("drawer_item_subscription")
-                ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 14.dp, vertical = 12.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .size(36.dp)
-                                .clip(RoundedCornerShape(10.dp))
-                                .background(Color(0xFFF59E0B)),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Star,
-                                contentDescription = null,
-                                tint = Color.White,
-                                modifier = Modifier.size(20.dp)
-                            )
-                        }
-                        Spacer(modifier = Modifier.width(12.dp))
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = "Premium Subscription",
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 13.sp,
-                                color = if (isDark) Color(0xFFFDE68A) else Color(0xFF78350F)
-                            )
-                            Text(
-                                text = "Wholesale priority access",
-                                fontSize = 10.sp,
-                                color = if (isDark) Color(0xFFFCD34D) else Color(0xFF92400E)
-                            )
-                        }
-                        Surface(
-                            shape = RoundedCornerShape(8.dp),
-                            color = Color(0xFFD97706)
-                        ) {
-                            Text(
-                                text = "PRO",
-                                fontSize = 10.sp,
-                                fontWeight = FontWeight.ExtraBold,
-                                color = Color.White,
-                                modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp)
-                            )
-                        }
-                    }
-                }
-
-                // Subtle horizontal line under Premium Subscription
-                HorizontalDivider(
-                    thickness = 0.8.dp,
-                    color = if (isDark) MaterialTheme.colorScheme.outline.copy(alpha = 0.4f) else Color(0xFFF1F5F9),
-                    modifier = Modifier.padding(vertical = 10.dp)
-                )
-
-                // 6. Order History
+                // 5. Order History
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -2078,27 +1911,6 @@ private fun DashboardDrawerContent(
             confirmButton = {
                 TextButton(onClick = { showSupportDialog = false }) {
                     Text("Close")
-                }
-            }
-        )
-    }
-
-    if (showSubscriptionDialog) {
-        AlertDialog(
-            onDismissRequest = { showSubscriptionDialog = false },
-            title = { Text("PharmaOS PRO Wholesale", fontWeight = FontWeight.Bold) },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("You currently enjoy GOLD Pro wholesale tier privileges:", style = MaterialTheme.typography.bodyMedium)
-                    Text("✓ Priority supplier fulfillment & batch reservation", fontSize = 13.sp)
-                    Text("✓ Real-time AI shortage alerts & best-buy routing", fontSize = 13.sp)
-                    Text("✓ 30-day revolving credit line with zero platform fees", fontSize = 13.sp)
-                    Text("Tier Active: Valid through 31 Dec 2026", color = Color(0xFFD97706), fontWeight = FontWeight.Bold, fontSize = 12.sp)
-                }
-            },
-            confirmButton = {
-                TextButton(onClick = { showSubscriptionDialog = false }) {
-                    Text("Got It")
                 }
             }
         )

@@ -409,6 +409,75 @@ fun LoginScreenContent(
                         .fillMaxWidth()
                         .padding(20.dp)
                 ) {
+                    // Quick Testing Instance Autofill Banner for Manufacturer
+                    if (selectedRole == UserRole.MANUFACTURER) {
+                        Surface(
+                            shape = RoundedCornerShape(12.dp),
+                            color = Color(0xFFF0FDF4),
+                            border = BorderStroke(1.dp, Color(0xFFBBF7D0)),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(bottom = 14.dp)
+                                .clickable {
+                                    identifier = "manufacturer@pharmaos.com"
+                                    password = "Password@123"
+                                }
+                                .testTag("quick_fill_manufacturer_test_user")
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    Surface(
+                                        shape = CircleShape,
+                                        color = Color(0xFFDCFCE7),
+                                        modifier = Modifier.size(32.dp)
+                                    ) {
+                                        Box(contentAlignment = Alignment.Center) {
+                                            Icon(
+                                                imageVector = Icons.Default.Business,
+                                                contentDescription = null,
+                                                tint = Color(0xFF15803D),
+                                                modifier = Modifier.size(18.dp)
+                                            )
+                                        }
+                                    }
+                                    Spacer(modifier = Modifier.width(10.dp))
+                                    Column {
+                                        Text(
+                                            text = "Testing Instance: Manufacturer",
+                                            fontSize = 12.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = Color(0xFF166534)
+                                        )
+                                        Text(
+                                            text = "manufacturer@pharmaos.com • Bharat Bio-Pharma",
+                                            fontSize = 11.sp,
+                                            color = Color(0xFF15803D)
+                                        )
+                                    }
+                                }
+                                Surface(
+                                    shape = RoundedCornerShape(6.dp),
+                                    color = Color(0xFF16A34A)
+                                ) {
+                                    Text(
+                                        text = "Autofill",
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = Color.White,
+                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                    )
+                                }
+                            }
+                        }
+                    }
+
                     // 1. Mobile Number / Email ID Header & Field
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
@@ -767,12 +836,67 @@ fun LoginScreenContent(
                         Spacer(modifier = Modifier.height(10.dp))
 
                         if (matchingUsers.isEmpty()) {
-                            Text(
-                                text = "No ${selectedRole.displayName} accounts registered yet. Tap 'Sign up' above to create one.",
-                                fontSize = 12.sp,
-                                color = Color(0xFF94A3B8),
-                                modifier = Modifier.padding(vertical = 4.dp)
-                            )
+                            if (selectedRole == UserRole.MANUFACTURER) {
+                                Surface(
+                                    shape = RoundedCornerShape(10.dp),
+                                    color = Color.White,
+                                    border = BorderStroke(1.dp, Color(0xFFBBF7D0)),
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(vertical = 4.dp)
+                                        .clickable {
+                                            identifier = "manufacturer@pharmaos.com"
+                                            password = "Password@123"
+                                        }
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Surface(
+                                            shape = CircleShape,
+                                            color = Color(0xFF10B981).copy(alpha = 0.15f),
+                                            modifier = Modifier.size(32.dp)
+                                        ) {
+                                            Box(contentAlignment = Alignment.Center) {
+                                                Icon(
+                                                    imageVector = Icons.Default.Business,
+                                                    contentDescription = null,
+                                                    modifier = Modifier.size(18.dp),
+                                                    tint = Color(0xFF047857)
+                                                )
+                                            }
+                                        }
+                                        Spacer(modifier = Modifier.width(10.dp))
+                                        Column(modifier = Modifier.weight(1f)) {
+                                            Text(
+                                                text = "Bharat Bio-Pharma (Manufacturer)",
+                                                fontSize = 13.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                color = Color(0xFF0F172A)
+                                            )
+                                            Text(
+                                                text = "manufacturer@pharmaos.com • Ph: 9876543220",
+                                                fontSize = 11.sp,
+                                                color = Color(0xFF64748B)
+                                            )
+                                        }
+                                        Text(
+                                            text = "Autofill",
+                                            fontSize = 11.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = Color(0xFF047857)
+                                        )
+                                    }
+                                }
+                            } else {
+                                Text(
+                                    text = "No ${selectedRole.displayName} accounts registered yet. Tap 'Sign up' above to create one.",
+                                    fontSize = 12.sp,
+                                    color = Color(0xFF94A3B8),
+                                    modifier = Modifier.padding(vertical = 4.dp)
+                                )
+                            }
                         } else {
                             matchingUsers.forEach { regUser ->
                                 Surface(

@@ -6,15 +6,24 @@
 
 ## 🚀 Key Features
 
-### 1. Real-Time Inventory Dashboard & Critical Stock Alerts
-- **Live Reactive Dashboard:** Powered by Room reactive `Flow` streams (`getAllBatchesFlow`, `getAllProductsFlow`, `getAllRecallsFlow`) with zero manual polling.
-- **Critical Stock Flagging:** Dynamically highlights out-of-stock and low-stock SKUs with visual health progress bars.
+### 1. Real-Time Inventory Dashboard & Automated Depletion Monitoring Service
+- **Continuous Inventory Monitoring Service (`InventoryMonitoringService` & `InventoryMonitorManager`):** Real-time background service observing Room reactive `Flow` streams to detect when critical medicines approach depletion thresholds.
+- **Automated High-Priority Push Notifications:** Immediately dispatches system push alerts with sound and vibration via `NotificationHelper` when critical SKUs drop $\le$ depletion threshold (default 10 units) or hit stockout (0 units).
+- **Anti-Spam Alert Cooldown & Deduplication:** Prevents repetitive alert flooding; only re-notifies when stock drops further or after a configurable cooldown.
+- **Periodic Background Worker (`InventoryDepletionWorker`):** WorkManager-backed periodic checks ensuring offline/background vigilance.
+- **Configurable Depletion Thresholds:** In-app settings to customize depletion thresholds (5, 10, 15, 20, 25, 30 units), toggle automated push alerts, and trigger manual "Scan Now" checks.
+- **Critical Stock Flagging:** Dynamically highlights out-of-stock and low-stock SKUs with visual health progress bars and quick restock actions.
 - **Risk & Expiry Monitoring:** Flags batches expiring within 30, 60, or 90 days, as well as active regulatory recalls.
-- **Quick Restock Action:** One-tap replenishment that instantly calculates MOQ and adds items to the active procurement basket.
 - **Audit-Compliant Stock Adjustments:** Inward new batches, adjust quantities (+1/-1, +10/-10), and log reasons (Damage, Breakage, Audit Variance, Inward Transfer).
 
-### 2. Purchase Order Pipeline & Supplier Split Routing
+### 2. Purchase Order Pipeline & Multi-Method Payment Settlement
 - **Supplier-Split Orders:** Automatically groups multi-product purchase orders by manufacturer/supplier with separate GST and delivery calculations.
+- **Dedicated B2B Payment Screen:** Select from wholesale payment terms:
+  - **Pharma Wholesale Credit Line:** Net-30 deferred settlement with 0% interest and live credit limit authorization.
+  - **Instant UPI:** Direct payment via Google Pay, PhonePe, Paytm, BHIM, or dynamic QR code.
+  - **Corporate Net Banking / RTGS:** Direct transfer into PharmaOS escrow accounts.
+  - **Post-Dated Cheque (PDC):** 30-day verified PDC handover upon dispatch.
+  - **Cash on Inward Delivery (COD):** Dock inspection and verification before payment.
 - **Order Tracking:** Track active consignments, batch serialization, QA checks, cold-chain temperature ranges (2°C - 8°C), and live logistics ETA.
 - **Full Order Lifecycle:** From pending PO generation to dispatch, transit, and delivery confirmation.
 
@@ -129,6 +138,8 @@ All major screens and reusable UI components include isolated `@Preview` functio
 - **Batch & Expiry Management:** `BatchExpiryScreenPreview()` in `BatchExpiryScreen.kt`
 - **Order Pipeline & Tracking:** `MyOrdersScreenPreview()` in `MyOrdersScreen.kt`
 - **Order Checkout & Review:** `CheckoutScreenPreview()` in `CheckoutScreen.kt`
+- **B2B Payment & Settlement:** `PaymentScreenPreview()` in `PaymentScreen.kt`
+- **Order Confirmation & PO Receipt:** `OrderConfirmationScreenPreview()` in `OrderConfirmationScreen.kt`
 - **Medicine Catalogue:** `MedicineCatalogueScreenPreview()` in `MedicineCatalogueScreen.kt`
 - **Settings & Profile:** `ProfileSettingsScreenPreview()` in `ProfileSettingsScreen.kt`
 - **Design System Components:** `CommonComponentsPreview()` in `CommonComponents.kt`

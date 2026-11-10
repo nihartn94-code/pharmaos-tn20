@@ -13,15 +13,18 @@ object NavRoutes {
     const val SUPPLIER_OFFERS = "supplier_offers"
     const val ADD_EDIT_OFFER = "add_edit_offer?productId={productId}"
     const val BASKET = "basket"
+    const val SELECTED_PRODUCTS_SUMMARY = "selected_products_summary"
     const val BEST_BUY_OPTIMIZER = "best_buy_optimizer"
     const val OCR_SCANNER = "ocr_scanner"
     const val OCR_REVIEW = "ocr_review"
     const val CHECKOUT = "checkout"
-    const val ORDER_CONFIRMATION = "order_confirmation/{orderIds}"
+    const val PAYMENT = "payment?address={address}&notes={notes}"
+    const val ORDER_CONFIRMATION = "order_confirmation/{orderIds}?paymentMethod={paymentMethod}&txnId={txnId}"
     const val MY_ORDERS = "my_orders"
     const val ORDER_DETAILS = "order_details/{orderId}"
     const val BATCH_EXPIRY = "batch_expiry"
     const val INVENTORY_DASHBOARD = "inventory_dashboard"
+    const val PRODUCT_INVENTORY_LIST = "product_inventory_list"
     const val RECALLS = "recalls"
     const val RETURNS_CREDIT_NOTES = "returns_credit_notes"
     const val CREDIT_LEDGER = "credit_ledger"
@@ -36,6 +39,20 @@ object NavRoutes {
 
     fun medicineDetails(productId: Long) = "medicine_details/$productId"
     fun addEditOffer(productId: Long? = null) = if (productId != null) "add_edit_offer?productId=$productId" else "add_edit_offer"
-    fun orderConfirmation(orderIds: List<Long>) = "order_confirmation/${orderIds.joinToString(",")}"
+    fun payment(address: String = "", notes: String = ""): String {
+        val encAddr = java.net.URLEncoder.encode(address, "UTF-8")
+        val encNotes = java.net.URLEncoder.encode(notes, "UTF-8")
+        return "payment?address=$encAddr&notes=$encNotes"
+    }
+    fun orderConfirmation(
+        orderIds: List<Long>,
+        paymentMethod: String? = null,
+        txnId: String? = null
+    ): String {
+        val ids = orderIds.joinToString(",")
+        val encMethod = paymentMethod?.let { java.net.URLEncoder.encode(it, "UTF-8") } ?: ""
+        val encTxn = txnId?.let { java.net.URLEncoder.encode(it, "UTF-8") } ?: ""
+        return "order_confirmation/$ids?paymentMethod=$encMethod&txnId=$encTxn"
+    }
     fun orderDetails(orderId: Long) = "order_details/$orderId"
 }

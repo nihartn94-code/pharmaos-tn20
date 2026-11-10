@@ -75,7 +75,9 @@ data class OrdersUiState(
     val placedOrderIds: List<Long> = emptyList(),
     val isPlacingOrder: Boolean = false,
     val errorMessage: String? = null,
-    val successMessage: String? = null
+    val successMessage: String? = null,
+    val transactions: List<com.example.ui.components.OrderTransactionUiModel> = emptyList(),
+    val activeViewMode: String = "HISTORY" // "HISTORY" (Past Transactions) or "PIPELINE"
 )
 
 class OrdersViewModel(
@@ -90,7 +92,20 @@ class OrdersViewModel(
             repository.ensureDefaultOrdersSeeded()
             loadCurrentUser()
             observeOrders()
+            observeTransactions()
         }
+    }
+
+    private fun observeTransactions() {
+        viewModelScope.launch {
+            repository.getOrderHistoryTransactionsFlow().collect { list ->
+                _uiState.update { it.copy(transactions = list) }
+            }
+        }
+    }
+
+    fun setActiveViewMode(mode: String) {
+        _uiState.update { it.copy(activeViewMode = mode) }
     }
 
     private fun loadCurrentUser() {
