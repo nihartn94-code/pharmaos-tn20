@@ -2,6 +2,8 @@ package com.example.ui.screens.auth
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.data.remote.config.ApiConfig
+import com.example.data.remote.config.AuthExecutionMode
 import com.example.domain.model.AuthUser
 import com.example.domain.model.UserRole
 import com.example.domain.repository.PharmaRepository
@@ -17,6 +19,9 @@ data class AuthUiState(
     val currentUser: AuthUser? = null,
     val allRegisteredUsers: List<com.example.data.local.entity.UserEntity> = emptyList(),
     val isFirstUser: Boolean = false,
+    val authExecutionMode: AuthExecutionMode = AuthExecutionMode.PRODUCTION_BACKEND_HTTP,
+    val backendBaseUrl: String = ApiConfig.PLACEHOLDER_UNCONFIGURED_BASE_URL,
+    val isBackendConfigured: Boolean = false,
     val errorMessage: String? = null,
     val successMessage: String? = null
 )
@@ -31,12 +36,73 @@ class AuthViewModel(
     init {
         checkSession()
         observeUsers()
+        observeBackendConfig()
+    }
+
+    private fun observeBackendConfig() {
         viewModelScope.launch {
-            repository.ensureDefaultManufacturerUser()
+            repository.getAuthExecutionModeFlow().collect { mode ->
+                _uiState.update { it.copy(authExecutionMode = mode) }
+                if (mode == AuthExecutionMode.DEVELOPMENT_LOCAL_MODE) {
+                    repository.ensureDefaultManufacturerUser()
+                }
+            }
+        }
+        viewModelScope.launch {
+            repository.getBackendBaseUrlFlow().collect { url ->
+                _uiState.update {
+                    it.copy(
+                        backendBaseUrl = url,
+                        isBackendConfigured = ApiConfig.isBackendUrlConfigured(url)
+                    )
+                }
+            }
+        }
+    }
+
+    fun setAuthExecutionMode(mode: AuthExecutionMode) {
+        viewModelScope.launch {
+            repository.setAuthExecutionMode(mode)
+            _uiState.update {
+                it.copy(
+                    authExecutionMode = mode,
+                    successMessage = "Switched to ${mode.label}"
+                )
+            }
+        }
+    }
+
+    fun configureBackendUrl(rawUrl: String) {
+        viewModelScope.launch {
+            val res = repository.setBackendBaseUrl(rawUrl)
+            res.fold(
+                onSuccess = { normalized ->
+                    _uiState.update {
+                        it.copy(
+                            backendBaseUrl = normalized,
+                            isBackendConfigured = ApiConfig.isBackendUrlConfigured(normalized),
+                            successMessage = if (ApiConfig.isBackendUrlConfigured(normalized)) {
+                                "Backend URL saved: $normalized"
+                            } else {
+                                "Backend URL reset to unconfigured placeholder."
+                            }
+                        )
+                    }
+                },
+                onFailure = { err ->
+                    _uiState.update { it.copy(errorMessage = err.message ?: "Invalid backend URL.") }
+                }
+            )
         }
     }
 
     fun seedManufacturerTestingAccount(onReady: (com.example.data.local.entity.UserEntity) -> Unit = {}) {
+        if (_uiState.value.authExecutionMode != AuthExecutionMode.DEVELOPMENT_LOCAL_MODE) {
+            _uiState.update {
+                it.copy(errorMessage = "Local test accounts require Development Local Mode.")
+            }
+            return
+        }
         viewModelScope.launch {
             _uiState.update { it.copy(isLoading = true) }
             val mfg = repository.ensureDefaultManufacturerUser()
@@ -99,7 +165,8 @@ class AuthViewModel(
         email: String,
         displayName: String = "",
         role: UserRole? = null,
-        onSuccess: () -> Unit
+        onSuccess: () -> Unit,
+        markOnboardingCompleted: Boolean = true
     ) {
         val targetRole = role ?: _uiState.value.selectedRole
         val cleanEmail = email.trim().lowercase()
@@ -111,6 +178,9 @@ class AuthViewModel(
             val result = repository.postApiAuthGoogle(cleanEmail, cleanName, targetRole)
             result.fold(
                 onSuccess = { user ->
+                    if (markOnboardingCompleted || user.role == UserRole.ADMIN) {
+                        repository.setOnboardingCompleted(true)
+                    }
                     _uiState.update { it.copy(isLoading = false, currentUser = user, errorMessage = null) }
                     onSuccess()
                 },
@@ -122,16 +192,14 @@ class AuthViewModel(
     }
 
     fun quickSwitchUser(userId: Long, onSuccess: () -> Unit) {
+        if (_uiState.value.authExecutionMode != AuthExecutionMode.DEVELOPMENT_LOCAL_MODE) {
+            _uiState.update {
+                it.copy(errorMessage = "Quick local test switching is only available in Development Local Mode.")
+            }
+            return
+        }
         viewModelScope.launch {
             val userEntity = _uiState.value.allRegisteredUsers.find { it.id == userId } ?: return@launch
-            // For fast testing on one device, switch session
-            val role = try { UserRole.valueOf(userEntity.role) } catch (_: Exception) { UserRole.STOCKIST }
-            val status = try { com.example.domain.model.AccountStatus.valueOf(userEntity.status) } catch (_: Exception) { com.example.domain.model.AccountStatus.ACTIVE }
-            repository.postApiAuthLogin(userEntity.email, "") // Will fail password check, so we can set directly via repository session
-            // We use direct switch
-            (repository as? com.example.data.repository.PharmaRepositoryImpl)?.let {
-                // Set data store user
-            }
             login(userEntity.email, "Password@123", onSuccess = onSuccess)
         }
     }

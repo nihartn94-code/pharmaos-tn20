@@ -106,6 +106,8 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import android.content.res.Configuration
 import androidx.compose.ui.tooling.preview.Preview
 import com.example.ui.theme.PharmaOSTheme
+import com.example.data.local.entity.ProductInventoryEntity
+import com.example.ui.components.ShortageAlertsDashboardComponent
 import kotlinx.coroutines.launch
 
 @Composable
@@ -146,6 +148,8 @@ fun DashboardScreen(
         onNavigateToOptimizer = onNavigateToOptimizer,
         onNavigateToCompliance = onNavigateToCompliance,
         onNavigateToSearch = onNavigateToSearch,
+        onAdjustStock = { sku, delta -> viewModel.adjustInventoryStock(sku, delta) },
+        onReorderProduct = { item, qty -> viewModel.reorderProduct(item, qty) },
         onLogout = { viewModel.logout(onLoggedOut) }
     )
 }
@@ -169,6 +173,8 @@ fun DashboardScreenContent(
     onNavigateToOptimizer: () -> Unit = {},
     onNavigateToCompliance: () -> Unit = {},
     onNavigateToSearch: () -> Unit = onNavigateToCatalogue,
+    onAdjustStock: (String, Int) -> Unit = { _, _ -> },
+    onReorderProduct: (ProductInventoryEntity, Int) -> Unit = { _, _ -> },
     onLogout: () -> Unit = {}
 ) {
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
@@ -309,35 +315,48 @@ fun DashboardScreenContent(
                             }
                         }
 
-                        // Circular Cart Button
+                        // Circular Cart Button with unclipped top-end live badge
                         Box(
                             modifier = Modifier
-                                .padding(end = 12.dp)
-                                .size(40.dp)
-                                .clip(CircleShape)
-                                .background(Color(0xFFF1F5F9))
-                                .clickable { onNavigateToBasket() }
-                                .testTag("dashboard_cart_button"),
+                                .padding(end = 4.dp)
+                                .size(48.dp),
                             contentAlignment = Alignment.Center
                         ) {
-                            BadgedBox(
-                                badge = {
-                                    if (uiState.cartItemCount > 0) {
-                                        Badge(
-                                            containerColor = Color(0xFF2563EB),
-                                            contentColor = Color.White
-                                        ) {
-                                            Text("${uiState.cartItemCount}")
-                                        }
-                                    }
-                                }
+                            IconButton(
+                                onClick = onNavigateToBasket,
+                                modifier = Modifier
+                                    .size(48.dp)
+                                    .testTag("dashboard_cart_button")
                             ) {
-                                Icon(
-                                    imageVector = Icons.Outlined.ShoppingCart,
-                                    contentDescription = "Shopping Cart",
-                                    tint = MaterialTheme.colorScheme.onSurface,
-                                    modifier = Modifier.size(20.dp)
-                                )
+                                Box(
+                                    modifier = Modifier
+                                        .size(40.dp)
+                                        .clip(CircleShape)
+                                        .background(Color(0xFFF1F5F9)),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Outlined.ShoppingCart,
+                                        contentDescription = "Open Basket (${uiState.cartItemCount} items)",
+                                        tint = MaterialTheme.colorScheme.onSurface,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                }
+                            }
+                            if (uiState.cartItemCount > 0) {
+                                Badge(
+                                    containerColor = Color(0xFF2563EB),
+                                    contentColor = Color.White,
+                                    modifier = Modifier
+                                        .align(Alignment.TopEnd)
+                                        .padding(top = 2.dp, end = 2.dp)
+                                ) {
+                                    Text(
+                                        text = if (uiState.cartItemCount > 99) "99+" else "${uiState.cartItemCount}",
+                                        fontSize = 10.sp,
+                                        modifier = Modifier.testTag("dashboard_cart_badge")
+                                    )
+                                }
                             }
                         }
                     },
@@ -368,12 +387,11 @@ fun DashboardScreenContent(
                     .padding(horizontal = 16.dp, vertical = 12.dp),
                 verticalArrangement = Arrangement.spacedBy(16.dp)
             ) {
-                // Greeting & Special Offer Card Row
-                GreetingAndOfferRow(
+                // Greeting & Role Header
+                GreetingHeaderRow(
                     userName = uiState.currentUser?.fullName?.ifBlank { "Rohan Sharma" } ?: "Rohan Sharma",
                     roleName = uiState.currentUser?.role?.displayName?.split("/")?.firstOrNull()?.trim() ?: "Stockist",
-                    onRoleClick = onNavigateToSettings,
-                    onOfferClick = onNavigateToCatalogue
+                    onRoleClick = onNavigateToSettings
                 )
 
                 // Search Bar
@@ -461,6 +479,17 @@ fun DashboardScreenContent(
                     onViewAllClick = onNavigateToOrders
                 )
 
+                Spacer(modifier = Modifier.height(14.dp))
+
+                // Real-Time Shortage Alerts Dashboard Component
+                ShortageAlertsDashboardComponent(
+                    items = uiState.inventoryItems,
+                    onReorderClick = onReorderProduct,
+                    onAdjustStock = onAdjustStock,
+                    onViewAllClick = onNavigateToShortages,
+                    onProductClick = { onNavigateToShortages() }
+                )
+
                 Spacer(modifier = Modifier.height(16.dp))
             }
         }
@@ -530,147 +559,49 @@ private fun PharmaOSBrandHeader() {
 }
 
 @Composable
-private fun GreetingAndOfferRow(
+private fun GreetingHeaderRow(
     userName: String,
     roleName: String,
-    onRoleClick: () -> Unit,
-    onOfferClick: () -> Unit
+    onRoleClick: () -> Unit
 ) {
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        // Left: Greeting & Role
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = "Good Morning,",
-                fontSize = 12.sp,
-                color = Color(0xFF64748B),
-                fontWeight = FontWeight.Normal
-            )
-            Text(
-                text = userName,
-                fontSize = 18.sp,
-                fontWeight = FontWeight.Bold,
-                color = Color(0xFF0F172A)
-            )
-            Spacer(modifier = Modifier.height(4.dp))
-            Surface(
-                shape = RoundedCornerShape(12.dp),
-                color = Color(0xFFF1F5F9),
-                border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFE2E8F0)),
-                modifier = Modifier
-                    .clickable { onRoleClick() }
-                    .testTag("dashboard_role_pill")
-            ) {
-                Row(
-                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        text = roleName,
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Medium,
-                        color = Color(0xFF334155)
-                    )
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Icon(
-                        imageVector = Icons.Default.KeyboardArrowDown,
-                        contentDescription = "Role Selector",
-                        tint = Color(0xFF64748B),
-                        modifier = Modifier.size(16.dp)
-                    )
-                }
-            }
-        }
-
-        Spacer(modifier = Modifier.width(12.dp))
-
-        // Right: Special Offer Card
-        Card(
-            shape = RoundedCornerShape(16.dp),
-            colors = CardDefaults.cardColors(containerColor = Color(0xFFFFF1F2)),
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Text(
+            text = "Good Morning,",
+            fontSize = 12.sp,
+            color = Color(0xFF64748B),
+            fontWeight = FontWeight.Normal
+        )
+        Text(
+            text = userName,
+            fontSize = 18.sp,
+            fontWeight = FontWeight.Bold,
+            color = Color(0xFF0F172A),
+            modifier = Modifier.testTag("dashboard_greeting_name")
+        )
+        Spacer(modifier = Modifier.height(4.dp))
+        Surface(
+            shape = RoundedCornerShape(12.dp),
+            color = Color(0xFFF1F5F9),
+            border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFE2E8F0)),
             modifier = Modifier
-                .width(190.dp)
-                .clickable { onOfferClick() }
-                .testTag("dashboard_special_offer_card"),
-            border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFFFCCD5))
+                .clickable { onRoleClick() }
+                .testTag("dashboard_role_pill")
         ) {
             Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 10.dp, vertical = 10.dp),
+                modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                // 3D Capsule Pill Graphic
-                Canvas(
-                    modifier = Modifier
-                        .size(38.dp)
-                        .rotate(-30f)
-                ) {
-                    val pillWidth = size.width * 0.9f
-                    val pillHeight = size.height * 0.46f
-                    val corner = pillHeight / 2
-
-                    // White half
-                    drawRoundRect(
-                        color = Color.White,
-                        topLeft = Offset(0f, (size.height - pillHeight) / 2),
-                        size = Size(pillWidth, pillHeight),
-                        cornerRadius = CornerRadius(corner, corner)
-                    )
-                    // Cyan/Blue half
-                    drawRoundRect(
-                        color = Color(0xFF0284C7),
-                        topLeft = Offset(pillWidth / 2, (size.height - pillHeight) / 2),
-                        size = Size(pillWidth / 2, pillHeight),
-                        cornerRadius = CornerRadius(corner, corner)
-                    )
-                    // Green small leaf dot
-                    drawCircle(
-                        color = Color(0xFF22C55E),
-                        radius = 4.dp.toPx(),
-                        center = Offset(pillWidth * 0.35f, size.height / 2)
-                    )
-                }
-
-                Spacer(modifier = Modifier.width(8.dp))
-
-                Column(modifier = Modifier.weight(1f)) {
-                    // Magenta SPECIAL OFFER badge
-                    Surface(
-                        shape = RoundedCornerShape(4.dp),
-                        color = Color(0xFFE11D48)
-                    ) {
-                        Text(
-                            text = "SPECIAL OFFER",
-                            fontSize = 8.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = Color.White,
-                            modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
-                        )
-                    }
-                    Spacer(modifier = Modifier.height(2.dp))
-                    Text(
-                        text = "Flat 12% OFF",
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = Color(0xFF0F172A)
-                    )
-                    Text(
-                        text = "on Selected Brands",
-                        fontSize = 9.sp,
-                        color = Color(0xFF64748B),
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                }
-
+                Text(
+                    text = roleName,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = Color(0xFF334155)
+                )
+                Spacer(modifier = Modifier.width(4.dp))
                 Icon(
-                    imageVector = Icons.Default.ChevronRight,
-                    contentDescription = null,
-                    tint = Color(0xFF94A3B8),
+                    imageVector = Icons.Default.KeyboardArrowDown,
+                    contentDescription = "Role Selector",
+                    tint = Color(0xFF64748B),
                     modifier = Modifier.size(16.dp)
                 )
             }
@@ -1593,10 +1524,10 @@ private fun DashboardDrawerContent(
                     )
                     Surface(
                         shape = RoundedCornerShape(12.dp),
-                        color = Color(0xFFF43F5E)
+                        color = if (cartItemCount > 0) Color(0xFFF43F5E) else Color(0xFF64748B)
                     ) {
                         Text(
-                            text = "${if (cartItemCount > 0) cartItemCount else 3} items",
+                            text = "$cartItemCount ${if (cartItemCount == 1) "item" else "items"}",
                             fontSize = 11.sp,
                             fontWeight = FontWeight.Bold,
                             color = Color.White,

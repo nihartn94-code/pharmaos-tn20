@@ -9,6 +9,8 @@ import com.example.data.local.entity.ProductEntity
 import com.example.data.local.entity.SupplierOfferEntity
 import com.example.data.local.entity.SupplierSettingsEntity
 import com.example.data.local.entity.UserEntity
+import com.example.data.remote.config.ApiConfig
+import com.example.data.remote.config.AuthExecutionMode
 import com.example.domain.model.AccountStatus
 import com.example.domain.model.AuthUser
 import com.example.domain.model.UserRole
@@ -25,6 +27,10 @@ import kotlinx.coroutines.withContext
 data class SettingsUiState(
     val currentUser: AuthUser? = null,
     val isDarkTheme: Boolean = false,
+    val authExecutionMode: AuthExecutionMode = AuthExecutionMode.PRODUCTION_BACKEND_HTTP,
+    val backendBaseUrl: String = ApiConfig.PLACEHOLDER_UNCONFIGURED_BASE_URL,
+    val isBackendConfigured: Boolean = false,
+    val isSyncing: Boolean = false,
     val supplierSettings: SupplierSettingsEntity? = null,
     val allUsers: List<UserEntity> = emptyList(),
     val csvImportReport: List<String> = emptyList(),
@@ -63,8 +69,81 @@ class SettingsViewModel(
             }
         }
         viewModelScope.launch {
+            repository.getAuthExecutionModeFlow().collect { mode ->
+                _uiState.update { it.copy(authExecutionMode = mode) }
+            }
+        }
+        viewModelScope.launch {
+            repository.getBackendBaseUrlFlow().collect { url ->
+                _uiState.update {
+                    it.copy(
+                        backendBaseUrl = url,
+                        isBackendConfigured = ApiConfig.isBackendUrlConfigured(url)
+                    )
+                }
+            }
+        }
+        viewModelScope.launch {
             repository.getApiUsersFlow().collect { users ->
                 _uiState.update { it.copy(allUsers = users) }
+            }
+        }
+    }
+
+    fun setAuthExecutionMode(mode: AuthExecutionMode) {
+        viewModelScope.launch {
+            repository.setAuthExecutionMode(mode)
+            _uiState.update {
+                it.copy(
+                    authExecutionMode = mode,
+                    successMessage = "Switched to ${mode.label}"
+                )
+            }
+        }
+    }
+
+    fun configureBackendUrl(rawUrl: String) {
+        viewModelScope.launch {
+            repository.setBackendBaseUrl(rawUrl).fold(
+                onSuccess = { normalized ->
+                    _uiState.update {
+                        it.copy(
+                            backendBaseUrl = normalized,
+                            isBackendConfigured = ApiConfig.isBackendUrlConfigured(normalized),
+                            successMessage = "Backend URL updated: $normalized"
+                        )
+                    }
+                },
+                onFailure = { err ->
+                    _uiState.update { it.copy(errorMessage = err.message ?: "Invalid backend URL.") }
+                }
+            )
+        }
+    }
+
+    fun syncFromBackend() {
+        viewModelScope.launch {
+            _uiState.update { it.copy(isSyncing = true, errorMessage = null) }
+            val catRes = repository.syncCatalogueFromBackend()
+            val ordRes = repository.syncOrdersFromBackend()
+            val notRes = repository.syncNotificationsFromBackend()
+
+            val firstError = catRes.exceptionOrNull() ?: ordRes.exceptionOrNull() ?: notRes.exceptionOrNull()
+            if (firstError != null) {
+                _uiState.update {
+                    it.copy(
+                        isSyncing = false,
+                        errorMessage = firstError.message ?: "Backend sync failed."
+                    )
+                }
+            } else {
+                val count = (catRes.getOrNull() ?: 0) + (ordRes.getOrNull() ?: 0) + (notRes.getOrNull() ?: 0)
+                _uiState.update {
+                    it.copy(
+                        isSyncing = false,
+                        successMessage = "Synced $count records from Spring Boot backend."
+                    )
+                }
             }
         }
     }

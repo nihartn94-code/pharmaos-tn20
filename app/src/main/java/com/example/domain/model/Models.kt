@@ -11,6 +11,19 @@ enum class UserRole(val displayName: String) {
 
     val isBuyer: Boolean
         get() = this == STOCKIST
+
+    /**
+     * Live Pipeline is restricted to authorized Manufacturer and Brand accounts (not Stockists).
+     */
+    val canAccessLivePipeline: Boolean
+        get() = this == MANUFACTURER || this == PHARMA_COMPANY
+
+    companion object {
+        fun fromString(raw: String?): UserRole {
+            if (raw.isNullOrBlank()) return STOCKIST
+            return entries.firstOrNull { it.name.equals(raw.trim(), ignoreCase = true) } ?: STOCKIST
+        }
+    }
 }
 
 enum class AccountStatus {
@@ -295,3 +308,141 @@ data class InventoryDashboardSummary(
     val recalledCount: Int = 0,
     val healthyCount: Int = 0
 )
+
+data class TradeMarginBreakdown(
+    val marginPercent: Double?,
+    val marginAmountPerUnit: Double?,
+    val effectiveUnitCost: Double?,
+    val unitPricePtr: Double?,
+    val mrp: Double?,
+    val netUnitPriceAfterScheme: Double?,
+    val gstPerUnit: Double?,
+    val gstRatePercent: Double,
+    val deliveryCostApplied: Double?,
+    val deliveryPerUnit: Double?,
+    val freeDeliveryThreshold: Double?,
+    val freeQuantityBonus: Int = 0,
+    val evaluationQuantity: Int = 1,
+    val hasAdditionalCostData: Boolean = false,
+    val missingFields: List<String> = emptyList(),
+    val formulaSummary: String = "Trade Margin % = ((MRP - Effective Unit Cost) / MRP) x 100"
+)
+
+data class VerifiedStockInfo(
+    val verifiedAvailableUnits: Int? = null,
+    val verifiedBatchCount: Int = 0,
+    val verifiedInventorySkuCount: Int = 0,
+    val hasVerifiedStockRecords: Boolean = false
+)
+
+data class SupplierQuotationItem(
+    val offer: OfferWithSupplier,
+    val effectiveUnitCost: Double?,
+    val tradeMargin: TradeMarginBreakdown,
+    val deliveryCharge: Double?,
+    val freeDeliveryThreshold: Double?,
+    val averageLeadTimeDays: Double?,
+    val quotedStock: Int,
+    val verifiedStock: Int?,
+    val hasVerifiedStockRecord: Boolean,
+    val isExpired: Boolean,
+    val isEligibleForPurchase: Boolean,
+    val unavailabilityReason: String?
+)
+
+data class SupplierQuotationSummary(
+    val minMoq: Int?,
+    val maxMoq: Int?,
+    val lowestUnitPricePtr: Double?,
+    val lowestEffectiveUnitCost: Double?,
+    val availableSuppliersCount: Int,
+    val totalOffersCount: Int,
+    val totalQuotedAvailableStock: Int,
+    val verifiedAvailableStock: Int?,
+    val hasVerifiedStockRecords: Boolean,
+    val hasEligibleOffers: Boolean,
+    val bestOfferId: Long?,
+    val missingFields: List<String> = emptyList()
+)
+
+data class AlternativeBrandQuotation(
+    val product: com.example.data.local.entity.ProductEntity,
+    val manufacturerName: String,
+    val unitPricePtr: Double?,
+    val effectiveUnitCost: Double?,
+    val mrp: Double?,
+    val moq: Int?,
+    val supplierName: String?,
+    val supplierRating: Int?,
+    val hasSufficientRatingData: Boolean,
+    val gstRatePercent: Double,
+    val deliveryCharge: Double?,
+    val freeDeliveryThreshold: Double?,
+    val tradeMargin: TradeMarginBreakdown,
+    val availableSuppliersCount: Int,
+    val totalQuotedStock: Int,
+    val hasEligibleOffer: Boolean,
+    val missingFields: List<String> = emptyList()
+)
+
+data class TaxInvoiceParty(
+    val legalName: String?,
+    val contactName: String?,
+    val address: String?,
+    val shippingAddress: String? = null,
+    val gstin: String?,
+    val phone: String?,
+    val email: String?
+)
+
+data class TaxInvoiceLineItem(
+    val productName: String,
+    val brand: String,
+    val packSize: String,
+    val hsnCode: String,
+    val batchNumber: String?,
+    val quantity: Int,
+    val freeQuantity: Int,
+    val unitPricePtr: Double,
+    val effectiveUnitPrice: Double,
+    val taxableValue: Double,
+    val gstRatePercent: Double,
+    val gstAmount: Double?,
+    val cgstAmount: Double?,
+    val sgstAmount: Double?,
+    val igstAmount: Double?,
+    val lineTotal: Double
+)
+
+data class TaxInvoiceData(
+    val orderId: Long,
+    val orderNumber: String,
+    val orderStatus: OrderStatus,
+    val orderDateEpochMillis: Long,
+    val invoiceNumber: String?,
+    val invoiceDateEpochMillis: Long?,
+    val isEligible: Boolean,
+    val eligibilityReason: String?,
+    val isBackendAuthoritative: Boolean = false,
+    val seller: TaxInvoiceParty,
+    val buyer: TaxInvoiceParty,
+    val placeOfSupply: String?,
+    val gstTaxType: String?, // "CGST + SGST", "IGST", or null when state codes unavailable
+    val items: List<TaxInvoiceLineItem>,
+    val subtotalTaxable: Double,
+    val cgstTotal: Double?,
+    val sgstTotal: Double?,
+    val igstTotal: Double?,
+    val totalGstAmount: Double?,
+    val deliveryCharge: Double,
+    val grandTotal: Double,
+    val ewayBillNumber: String? = null,
+    val vehicleNumber: String? = null,
+    val transporterName: String? = null,
+    val missingFields: List<String> = emptyList()
+) {
+    val hasCompleteTaxMetadata: Boolean
+        get() = isEligible && !invoiceNumber.isNullOrBlank() && missingFields.isEmpty()
+}
+
+

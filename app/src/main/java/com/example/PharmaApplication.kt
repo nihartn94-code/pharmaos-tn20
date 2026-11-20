@@ -3,7 +3,11 @@ package com.example
 import android.app.Application
 import com.example.data.local.AppDatabase
 import com.example.data.local.DataStoreManager
+import com.example.data.remote.config.AuthExecutionMode
+import com.example.data.remote.source.AuthRemoteDataSource
+import com.example.data.remote.source.PharmaRemoteDataSource
 import com.example.data.repository.PharmaRepositoryImpl
+import com.example.di.NetworkModule
 import com.example.domain.repository.PharmaRepository
 import com.example.domain.usecase.CalculateTrustScoreUseCase
 import com.example.domain.usecase.EvaluateShortageRiskUseCase
@@ -16,6 +20,7 @@ import com.example.worker.ExpiryAndShortageWorker
 import com.example.worker.InventoryDepletionWorker
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
 class PharmaApplication : Application() {
@@ -24,6 +29,15 @@ class PharmaApplication : Application() {
         private set
 
     lateinit var dataStoreManager: DataStoreManager
+        private set
+
+    lateinit var networkModule: NetworkModule
+        private set
+
+    lateinit var authRemoteDataSource: AuthRemoteDataSource
+        private set
+
+    lateinit var pharmaRemoteDataSource: PharmaRemoteDataSource
         private set
 
     lateinit var repository: PharmaRepository
@@ -35,6 +49,9 @@ class PharmaApplication : Application() {
     lateinit var inventoryMonitorManager: InventoryMonitorManager
         private set
 
+    @Volatile
+    private var isRemoteSyncActive: Boolean = true
+
     val optimizeBasketUseCase = OptimizeBasketUseCase()
     val calculateTrustScoreUseCase = CalculateTrustScoreUseCase()
     val evaluateShortageRiskUseCase = EvaluateShortageRiskUseCase()
@@ -45,16 +62,25 @@ class PharmaApplication : Application() {
 
         database = AppDatabase.getInstance(this)
         dataStoreManager = DataStoreManager(this)
+        networkModule = NetworkModule(tokenProvider = dataStoreManager)
+        authRemoteDataSource = AuthRemoteDataSource(networkModule)
+        pharmaRemoteDataSource = PharmaRemoteDataSource(networkModule)
+
         repository = PharmaRepositoryImpl(
             db = database,
             dataStoreManager = dataStoreManager,
             optimizeBasketUseCase = optimizeBasketUseCase,
             calculateTrustScoreUseCase = calculateTrustScoreUseCase,
-            evaluateShortageRiskUseCase = evaluateShortageRiskUseCase
+            evaluateShortageRiskUseCase = evaluateShortageRiskUseCase,
+            authRemoteDataSource = authRemoteDataSource,
+            pharmaRemoteDataSource = pharmaRemoteDataSource,
+            networkModule = networkModule
         )
         productRepository = com.example.data.repository.ProductRepository(
             productDao = database.productDao(),
-            inventoryDao = database.productInventoryDao()
+            inventoryDao = database.productInventoryDao(),
+            remoteDataSource = pharmaRemoteDataSource,
+            isRemoteSyncEnabled = { isRemoteSyncActive }
         )
 
         inventoryMonitorManager = InventoryMonitorManager(
@@ -64,9 +90,41 @@ class PharmaApplication : Application() {
             dataStoreManager = dataStoreManager
         )
 
-        kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
+        val appIoScope = CoroutineScope(Dispatchers.IO)
+
+        appIoScope.launch {
             try {
-                repository.ensureDefaultManufacturerUser()
+                dataStoreManager.backendBaseUrlFlow.collect { savedUrl ->
+                    networkModule.updateBaseUrl(savedUrl)
+                }
+            } catch (_: Exception) {
+            }
+        }
+
+        appIoScope.launch {
+            try {
+                dataStoreManager.accessTokenFlow.collect {
+                    // Populates DataStoreManager.cachedAccessToken for AuthInterceptor
+                }
+            } catch (_: Exception) {
+            }
+        }
+
+        appIoScope.launch {
+            try {
+                dataStoreManager.authExecutionModeFlow.collect { mode ->
+                    isRemoteSyncActive = mode == AuthExecutionMode.PRODUCTION_BACKEND_HTTP
+                }
+            } catch (_: Exception) {
+            }
+        }
+
+        appIoScope.launch {
+            try {
+                // Keep local dev manufacturer test instance available when using Development Local Mode
+                if (dataStoreManager.authExecutionModeFlow.first() == AuthExecutionMode.DEVELOPMENT_LOCAL_MODE) {
+                    repository.ensureDefaultManufacturerUser()
+                }
             } catch (_: Exception) {
                 // Ignore in test runners
             }

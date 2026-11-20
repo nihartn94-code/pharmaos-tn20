@@ -7,7 +7,6 @@ import com.example.data.repository.ProductRepository
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
@@ -43,8 +42,12 @@ data class ProductListUiState(
  * for the Product List and Add Product screen.
  */
 class ProductListViewModel(
-    private val productRepository: ProductRepository
+    private val productRepository: ProductRepository,
+    private val externalScope: kotlinx.coroutines.CoroutineScope? = null
 ) : ViewModel() {
+
+    private val scope: kotlinx.coroutines.CoroutineScope
+        get() = externalScope ?: viewModelScope
 
     private val _uiState = MutableStateFlow(ProductListUiState(isLoading = true))
     val uiState: StateFlow<ProductListUiState> = _uiState.asStateFlow()
@@ -52,66 +55,70 @@ class ProductListViewModel(
     private val _searchQuery = MutableStateFlow("")
     private val _selectedFilter = MutableStateFlow(ProductInventoryFilter.ALL)
 
+    private var allItemsCache: List<ProductInventoryEntity> = emptyList()
+
     init {
         observeProducts()
     }
 
     private fun observeProducts() {
-        viewModelScope.launch {
-            combine(
-                productRepository.getProductInventoryFlow(),
-                _searchQuery,
-                _selectedFilter
-            ) { allItems, query, filter ->
-                val trimmedQuery = query.trim()
-                val searched = if (trimmedQuery.isBlank()) {
-                    allItems
-                } else {
-                    allItems.filter { item ->
-                        item.productName.contains(trimmedQuery, ignoreCase = true) ||
-                        item.sku.contains(trimmedQuery, ignoreCase = true) ||
-                        item.saltComposition.contains(trimmedQuery, ignoreCase = true)
-                    }
-                }
-
-                val filtered = when (filter) {
-                    ProductInventoryFilter.ALL -> searched
-                    ProductInventoryFilter.LOW_STOCK -> searched.filter { it.currentStock <= it.reorderThreshold }
-                    ProductInventoryFilter.HEALTHY -> searched.filter { it.currentStock > it.reorderThreshold }
-                }
-
-                val totalUnits = allItems.sumOf { it.currentStock }
-                val lowStock = allItems.count { it.currentStock <= it.reorderThreshold && it.currentStock > 0 }
-                val outOfStock = allItems.count { it.currentStock <= 0 }
-
-                ProductListUiState(
-                    products = allItems,
-                    filteredProducts = filtered,
-                    searchQuery = query,
-                    selectedFilter = filter,
-                    isAddDialogOpen = _uiState.value.isAddDialogOpen,
-                    isLoading = false,
-                    totalProductsCount = allItems.size,
-                    totalStockUnits = totalUnits,
-                    lowStockCount = lowStock,
-                    outOfStockCount = outOfStock,
-                    userMessage = _uiState.value.userMessage,
-                    isError = _uiState.value.isError
-                )
-            }.collect { newState ->
-                _uiState.value = newState
+        scope.launch {
+            productRepository.getProductInventoryFlow().collect { allItems ->
+                allItemsCache = allItems
+                applyFiltersAndEmit(allItems, _searchQuery.value, _selectedFilter.value)
             }
+        }
+    }
+
+    private fun applyFiltersAndEmit(
+        allItems: List<ProductInventoryEntity>,
+        query: String,
+        filter: ProductInventoryFilter
+    ) {
+        val trimmedQuery = query.trim()
+        val searched = if (trimmedQuery.isBlank()) {
+            allItems
+        } else {
+            allItems.filter { item ->
+                item.productName.contains(trimmedQuery, ignoreCase = true) ||
+                item.sku.contains(trimmedQuery, ignoreCase = true) ||
+                item.saltComposition.contains(trimmedQuery, ignoreCase = true)
+            }
+        }
+
+        val filtered = when (filter) {
+            ProductInventoryFilter.ALL -> searched
+            ProductInventoryFilter.LOW_STOCK -> searched.filter { it.currentStock <= it.reorderThreshold }
+            ProductInventoryFilter.HEALTHY -> searched.filter { it.currentStock > it.reorderThreshold }
+        }
+
+        val totalUnits = allItems.sumOf { it.currentStock }
+        val lowStock = allItems.count { it.currentStock <= it.reorderThreshold && it.currentStock > 0 }
+        val outOfStock = allItems.count { it.currentStock <= 0 }
+
+        _uiState.update { current ->
+            current.copy(
+                products = allItems,
+                filteredProducts = filtered,
+                searchQuery = query,
+                selectedFilter = filter,
+                isLoading = false,
+                totalProductsCount = allItems.size,
+                totalStockUnits = totalUnits,
+                lowStockCount = lowStock,
+                outOfStockCount = outOfStock
+            )
         }
     }
 
     fun onSearchQueryChange(query: String) {
         _searchQuery.value = query
-        _uiState.update { it.copy(searchQuery = query) }
+        applyFiltersAndEmit(allItemsCache, query, _selectedFilter.value)
     }
 
     fun onFilterSelect(filter: ProductInventoryFilter) {
         _selectedFilter.value = filter
-        _uiState.update { it.copy(selectedFilter = filter) }
+        applyFiltersAndEmit(allItemsCache, _searchQuery.value, filter)
     }
 
     fun openAddProductDialog() {
@@ -164,7 +171,7 @@ class ProductListViewModel(
             return
         }
 
-        viewModelScope.launch {
+        scope.launch {
             try {
                 productRepository.addProduct(
                     productName = trimmedName,
@@ -196,7 +203,7 @@ class ProductListViewModel(
     }
 
     fun adjustStock(sku: String, delta: Int) {
-        viewModelScope.launch {
+        scope.launch {
             try {
                 productRepository.adjustStockBySku(sku, delta)
                 val action = if (delta > 0) "Restocked +$delta units" else "Dispensed $delta units"
@@ -212,7 +219,7 @@ class ProductListViewModel(
     }
 
     fun deleteProduct(sku: String) {
-        viewModelScope.launch {
+        scope.launch {
             try {
                 productRepository.deleteInventoryBySku(sku)
                 _uiState.update {

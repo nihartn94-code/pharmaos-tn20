@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -221,10 +222,13 @@ fun PaymentScreen(
         deliveryAddress = deliveryAddress,
         orderNotes = orderNotes,
         onNavigateBack = onNavigateBack,
-        onAuthorizePayment = { method, refId, onDone ->
-            viewModel.placeOrders(deliveryAddress, orderNotes) { ids ->
-                onDone(ids)
-            }
+        onAuthorizePayment = { _, _, onFailure, onDone ->
+            viewModel.placeOrders(
+                deliveryAddress = deliveryAddress,
+                notes = orderNotes,
+                onFailure = onFailure,
+                onSuccess = onDone
+            )
         },
         onClearMessages = { viewModel.clearMessages() },
         onPaymentSuccess = onPaymentSuccess
@@ -238,7 +242,7 @@ fun PaymentScreenContent(
     deliveryAddress: String,
     orderNotes: String,
     onNavigateBack: () -> Unit,
-    onAuthorizePayment: (PaymentMethodType, String, (List<Long>) -> Unit) -> Unit,
+    onAuthorizePayment: (PaymentMethodType, String, (String) -> Unit, (List<Long>) -> Unit) -> Unit,
     onClearMessages: () -> Unit,
     onPaymentSuccess: (List<Long>, String, String) -> Unit
 ) {
@@ -255,9 +259,11 @@ fun PaymentScreenContent(
     var selectedBank by remember { mutableStateOf("HDFC Bank Corporate") }
     var chequeNumber by remember { mutableStateOf("") }
     var isProcessingPayment by remember { mutableStateOf(false) }
+    var hasSubmittedOrder by remember { mutableStateOf(false) }
 
     val basket = uiState.basketForCheckout
-    val grandTotal = basket?.grandTotal ?: 920.64
+    val hasBasketItems = basket != null && basket.items.isNotEmpty()
+    val grandTotal = basket?.grandTotal ?: 0.0
     val user = uiState.currentUser
 
     // 30 days due date for Credit Line
@@ -275,7 +281,13 @@ fun PaymentScreenContent(
     }
 
     fun executePayment() {
-        if (isProcessingPayment) return
+        if (isProcessingPayment || uiState.isPlacingOrder || hasSubmittedOrder) return
+        if (!hasBasketItems) {
+            coroutineScope.launch {
+                snackbarHostState.showSnackbar("Your basket is empty. Add products before placing an order.")
+            }
+            return
+        }
 
         keyboardController?.hide()
         focusManager.clearFocus()
@@ -313,10 +325,22 @@ fun PaymentScreenContent(
             } else {
                 selectedMethod.title
             }
-            onAuthorizePayment(selectedMethod, generatedTxnId) { orderIds ->
-                isProcessingPayment = false
-                onPaymentSuccess(orderIds, methodLabel, generatedTxnId)
-            }
+            onAuthorizePayment(
+                selectedMethod,
+                generatedTxnId,
+                { _ ->
+                    isProcessingPayment = false
+                },
+                { orderIds ->
+                    if (orderIds.isNotEmpty()) {
+                        hasSubmittedOrder = true
+                        isProcessingPayment = false
+                        onPaymentSuccess(orderIds, methodLabel, generatedTxnId)
+                    } else {
+                        isProcessingPayment = false
+                    }
+                }
+            )
         }
     }
 
@@ -333,7 +357,9 @@ fun PaymentScreenContent(
             Surface(
                 color = MaterialTheme.colorScheme.surface,
                 shadowElevation = 12.dp,
-                modifier = Modifier.fillMaxWidth()
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .navigationBarsPadding()
             ) {
                 Column(
                     modifier = Modifier
@@ -359,7 +385,7 @@ fun PaymentScreenContent(
 
                         Button(
                             onClick = { executePayment() },
-                            enabled = !isProcessingPayment && !uiState.isPlacingOrder,
+                            enabled = !isProcessingPayment && !uiState.isPlacingOrder && !hasSubmittedOrder && hasBasketItems,
                             colors = ButtonDefaults.buttonColors(
                                 containerColor = Color(0xFF1D64EC),
                                 contentColor = Color.White
@@ -470,7 +496,7 @@ fun PaymentScreenContent(
                             horizontalArrangement = Arrangement.SpaceBetween
                         ) {
                             Text("Medicines Subtotal", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 14.sp)
-                            Text(Formatters.formatInr(basket?.subtotal ?: 822.0), fontWeight = FontWeight.Medium, fontSize = 14.sp)
+                            Text(Formatters.formatInr(basket?.subtotal ?: 0.0), fontWeight = FontWeight.Medium, fontSize = 14.sp)
                         }
 
                         Spacer(modifier = Modifier.height(6.dp))
@@ -480,7 +506,7 @@ fun PaymentScreenContent(
                             horizontalArrangement = Arrangement.SpaceBetween
                         ) {
                             Text("Applicable GST (12% Pharma)", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 14.sp)
-                            Text(Formatters.formatInr(basket?.totalGst ?: 98.64), fontWeight = FontWeight.Medium, fontSize = 14.sp)
+                            Text(Formatters.formatInr(basket?.totalGst ?: 0.0), fontWeight = FontWeight.Medium, fontSize = 14.sp)
                         }
 
                         Spacer(modifier = Modifier.height(6.dp))
@@ -1033,7 +1059,7 @@ fun PaymentScreenPreview() {
             deliveryAddress = "Shop 12, Medical Market, Mumbai, MH",
             orderNotes = "Please ensure insulated cold pack packaging.",
             onNavigateBack = {},
-            onAuthorizePayment = { _, _, onDone -> onDone(listOf(101L)) },
+            onAuthorizePayment = { _, _, _, onDone -> onDone(listOf(101L)) },
             onClearMessages = {},
             onPaymentSuccess = { _, _, _ -> }
         )

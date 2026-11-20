@@ -72,6 +72,18 @@ interface OrderDao {
     @Query("SELECT * FROM order_status_history WHERE orderId = :orderId ORDER BY changedAtEpochMillis ASC")
     suspend fun getOrderStatusHistory(orderId: Long): List<OrderStatusHistoryEntity>
 
+    @Query("SELECT * FROM order_status_history WHERE orderId = :orderId ORDER BY changedAtEpochMillis ASC")
+    suspend fun getStatusHistoryForOrder(orderId: Long): List<OrderStatusHistoryEntity>
+
+    @Query("SELECT * FROM orders WHERE orderNumber = :orderNumber LIMIT 1")
+    suspend fun getOrderByOrderNumber(orderNumber: String): OrderEntity?
+
+    @Query("DELETE FROM order_items WHERE orderId = :orderId")
+    suspend fun deleteOrderItemsByOrderId(orderId: Long)
+
+    @Query("DELETE FROM order_status_history WHERE orderId = :orderId")
+    suspend fun deleteStatusHistoryByOrderId(orderId: Long)
+
     @Query("SELECT COUNT(*) FROM orders")
     suspend fun getTotalOrderCount(): Int
 

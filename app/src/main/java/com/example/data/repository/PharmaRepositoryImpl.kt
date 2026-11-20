@@ -23,7 +23,25 @@ import com.example.data.local.entity.SupplierOfferEntity
 import com.example.data.local.entity.SupplierPerformanceEntity
 import com.example.data.local.entity.SupplierSettingsEntity
 import com.example.data.local.entity.UserEntity
+import com.example.data.remote.config.ApiConfig
+import com.example.data.remote.config.AuthExecutionMode
+import com.example.data.remote.dto.ComplianceVerificationDto
+import com.example.data.remote.dto.CreateRecallRequestDto
+import com.example.data.remote.dto.CreateReturnRequestDto
+import com.example.data.remote.dto.FulfillOrderItemRequestDto
+import com.example.data.remote.dto.OrderDto
+import com.example.data.remote.dto.RegisterRequestDto
+import com.example.data.remote.dto.SubmitPodRequestDto
+import com.example.data.remote.dto.UpdateOrderStatusRequestDto
+import com.example.data.remote.mapper.toDomain
+import com.example.data.remote.mapper.toDto
+import com.example.data.remote.mapper.toEntity
+import com.example.data.remote.source.AuthRemoteDataSource
+import com.example.data.remote.source.PharmaRemoteDataSource
+import com.example.data.remote.util.NetworkResult
+import com.example.di.NetworkModule
 import com.example.domain.model.AccountStatus
+import com.example.domain.model.AlternativeBrandQuotation
 import com.example.domain.model.AuthUser
 import com.example.domain.model.DosageForm
 import com.example.domain.model.ExpiryRiskStatus
@@ -40,13 +58,19 @@ import com.example.domain.model.ReturnStatus
 import com.example.domain.model.SchemeType
 import com.example.domain.model.ShortageEvaluationResult
 import com.example.domain.model.StorageCondition
+import com.example.domain.model.SupplierQuotationItem
+import com.example.domain.model.SupplierQuotationSummary
+import com.example.domain.model.TaxInvoiceData
 import com.example.domain.model.TrustScoreBreakdown
 import com.example.domain.model.UserRole
+import com.example.domain.model.VerifiedStockInfo
 import com.example.domain.repository.BasketItemDetail
 import com.example.domain.repository.BasketLoadReport
 import com.example.domain.repository.BasketWithDetails
 import com.example.domain.repository.BatchWithProduct
 import com.example.domain.repository.DashboardKpis
+import com.example.domain.repository.DuplicateBasketTemplateException
+import com.example.domain.repository.LaunchDestination
 import com.example.domain.repository.NamedBasketSummary
 import com.example.domain.repository.OrderDetailsWithHistory
 import com.example.domain.repository.PharmaRepository
@@ -56,21 +80,39 @@ import com.example.domain.repository.SupplierSubtotal
 import com.example.domain.usecase.CalculateTrustScoreUseCase
 import com.example.domain.usecase.EvaluateShortageRiskUseCase
 import com.example.domain.usecase.OptimizeBasketUseCase
+import com.example.domain.usecase.ProductQuotationUseCase
+import com.example.domain.usecase.TaxInvoiceBuilder
 import com.example.util.Formatters
 import com.example.util.PasswordHasher
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.firstOrNull
+import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.mapLatest
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import java.security.MessageDigest
+import java.util.concurrent.atomic.AtomicLong
 
 class PharmaRepositoryImpl(
     private val db: AppDatabase,
     private val dataStoreManager: DataStoreManager,
     private val optimizeBasketUseCase: OptimizeBasketUseCase = OptimizeBasketUseCase(),
     private val calculateTrustScoreUseCase: CalculateTrustScoreUseCase = CalculateTrustScoreUseCase(),
-    private val evaluateShortageRiskUseCase: EvaluateShortageRiskUseCase = EvaluateShortageRiskUseCase()
+    private val evaluateShortageRiskUseCase: EvaluateShortageRiskUseCase = EvaluateShortageRiskUseCase(),
+    private val authRemoteDataSource: AuthRemoteDataSource? = null,
+    private val pharmaRemoteDataSource: PharmaRemoteDataSource? = null,
+    private val networkModule: NetworkModule? = null,
+    private val productQuotationUseCase: ProductQuotationUseCase = ProductQuotationUseCase(optimizeBasketUseCase)
 ) : PharmaRepository {
 
     private val userDao = db.userDao()
@@ -87,7 +129,121 @@ class PharmaRepositoryImpl(
     private val analyticsDao = db.analyticsDao()
     private val complianceDao = db.complianceDao()
 
+    private data class CommittedBasketSnapshot(
+        val seq: Long,
+        val buyerId: Long,
+        val basket: BasketWithDetails
+    )
+
+    private val remoteSupplierDirectory = MutableStateFlow<Map<Long, Pair<String?, String?>>>(emptyMap())
+    private val remoteSavedBasketsCache = MutableStateFlow<Map<Long, List<NamedBasketSummary>>>(emptyMap())
+    private val basketMutationSeq = AtomicLong(0L)
+    private val basketRefreshTrigger = MutableStateFlow(0L)
+    private val latestCommittedBasket = MutableStateFlow<CommittedBasketSnapshot?>(null)
+    private val orderSubmitMutex = Mutex()
+    private val inFlightOrderSubmissionKeys = mutableSetOf<String>()
+
+    private suspend fun notifyBasketChanged(explicitBuyerId: Long? = null) {
+        val newSeq = basketMutationSeq.incrementAndGet()
+        val buyerId = explicitBuyerId ?: resolveActiveBuyerId()
+        if (buyerId != null) {
+            val freshBasket = readBasketDetailsForBuyer(buyerId)
+            latestCommittedBasket.value = CommittedBasketSnapshot(
+                seq = newSeq,
+                buyerId = buyerId,
+                basket = freshBasket
+            )
+        } else {
+            latestCommittedBasket.value = null
+        }
+        basketRefreshTrigger.value = newSeq
+    }
+
+    private fun resolveEffectiveBuyerId(
+        loggedInUserId: Long?,
+        users: List<UserEntity>,
+        isProductionMode: Boolean,
+        allowLocalFallback: Boolean = true
+    ): Long? {
+        if (loggedInUserId != null && users.any { it.id == loggedInUserId }) {
+            return loggedInUserId
+        }
+        if (!allowLocalFallback || isProductionMode) return null
+        return users.firstOrNull { it.role == UserRole.STOCKIST.name }?.id
+            ?: users.firstOrNull()?.id
+    }
+
+    private suspend fun resolveActiveBuyerId(allowLocalFallback: Boolean = true): Long? {
+        val signedIn = getApiUsersMe()?.id
+        if (signedIn != null) return signedIn
+        if (!allowLocalFallback || isProductionHttpMode()) return null
+        val users = userDao.getAllUsers()
+        return users.firstOrNull { it.role == UserRole.STOCKIST.name }?.id
+            ?: users.firstOrNull()?.id
+    }
+
+    private suspend fun isProductionHttpMode(): Boolean {
+        return dataStoreManager.authExecutionModeFlow.first() == AuthExecutionMode.PRODUCTION_BACKEND_HTTP
+    }
+
+    private suspend fun upsertCachedUser(remoteUser: UserEntity): Long {
+        val existing = userDao.getUserByEmail(remoteUser.email.lowercase())
+            ?: userDao.getUserById(remoteUser.id)
+        return if (existing != null) {
+            userDao.updateUser(
+                existing.copy(
+                    fullName = remoteUser.fullName,
+                    businessName = remoteUser.businessName,
+                    phone = remoteUser.phone,
+                    gstin = remoteUser.gstin,
+                    address = remoteUser.address,
+                    role = remoteUser.role,
+                    status = remoteUser.status
+                )
+            )
+            existing.id
+        } else {
+            userDao.insertUser(remoteUser)
+        }
+    }
+
     override suspend fun postApiAuthLogin(
+        email: String,
+        password: String,
+        expectedRole: UserRole?
+    ): Result<AuthUser> {
+        if (isProductionHttpMode()) {
+            val remote = authRemoteDataSource
+                ?: return Result.failure(IllegalStateException("HTTP authentication service is not initialized."))
+            return when (val result = remote.login(email.trim(), password, expectedRole?.name)) {
+                is NetworkResult.Success -> {
+                    val payload = result.data
+                    dataStoreManager.setAuthTokens(payload.accessToken, payload.refreshToken)
+                    val cachedUserId = upsertCachedUser(payload.user.toUserEntityCache())
+                    dataStoreManager.setLoggedInUserId(cachedUserId)
+                    val authUser = payload.user.toAuthUser().copy(id = cachedUserId)
+                    if (expectedRole != null && authUser.role != expectedRole) {
+                        dataStoreManager.clearAuthSession()
+                        return Result.failure(
+                            IllegalArgumentException("This account is registered as '${authUser.role.displayName}'. Please switch to the ${authUser.role.displayName} login tab.")
+                        )
+                    }
+                    if (authUser.status == AccountStatus.SUSPENDED) {
+                        dataStoreManager.clearAuthSession()
+                        return Result.failure(
+                            IllegalStateException("This account is currently suspended. Please contact administrator.")
+                        )
+                    }
+                    dataStoreManager.setOnboardingCompleted(true)
+                    Result.success(authUser)
+                }
+                else -> Result.failure(result.toException())
+            }
+        }
+        return loginLocallyDevMode(email, password, expectedRole)
+    }
+
+    private suspend fun loginLocallyDevMode(
         email: String,
         password: String,
         expectedRole: UserRole?
@@ -96,7 +252,7 @@ class PharmaRepositoryImpl(
         var user = userDao.getUserByIdentifier(trimmed)
             ?: userDao.getUserByEmail(trimmed.lowercase())
 
-        // Auto-provision testing manufacturer account if logging in as manufacturer or with testing credentials
+        // Development Local Mode only: auto-provision testing manufacturer account
         if (user == null && (
             trimmed.equals("manufacturer@pharmaos.com", ignoreCase = true) ||
             trimmed == "9876543220" ||
@@ -106,7 +262,7 @@ class PharmaRepositoryImpl(
             user = ensureDefaultManufacturerUser()
         }
 
-        // Also fallback for stockist default account if user logs in as stockist
+        // Development Local Mode only: fallback for stockist default account
         if (user == null && (
             trimmed.equals("rohan.sharma@apexpharma.com", ignoreCase = true) ||
             trimmed == "+919876543210" ||
@@ -135,6 +291,7 @@ class PharmaRepositoryImpl(
         }
 
         dataStoreManager.setLoggedInUserId(user.id)
+        dataStoreManager.setOnboardingCompleted(true)
         val role = try { UserRole.valueOf(user.role) } catch (_: Exception) { UserRole.STOCKIST }
         val status = try { AccountStatus.valueOf(user.status) } catch (_: Exception) { AccountStatus.ACTIVE }
 
@@ -154,6 +311,28 @@ class PharmaRepositoryImpl(
     }
 
     override suspend fun postApiAuthGoogle(
+        email: String,
+        displayName: String,
+        role: UserRole
+    ): Result<AuthUser> {
+        if (isProductionHttpMode()) {
+            val remote = authRemoteDataSource
+                ?: return Result.failure(IllegalStateException("HTTP authentication service is not initialized."))
+            return when (val result = remote.googleSignIn(email, displayName, role.name)) {
+                is NetworkResult.Success -> {
+                    val payload = result.data
+                    dataStoreManager.setAuthTokens(payload.accessToken, payload.refreshToken)
+                    val cachedUserId = upsertCachedUser(payload.user.toUserEntityCache())
+                    dataStoreManager.setLoggedInUserId(cachedUserId)
+                    Result.success(payload.user.toAuthUser().copy(id = cachedUserId))
+                }
+                else -> Result.failure(result.toException())
+            }
+        }
+        return googleSignInLocallyDevMode(email, displayName, role)
+    }
+
+    private suspend fun googleSignInLocallyDevMode(
         email: String,
         displayName: String,
         role: UserRole
@@ -183,7 +362,6 @@ class PharmaRepositoryImpl(
         }
 
         val userCount = userDao.getUserCount()
-        // First user ever automatically becomes Master Admin
         val effectiveRole = if (userCount == 0) UserRole.ADMIN else role
         val derivedHandle = trimmedEmail.substringBefore("@").replace(".", " ").replace("_", " ").split(" ")
             .filter { it.isNotBlank() }
@@ -249,13 +427,53 @@ class PharmaRepositoryImpl(
         password: String,
         role: UserRole
     ): Result<AuthUser> {
+        if (isProductionHttpMode()) {
+            val remote = authRemoteDataSource
+                ?: return Result.failure(IllegalStateException("HTTP registration service is not initialized."))
+            val request = RegisterRequestDto(
+                fullName = fullName.trim(),
+                businessName = businessName.trim(),
+                email = email.trim().lowercase(),
+                phone = phone.trim(),
+                gstin = gstin?.trim()?.ifBlank { null },
+                address = address.trim(),
+                password = password,
+                role = role.name
+            )
+            return when (val result = remote.register(request)) {
+                is NetworkResult.Success -> {
+                    val payload = result.data
+                    dataStoreManager.setAuthTokens(payload.accessToken, payload.refreshToken)
+                    val cachedUserId = upsertCachedUser(payload.user.toUserEntityCache())
+                    dataStoreManager.setLoggedInUserId(cachedUserId)
+                    val registeredUser = payload.user.toAuthUser().copy(id = cachedUserId)
+                    if (registeredUser.role == UserRole.ADMIN) {
+                        dataStoreManager.setOnboardingCompleted(true)
+                    }
+                    Result.success(registeredUser)
+                }
+                else -> Result.failure(result.toException())
+            }
+        }
+        return registerLocallyDevMode(fullName, businessName, email, phone, gstin, address, password, role)
+    }
+
+    private suspend fun registerLocallyDevMode(
+        fullName: String,
+        businessName: String,
+        email: String,
+        phone: String,
+        gstin: String?,
+        address: String,
+        password: String,
+        role: UserRole
+    ): Result<AuthUser> {
         val existing = userDao.getUserByEmail(email.trim().lowercase())
         if (existing != null) {
             return Result.failure(IllegalArgumentException("An account with email $email already exists."))
         }
 
         val userCount = userDao.getUserCount()
-        // Rule: The first account ever registered automatically becomes Administrator
         val effectiveRole = if (userCount == 0) UserRole.ADMIN else role
 
         val hashResult = PasswordHasher.hashPassword(password)
@@ -274,8 +492,10 @@ class PharmaRepositoryImpl(
 
         val id = userDao.insertUser(entity)
         dataStoreManager.setLoggedInUserId(id)
+        if (effectiveRole == UserRole.ADMIN) {
+            dataStoreManager.setOnboardingCompleted(true)
+        }
 
-        // Seed default supplier settings if supplier
         if (effectiveRole.isSupplier) {
             analyticsDao.insertOrUpdateSupplierSettings(
                 SupplierSettingsEntity(
@@ -326,11 +546,36 @@ class PharmaRepositoryImpl(
 
     override suspend fun getApiUsersMe(): AuthUser? {
         val userId = dataStoreManager.loggedInUserIdFlow.firstOrNull()
-        val user = if (userId != null) {
-            userDao.getUserById(userId)
-        } else null
+        val cachedUser = if (userId != null) userDao.getUserById(userId) else null
 
-        val effectiveUser = user ?: ensureDefaultStockistUser()
+        if (isProductionHttpMode()) {
+            if (cachedUser != null) {
+                val role = try { UserRole.valueOf(cachedUser.role) } catch (_: Exception) { UserRole.STOCKIST }
+                val status = try { AccountStatus.valueOf(cachedUser.status) } catch (_: Exception) { AccountStatus.ACTIVE }
+                return AuthUser(
+                    id = cachedUser.id,
+                    fullName = cachedUser.fullName,
+                    businessName = cachedUser.businessName,
+                    email = cachedUser.email,
+                    phone = cachedUser.phone,
+                    gstin = cachedUser.gstin,
+                    address = cachedUser.address,
+                    role = role,
+                    status = status
+                )
+            }
+            if (!dataStoreManager.getAccessToken().isNullOrBlank() && isBackendConfigured()) {
+                val remoteRes = pharmaRemoteDataSource?.fetchCurrentUser()
+                if (remoteRes is NetworkResult.Success) {
+                    val savedId = upsertCachedUser(remoteRes.data.toUserEntityCache())
+                    dataStoreManager.setLoggedInUserId(savedId)
+                    return remoteRes.data.toAuthUser().copy(id = savedId)
+                }
+            }
+            return null
+        }
+
+        val effectiveUser = cachedUser ?: return null
         val role = try { UserRole.valueOf(effectiveUser.role) } catch (_: Exception) { UserRole.STOCKIST }
         val status = try { AccountStatus.valueOf(effectiveUser.status) } catch (_: Exception) { AccountStatus.ACTIVE }
         return AuthUser(
@@ -423,10 +668,12 @@ class PharmaRepositoryImpl(
         return ensureDefaultManufacturerUser()
     }
 
-    private suspend fun ensureDefaultStockistUser(): UserEntity {
+    private suspend fun ensureDefaultStockistUser(setAsLoggedIn: Boolean = false): UserEntity {
         val existingStockist = userDao.getAllUsers().firstOrNull { it.role == UserRole.STOCKIST.name }
         if (existingStockist != null) {
-            dataStoreManager.setLoggedInUserId(existingStockist.id)
+            if (setAsLoggedIn) {
+                dataStoreManager.setLoggedInUserId(existingStockist.id)
+            }
             return existingStockist
         }
         val hash = PasswordHasher.hashPassword("Stockist@123")
@@ -443,12 +690,23 @@ class PharmaRepositoryImpl(
             status = AccountStatus.ACTIVE.name
         )
         val id = userDao.insertUser(newUser)
-        dataStoreManager.setLoggedInUserId(id)
+        if (setAsLoggedIn) {
+            dataStoreManager.setLoggedInUserId(id)
+        }
         return newUser.copy(id = id)
     }
 
     override suspend fun logout() {
-        dataStoreManager.setLoggedInUserId(null)
+        if (isProductionHttpMode() && isBackendConfigured()) {
+            try {
+                authRemoteDataSource?.logout()
+            } catch (_: Exception) {
+                // Local session cleanup must always proceed
+            }
+        }
+        latestCommittedBasket.value = null
+        basketRefreshTrigger.value = basketMutationSeq.incrementAndGet()
+        dataStoreManager.clearAuthSession()
     }
 
     override fun getApiUsersFlow(): Flow<List<UserEntity>> = userDao.getAllUsersFlow()
@@ -457,6 +715,17 @@ class PharmaRepositoryImpl(
         val current = getApiUsersMe()
         if (current?.role != UserRole.ADMIN) {
             return Result.failure(SecurityException("Only Administrator can change account status."))
+        }
+        if (isProductionHttpMode()) {
+            val remote = pharmaRemoteDataSource
+                ?: return Result.failure(IllegalStateException("Remote API is not initialized."))
+            return when (val res = remote.updateUserStatus(userId, status)) {
+                is NetworkResult.Success -> {
+                    userDao.updateUserStatus(userId, status)
+                    Result.success(Unit)
+                }
+                else -> Result.failure(res.toException())
+            }
         }
         userDao.updateUserStatus(userId, status)
         return Result.success(Unit)
@@ -479,6 +748,33 @@ class PharmaRepositoryImpl(
         whoGmpDocUri: String?,
         isWhoGmpApplicable: Boolean
     ): Result<Unit> {
+        if (isProductionHttpMode()) {
+            val remote = pharmaRemoteDataSource
+                ?: return Result.failure(IllegalStateException("Remote API is not initialized."))
+            val dto = ComplianceVerificationDto(
+                userId = userId,
+                gstin = gstin,
+                isGstinVerified = true,
+                drugLicenseNumber = drugLicenseNumber,
+                drugLicenseIssueDate = drugLicenseIssueDate,
+                drugLicenseExpiryDate = drugLicenseExpiryDate,
+                drugLicenseDocUri = drugLicenseDocUri,
+                whoGmpCertificateNumber = whoGmpCertificateNumber,
+                whoGmpIssueDate = whoGmpIssueDate,
+                whoGmpExpiryDate = whoGmpExpiryDate,
+                whoGmpDocUri = whoGmpDocUri,
+                isWhoGmpApplicable = isWhoGmpApplicable
+            )
+            return when (val res = remote.upsertComplianceVerification(dto)) {
+                is NetworkResult.Success -> {
+                    complianceDao.insertOrUpdateCompliance(res.data.toEntity())
+                    userDao.getUserById(userId)?.let { userDao.updateUser(it.copy(gstin = gstin)) }
+                    dataStoreManager.setOnboardingCompleted(true)
+                    Result.success(Unit)
+                }
+                else -> Result.failure(res.toException())
+            }
+        }
         return try {
             val entity = com.example.data.local.entity.ComplianceVerificationEntity(
                 userId = userId,
@@ -497,11 +793,11 @@ class PharmaRepositoryImpl(
                 verifiedAtEpochMillis = System.currentTimeMillis()
             )
             complianceDao.insertOrUpdateCompliance(entity)
-            // Also ensure User table has the verified GSTIN
             val user = userDao.getUserById(userId)
             if (user != null) {
                 userDao.updateUser(user.copy(gstin = gstin))
             }
+            dataStoreManager.setOnboardingCompleted(true)
             Result.success(Unit)
         } catch (e: Exception) {
             Result.failure(e)
@@ -512,7 +808,136 @@ class PharmaRepositoryImpl(
         return complianceDao.getComplianceByUserIdFlow(userId)
     }
 
+    override fun getOnboardingCompletedFlow(): Flow<Boolean> = dataStoreManager.isOnboardingCompletedFlow
+
+    override suspend fun isOnboardingCompleted(): Boolean = dataStoreManager.isOnboardingCompletedFlow.first()
+
+    override suspend fun setOnboardingCompleted(completed: Boolean) {
+        dataStoreManager.setOnboardingCompleted(completed)
+    }
+
+    override suspend fun resolveLaunchDestination(): LaunchDestination {
+        val currentUser = getApiUsersMe()
+        val onboardingCompleted = isOnboardingCompleted()
+        return when {
+            currentUser != null && onboardingCompleted -> LaunchDestination.DASHBOARD
+            currentUser != null && !onboardingCompleted -> LaunchDestination.COMPLIANCE_VERIFICATION
+            onboardingCompleted -> LaunchDestination.LOGIN
+            else -> LaunchDestination.WELCOME
+        }
+    }
+
+    override fun getAuthExecutionModeFlow(): Flow<AuthExecutionMode> = dataStoreManager.authExecutionModeFlow
+
+    override suspend fun setAuthExecutionMode(mode: AuthExecutionMode) {
+        dataStoreManager.setAuthExecutionMode(mode)
+    }
+
+    override fun getBackendBaseUrlFlow(): Flow<String> = dataStoreManager.backendBaseUrlFlow
+
+    override suspend fun setBackendBaseUrl(baseUrl: String): Result<String> {
+        val normalized = ApiConfig.normalizeBaseUrl(baseUrl)
+        val isValidTarget = ApiConfig.isSecureForProduction(normalized) ||
+            ApiConfig.isAllowedLocalHttpUrl(normalized) ||
+            !ApiConfig.isBackendUrlConfigured(normalized)
+        if (!isValidTarget) {
+            return Result.failure(
+                IllegalArgumentException("Cleartext HTTP is restricted to local development hosts (10.0.2.2, localhost, LAN IP). Production servers must use https://.")
+            )
+        }
+        dataStoreManager.setBackendBaseUrl(normalized)
+        networkModule?.updateBaseUrl(normalized)
+        return Result.success(normalized)
+    }
+
+    override fun isBackendConfigured(): Boolean = networkModule?.isBackendConfigured() ?: false
+
+    override suspend fun syncCatalogueFromBackend(): Result<Int> {
+        val remote = pharmaRemoteDataSource
+            ?: return Result.failure(IllegalStateException("Remote API is not initialized."))
+        return when (val res = remote.fetchProducts()) {
+            is NetworkResult.Success -> {
+                val entities = res.data.map { it.toEntity() }
+                if (entities.isNotEmpty()) {
+                    productDao.insertProducts(entities)
+                }
+                Result.success(entities.size)
+            }
+            else -> Result.failure(res.toException())
+        }
+    }
+
+    private suspend fun upsertRemoteOrder(dto: OrderDto): Long {
+        val entity = dto.toEntity()
+        val existingByNum = orderDao.getOrderByOrderNumber(entity.orderNumber)
+        val target = if (existingByNum != null && existingByNum.id != entity.id) {
+            entity.copy(id = existingByNum.id)
+        } else {
+            entity
+        }
+        return orderDao.insertOrder(target)
+    }
+
+    override suspend fun syncOrdersFromBackend(): Result<Int> {
+        val remote = pharmaRemoteDataSource
+            ?: return Result.failure(IllegalStateException("Remote API is not initialized."))
+        return when (val res = remote.fetchOrders()) {
+            is NetworkResult.Success -> {
+                db.withTransaction {
+                    res.data.forEach { upsertRemoteOrder(it) }
+                }
+                Result.success(res.data.size)
+            }
+            else -> Result.failure(res.toException())
+        }
+    }
+
+    override suspend fun syncLivePipelineFromBackend(): Result<Int> {
+        val user = getApiUsersMe()
+            ?: return Result.failure(IllegalStateException("Please login to access Live Pipeline."))
+        if (!user.role.isSupplier && user.role != UserRole.ADMIN) {
+            return Result.failure(
+                SecurityException("Access denied: Live Pipeline is restricted to Manufacturer and Pharma Company accounts.")
+            )
+        }
+        if (!isProductionHttpMode()) {
+            val count = if (user.role == UserRole.ADMIN) {
+                orderDao.getAllOrders().size
+            } else {
+                orderDao.getOrdersForSupplier(user.id).size
+            }
+            return Result.success(count)
+        }
+        val remote = pharmaRemoteDataSource
+            ?: return Result.failure(IllegalStateException("Remote API is not initialized."))
+        return when (val res = remote.fetchLivePipelineOrders()) {
+            is NetworkResult.Success -> {
+                db.withTransaction {
+                    res.data.forEach { upsertRemoteOrder(it) }
+                }
+                Result.success(res.data.size)
+            }
+            else -> Result.failure(res.toException())
+        }
+    }
+
+    override suspend fun syncNotificationsFromBackend(): Result<Int> {
+        val remote = pharmaRemoteDataSource
+            ?: return Result.failure(IllegalStateException("Remote API is not initialized."))
+        return when (val res = remote.fetchNotifications()) {
+            is NetworkResult.Success -> {
+                notificationDao.insertNotifications(res.data.map { it.toEntity() })
+                Result.success(res.data.size)
+            }
+            else -> Result.failure(res.toException())
+        }
+    }
+
     override suspend fun ensureDefaultCatalogueSeeded() {
+        if (isProductionHttpMode()) return
+        if (productDao.getAllProducts().isNotEmpty() && productInventoryDao.getAllInventory().isNotEmpty()) {
+            return
+        }
         val suppliers = userDao.getAllUsers().filter { it.role == UserRole.MANUFACTURER.name || it.role == UserRole.PHARMA_COMPANY.name }
         val supplierId = if (suppliers.isNotEmpty()) {
             suppliers.first().id
@@ -783,7 +1208,6 @@ class PharmaRepositoryImpl(
             )
         )
 
-        val oneYearAhead = System.currentTimeMillis() + 365L * 24 * 3600 * 1000
         referenceItems.forEach { item ->
             val pId = productDao.insertProduct(
                 ProductEntity(
@@ -813,40 +1237,6 @@ class PharmaRepositoryImpl(
                     availableQuantity = 5000,
                     schemeType = SchemeType.NONE.name,
                     schemeDiscountPercent = item.marginOverride.toDouble(),
-                    validTillEpochMillis = oneYearAhead
-                )
-            )
-        }
-    }
-
-    // Ensure every single product has an offer
-    val allCurrentProducts = productDao.getAllProducts()
-    for (prod in allCurrentProducts) {
-        val offers = offerDao.getActiveOffersForProduct(prod.id)
-        if (offers.isEmpty()) {
-            val ptr = when {
-                prod.name.contains("Amox", true) -> 68.50
-                prod.name.contains("Vitamin D3", true) -> 120.00
-                prod.name.contains("Omez", true) -> 54.00
-                prod.name.contains("Razo", true) -> 162.00
-                prod.name.contains("Darolac", true) -> 92.00
-                prod.name.contains("Paracetamol", true) -> 42.00
-                prod.name.contains("Panto", true) -> 58.00
-                prod.name.contains("Monocef", true) -> 55.00
-                prod.name.contains("Ascoril", true) -> 85.00
-                else -> 65.00
-            }
-            val mrp = (ptr * 1.15).coerceAtLeast(ptr + 5.0)
-            offerDao.insertOffer(
-                SupplierOfferEntity(
-                    productId = prod.id,
-                    supplierId = supplierId,
-                    unitPricePtr = ptr,
-                    mrp = mrp,
-                    moq = 1,
-                    availableQuantity = 10000,
-                    schemeType = SchemeType.NONE.name,
-                    schemeDiscountPercent = 20.0,
                     validTillEpochMillis = oneYearAhead
                 )
             )
@@ -935,24 +1325,61 @@ class PharmaRepositoryImpl(
     }
 }
 
+    private fun isOfferEligible(offer: SupplierOfferEntity, nowMillis: Long = System.currentTimeMillis()): Boolean {
+        val notExpired = offer.validTillEpochMillis <= 0L || offer.validTillEpochMillis > nowMillis
+        return offer.isActive &&
+            notExpired &&
+            offer.unitPricePtr > 0.0 &&
+            offer.moq > 0 &&
+            offer.availableQuantity > 0 &&
+            offer.availableQuantity >= offer.moq
+    }
+
+    private fun buildProductSummaryFields(
+        product: ProductEntity,
+        offers: List<SupplierOfferEntity>,
+        settingsMap: Map<Long, SupplierSettingsEntity>
+    ): ProductDetail {
+        val eligibleOffers = offers.filter { isOfferEligible(it) }
+        val scored = eligibleOffers.map { offer ->
+            val scheme = try { SchemeType.valueOf(offer.schemeType) } catch (_: Exception) { SchemeType.NONE }
+            val breakdown = productQuotationUseCase.calculateTradeMarginBreakdown(
+                unitPricePtr = offer.unitPricePtr,
+                mrp = offer.mrp,
+                moq = offer.moq,
+                gstRatePercent = product.gstRatePercent,
+                schemeType = scheme,
+                schemeBuyQty = offer.schemeBuyQty,
+                schemeFreeQty = offer.schemeFreeQty,
+                schemeDiscountPercent = offer.schemeDiscountPercent,
+                schemeMinQtyForDiscount = offer.schemeMinQtyForDiscount,
+                supplierSettings = settingsMap[offer.supplierId]
+            )
+            offer to breakdown
+        }.sortedWith(
+            compareBy<Pair<SupplierOfferEntity, com.example.domain.model.TradeMarginBreakdown>>(
+                { it.second.effectiveUnitCost ?: Double.MAX_VALUE },
+                { it.first.unitPricePtr }
+            )
+        )
+        val bestPair = scored.firstOrNull()
+        val bestOffer = bestPair?.first
+        val minPrice = bestOffer?.unitPricePtr
+        val minMrp = bestOffer?.mrp?.takeIf { it > 0.0 }
+        val margin = bestPair?.second?.marginPercent?.let { Math.round(it).toInt() }
+        return mapToProductDetail(product, minPrice, eligibleOffers.size, minMrp, margin, bestOffer?.id)
+    }
+
     override fun getApiProductsFlow(): Flow<List<ProductDetail>> {
         return combine(
             productDao.getAllActiveProductsFlow(),
-            offerDao.getAllActiveOffersFlow()
-        ) { products, offers ->
+            offerDao.getAllActiveOffersFlow(),
+            analyticsDao.getAllSupplierSettingsFlow()
+        ) { products, offers, settings ->
+            val settingsMap = settings.associateBy { it.supplierId }
             products.map { p ->
                 val prodOffers = offers.filter { it.productId == p.id }
-                val bestOffer = prodOffers.minByOrNull { it.unitPricePtr }
-                val minPrice = bestOffer?.unitPricePtr
-                val minMrp = bestOffer?.mrp
-                val margin = if (bestOffer != null) {
-                    if (bestOffer.schemeDiscountPercent > 0.0) {
-                        bestOffer.schemeDiscountPercent.toInt()
-                    } else if (bestOffer.mrp > 0 && bestOffer.unitPricePtr > 0) {
-                        (((bestOffer.mrp - bestOffer.unitPricePtr) / bestOffer.mrp) * 100).toInt().coerceAtLeast(1)
-                    } else null
-                } else null
-                mapToProductDetail(p, minPrice, prodOffers.size, minMrp, margin, bestOffer?.id)
+                buildProductSummaryFields(p, prodOffers, settingsMap)
             }
         }
     }
@@ -960,57 +1387,31 @@ class PharmaRepositoryImpl(
     override suspend fun getApiProducts(): List<ProductDetail> {
         val products = productDao.getAllProducts().filter { it.isActive }
         val offers = offerDao.getAllActiveOffers()
+        val settingsMap = analyticsDao.getAllSupplierSettings().associateBy { it.supplierId }
         return products.map { p ->
             val prodOffers = offers.filter { it.productId == p.id }
-            val bestOffer = prodOffers.minByOrNull { it.unitPricePtr }
-            val minPrice = bestOffer?.unitPricePtr
-            val minMrp = bestOffer?.mrp
-            val margin = if (bestOffer != null) {
-                if (bestOffer.schemeDiscountPercent > 0.0) {
-                    bestOffer.schemeDiscountPercent.toInt()
-                } else if (bestOffer.mrp > 0 && bestOffer.unitPricePtr > 0) {
-                    (((bestOffer.mrp - bestOffer.unitPricePtr) / bestOffer.mrp) * 100).toInt().coerceAtLeast(1)
-                } else null
-            } else null
-            mapToProductDetail(p, minPrice, prodOffers.size, minMrp, margin, bestOffer?.id)
+            buildProductSummaryFields(p, prodOffers, settingsMap)
         }
     }
 
     override suspend fun getApiProductById(id: Long): ProductDetail? {
         val p = productDao.getProductById(id) ?: return null
         val offers = offerDao.getActiveOffersForProduct(id)
-        val bestOffer = offers.minByOrNull { it.unitPricePtr }
-        val minPrice = bestOffer?.unitPricePtr
-        val minMrp = bestOffer?.mrp
-        val margin = if (bestOffer != null) {
-            if (bestOffer.schemeDiscountPercent > 0.0) {
-                bestOffer.schemeDiscountPercent.toInt()
-            } else if (bestOffer.mrp > 0 && bestOffer.unitPricePtr > 0) {
-                (((bestOffer.mrp - bestOffer.unitPricePtr) / bestOffer.mrp) * 100).toInt().coerceAtLeast(1)
-            } else null
-        } else null
-        return mapToProductDetail(p, minPrice, offers.size, minMrp, margin, bestOffer?.id)
+        val settingsMap = analyticsDao.getAllSupplierSettings().associateBy { it.supplierId }
+        return buildProductSummaryFields(p, offers, settingsMap)
     }
 
     override fun getApiProductByIdFlow(id: Long): Flow<ProductDetail?> {
         return combine(
             productDao.getProductByIdFlow(id),
-            offerDao.getAllActiveOffersFlow()
-        ) { p, offers ->
+            offerDao.getAllActiveOffersFlow(),
+            analyticsDao.getAllSupplierSettingsFlow()
+        ) { p, offers, settings ->
             if (p == null) null
             else {
+                val settingsMap = settings.associateBy { it.supplierId }
                 val prodOffers = offers.filter { it.productId == p.id }
-                val bestOffer = prodOffers.minByOrNull { it.unitPricePtr }
-                val minPrice = bestOffer?.unitPricePtr
-                val minMrp = bestOffer?.mrp
-                val margin = if (bestOffer != null) {
-                    if (bestOffer.schemeDiscountPercent > 0.0) {
-                        bestOffer.schemeDiscountPercent.toInt()
-                    } else if (bestOffer.mrp > 0 && bestOffer.unitPricePtr > 0) {
-                        (((bestOffer.mrp - bestOffer.unitPricePtr) / bestOffer.mrp) * 100).toInt().coerceAtLeast(1)
-                    } else null
-                } else null
-                mapToProductDetail(p, minPrice, prodOffers.size, minMrp, margin, bestOffer?.id)
+                buildProductSummaryFields(p, prodOffers, settingsMap)
             }
         }
     }
@@ -1019,6 +1420,17 @@ class PharmaRepositoryImpl(
         val current = getApiUsersMe()
         if (current == null || current.role == UserRole.STOCKIST) {
             return Result.failure(SecurityException("Only Suppliers and Admin can create products."))
+        }
+        if (isProductionHttpMode()) {
+            val remote = pharmaRemoteDataSource
+                ?: return Result.failure(IllegalStateException("Remote API is not initialized."))
+            return when (val res = remote.createProduct(product.copy(createdBy = current.id).toDto())) {
+                is NetworkResult.Success -> {
+                    val savedId = productDao.insertProduct(res.data.toEntity())
+                    Result.success(savedId)
+                }
+                else -> Result.failure(res.toException())
+            }
         }
         val id = productDao.insertProduct(product.copy(createdBy = current.id))
         return Result.success(id)
@@ -1029,6 +1441,17 @@ class PharmaRepositoryImpl(
         if (current == null || current.role == UserRole.STOCKIST) {
             return Result.failure(SecurityException("Only Suppliers and Admin can edit products."))
         }
+        if (isProductionHttpMode()) {
+            val remote = pharmaRemoteDataSource
+                ?: return Result.failure(IllegalStateException("Remote API is not initialized."))
+            return when (val res = remote.updateProduct(product.id, product.toDto())) {
+                is NetworkResult.Success -> {
+                    productDao.updateProduct(res.data.toEntity())
+                    Result.success(Unit)
+                }
+                else -> Result.failure(res.toException())
+            }
+        }
         productDao.updateProduct(product)
         return Result.success(Unit)
     }
@@ -1037,6 +1460,17 @@ class PharmaRepositoryImpl(
         val current = getApiUsersMe()
         if (current == null || current.role == UserRole.STOCKIST) {
             return Result.failure(SecurityException("Only Suppliers and Admin can activate/deactivate products."))
+        }
+        if (isProductionHttpMode()) {
+            val remote = pharmaRemoteDataSource
+                ?: return Result.failure(IllegalStateException("Remote API is not initialized."))
+            return when (val res = remote.updateProductStatus(id, isActive)) {
+                is NetworkResult.Success -> {
+                    productDao.setProductActiveStatus(id, isActive)
+                    Result.success(Unit)
+                }
+                else -> Result.failure(res.toException())
+            }
         }
         productDao.setProductActiveStatus(id, isActive)
         return Result.success(Unit)
@@ -1053,72 +1487,291 @@ class PharmaRepositoryImpl(
         }
     }
 
+    override suspend fun refreshProductDetailsFromBackend(productId: Long): Result<Unit> {
+        if (!isProductionHttpMode()) return Result.success(Unit)
+        val remote = pharmaRemoteDataSource
+            ?: return Result.failure(IllegalStateException("Remote API is not initialized."))
+        if (!isBackendConfigured()) {
+            return Result.failure(IllegalStateException("Spring Boot backend URL is not configured."))
+        }
+
+        when (val prodRes = remote.fetchProductById(productId)) {
+            is NetworkResult.Success -> {
+                productDao.insertProduct(prodRes.data.toEntity())
+            }
+            else -> return Result.failure(prodRes.toException())
+        }
+
+        val supplierIdsToEnrich = mutableSetOf<Long>()
+        when (val offersRes = remote.fetchOffersForProduct(productId)) {
+            is NetworkResult.Success -> {
+                val offerDtos = offersRes.data
+                val dir = remoteSupplierDirectory.value.toMutableMap()
+                offerDtos.forEach { dto ->
+                    if (!dto.supplierName.isNullOrBlank() || !dto.supplierBusinessName.isNullOrBlank()) {
+                        dir[dto.supplierId] = dto.supplierName to dto.supplierBusinessName
+                    }
+                    supplierIdsToEnrich.add(dto.supplierId)
+                }
+                remoteSupplierDirectory.value = dir
+                if (offerDtos.isNotEmpty()) {
+                    offerDao.insertOffers(offerDtos.map { it.toEntity() })
+                }
+            }
+            else -> return Result.failure(offersRes.toException())
+        }
+
+        // Fetch alternative brands and their offers if available
+        when (val altRes = remote.fetchAlternativeBrands(productId)) {
+            is NetworkResult.Success -> {
+                val altEntities = altRes.data.map { it.toEntity() }
+                if (altEntities.isNotEmpty()) {
+                    productDao.insertProducts(altEntities)
+                }
+                altEntities.forEach { alt ->
+                    val altOffersRes = remote.fetchOffersForProduct(alt.id)
+                    if (altOffersRes is NetworkResult.Success) {
+                        val dir = remoteSupplierDirectory.value.toMutableMap()
+                        altOffersRes.data.forEach { dto ->
+                            if (!dto.supplierName.isNullOrBlank() || !dto.supplierBusinessName.isNullOrBlank()) {
+                                dir[dto.supplierId] = dto.supplierName to dto.supplierBusinessName
+                            }
+                            supplierIdsToEnrich.add(dto.supplierId)
+                        }
+                        remoteSupplierDirectory.value = dir
+                        if (altOffersRes.data.isNotEmpty()) {
+                            offerDao.insertOffers(altOffersRes.data.map { it.toEntity() })
+                        }
+                    }
+                }
+            }
+            else -> {
+                // Non-fatal if alternatives endpoint returns 404/empty
+            }
+        }
+
+        // Enrich supplier settings & trust scores from backend without fabricating missing entries
+        for (supplierId in supplierIdsToEnrich) {
+            when (val settingsRes = remote.fetchSupplierSettings(supplierId)) {
+                is NetworkResult.Success -> {
+                    analyticsDao.insertOrUpdateSupplierSettings(settingsRes.data.toEntity())
+                }
+                else -> Unit
+            }
+            when (val trustRes = remote.fetchSupplierTrustScore(supplierId)) {
+                is NetworkResult.Success -> {
+                    analyticsDao.insertOrUpdatePerformance(trustRes.data.toEntity())
+                }
+                else -> Unit
+            }
+        }
+
+        // Opportunistically refresh verified batch & inventory stock records
+        when (val batchesRes = remote.fetchBatches()) {
+            is NetworkResult.Success -> {
+                if (batchesRes.data.isNotEmpty()) {
+                    batchDao.insertBatches(batchesRes.data.map { it.toEntity() })
+                }
+            }
+            else -> Unit
+        }
+        when (val invRes = remote.fetchInventory()) {
+            is NetworkResult.Success -> {
+                if (invRes.data.isNotEmpty()) {
+                    productInventoryDao.insertAll(invRes.data.map { it.toEntity() })
+                }
+            }
+            else -> Unit
+        }
+
+        return Result.success(Unit)
+    }
+
+    private fun toOfferWithSupplier(
+        o: SupplierOfferEntity,
+        usersMap: Map<Long, UserEntity>,
+        perfMap: Map<Long, SupplierPerformanceEntity>,
+        remoteDir: Map<Long, Pair<String?, String?>>
+    ): OfferWithSupplier {
+        val sup = usersMap[o.supplierId]
+        val remoteNames = remoteDir[o.supplierId]
+        val perf = perfMap[o.supplierId]
+        val scheme = try { SchemeType.valueOf(o.schemeType) } catch (_: Exception) { SchemeType.NONE }
+        val resolvedName = sup?.fullName ?: remoteNames?.first ?: "Supplier #${o.supplierId}"
+        val resolvedBusiness = sup?.businessName ?: remoteNames?.second ?: remoteNames?.first ?: "Supplier #${o.supplierId}"
+        val hasTrustData = (perf?.completedOrdersCount ?: 0) >= 5
+        return OfferWithSupplier(
+            offerId = o.id,
+            productId = o.productId,
+            supplierId = o.supplierId,
+            supplierName = resolvedName,
+            supplierBusinessName = resolvedBusiness,
+            unitPricePtr = o.unitPricePtr,
+            mrp = o.mrp,
+            moq = o.moq,
+            availableQuantity = o.availableQuantity,
+            schemeType = scheme,
+            schemeBuyQty = o.schemeBuyQty,
+            schemeFreeQty = o.schemeFreeQty,
+            schemeDiscountPercent = o.schemeDiscountPercent,
+            schemeMinQtyForDiscount = o.schemeMinQtyForDiscount,
+            validTillEpochMillis = o.validTillEpochMillis,
+            isActive = o.isActive,
+            lastUpdatedEpochMillis = o.lastUpdatedEpochMillis,
+            trustScore = if (hasTrustData) perf?.overallScore else null,
+            hasSufficientTrustData = hasTrustData
+        )
+    }
+
+    override fun getApiProductQuotationsFlow(
+        productId: Long
+    ): Flow<Pair<SupplierQuotationSummary, List<SupplierQuotationItem>>> {
+        val coreFlow = combine(
+            productDao.getProductByIdFlow(productId),
+            offerDao.getAllOffersForProductFlow(productId),
+            userDao.getAllUsersFlow(),
+            analyticsDao.getAllSupplierPerformancesFlow(),
+            analyticsDao.getAllSupplierSettingsFlow()
+        ) { product, offers, users, perfs, settings ->
+            Quintet(product, offers, users, perfs, settings)
+        }
+        val stockFlow = combine(
+            batchDao.getBatchesForProductFlow(productId),
+            recallDao.getActiveRecallsFlow(),
+            productInventoryDao.getAllInventoryFlow(),
+            remoteSupplierDirectory
+        ) { batches, recalls, inventories, remoteDir ->
+            Quartet(batches, recalls, inventories, remoteDir)
+        }
+        return combine(coreFlow, stockFlow) { core, stock ->
+            val (product, offers, users, perfs, settingsList) = core
+            val (batches, recalls, inventories, remoteDir) = stock
+            val usersMap = users.associateBy { it.id }
+            val perfMap = perfs.associateBy { it.supplierId }
+            val settingsMap = settingsList.associateBy { it.supplierId }
+            val now = System.currentTimeMillis()
+
+            val recalledBatchNumbers = recalls
+                .filter { it.productId == productId && it.isActive }
+                .flatMap { it.batchNumbersCsv.split(",") }
+                .map { it.trim() }
+                .filter { it.isNotEmpty() }
+                .toSet()
+
+            val validBatches = batches.filter { b ->
+                b.remainingQuantity > 0 &&
+                    (b.expiryDateEpochMillis <= 0L || b.expiryDateEpochMillis > now) &&
+                    b.batchNumber !in recalledBatchNumbers
+            }
+            val matchingInventory = inventories.filter { inv ->
+                inv.isActive && (
+                    inv.productId == productId ||
+                        (product != null && inv.productName.equals(product.name, ignoreCase = true))
+                    )
+            }
+            val hasVerifiedRecords = batches.isNotEmpty() || matchingInventory.isNotEmpty()
+            val verifiedUnits = if (hasVerifiedRecords) {
+                validBatches.sumOf { it.remainingQuantity } + matchingInventory.sumOf { it.currentStock.coerceAtLeast(0) }
+            } else {
+                null
+            }
+            val verifiedStockInfo = VerifiedStockInfo(
+                verifiedAvailableUnits = verifiedUnits,
+                verifiedBatchCount = validBatches.size,
+                verifiedInventorySkuCount = matchingInventory.size,
+                hasVerifiedStockRecords = hasVerifiedRecords
+            )
+
+            val gstRate = product?.gstRatePercent ?: -1.0
+            val items = offers.map { o ->
+                val supplierBatches = batches.filter { it.supplierId == o.supplierId }
+                val validSupplierBatches = validBatches.filter { it.supplierId == o.supplierId }
+                val supplierHasVerified = supplierBatches.isNotEmpty()
+                val supplierVerifiedStock = if (supplierHasVerified) {
+                    validSupplierBatches.sumOf { it.remainingQuantity }
+                } else {
+                    null
+                }
+                productQuotationUseCase.buildSupplierQuotationItem(
+                    offer = toOfferWithSupplier(o, usersMap, perfMap, remoteDir),
+                    gstRatePercent = gstRate,
+                    supplierSettings = settingsMap[o.supplierId],
+                    verifiedSupplierStock = supplierVerifiedStock,
+                    hasVerifiedSupplierStockRecord = supplierHasVerified,
+                    nowMillis = now
+                )
+            }
+            productQuotationUseCase.sortAndSummarizeQuotations(items, verifiedStockInfo)
+        }
+    }
+
+    override fun getApiAlternativeBrandQuotationsFlow(
+        productId: Long
+    ): Flow<List<AlternativeBrandQuotation>> {
+        val coreFlow = combine(
+            productDao.getProductByIdFlow(productId),
+            productDao.getAllActiveProductsFlow(),
+            offerDao.getAllOffersFlow(),
+            userDao.getAllUsersFlow(),
+            analyticsDao.getAllSupplierPerformancesFlow()
+        ) { target, allActive, allOffers, users, perfs ->
+            Quintet(target, allActive, allOffers, users, perfs)
+        }
+        return combine(
+            coreFlow,
+            analyticsDao.getAllSupplierSettingsFlow(),
+            remoteSupplierDirectory
+        ) { core, settingsList, remoteDir ->
+            val (target, allActive, allOffers, users, perfs) = core
+            if (target == null) return@combine emptyList()
+            val usersMap = users.associateBy { it.id }
+            val perfMap = perfs.associateBy { it.supplierId }
+            val settingsMap = settingsList.associateBy { it.supplierId }
+            val now = System.currentTimeMillis()
+
+            val alternatives = allActive
+                .filter {
+                    it.id != productId &&
+                        it.saltComposition.equals(target.saltComposition, ignoreCase = true) &&
+                        it.strength.equals(target.strength, ignoreCase = true)
+                }
+                .sortedBy { it.name.lowercase() }
+
+            alternatives.map { alt ->
+                val altOffers = allOffers
+                    .filter { it.productId == alt.id }
+                    .map { toOfferWithSupplier(it, usersMap, perfMap, remoteDir) }
+                productQuotationUseCase.buildAlternativeBrandQuotation(
+                    product = alt,
+                    offers = altOffers,
+                    settingsBySupplier = settingsMap,
+                    nowMillis = now
+                )
+            }
+        }
+    }
+
     override fun getApiProductOffersFlow(productId: Long): Flow<List<OfferWithSupplier>> {
         return combine(
             offerDao.getActiveOffersForProductFlow(productId),
             userDao.getAllUsersFlow(),
-            analyticsDao.getAllSupplierPerformancesFlow()
-        ) { offers, users, perfs ->
+            analyticsDao.getAllSupplierPerformancesFlow(),
+            remoteSupplierDirectory
+        ) { offers, users, perfs, remoteDir ->
             val usersMap = users.associateBy { it.id }
             val perfMap = perfs.associateBy { it.supplierId }
-            offers.map { o ->
-                val sup = usersMap[o.supplierId]
-                val perf = perfMap[o.supplierId]
-                val scheme = try { SchemeType.valueOf(o.schemeType) } catch (_: Exception) { SchemeType.NONE }
-                OfferWithSupplier(
-                    offerId = o.id,
-                    productId = o.productId,
-                    supplierId = o.supplierId,
-                    supplierName = sup?.fullName ?: "Supplier #${o.supplierId}",
-                    supplierBusinessName = sup?.businessName ?: "Supplier",
-                    unitPricePtr = o.unitPricePtr,
-                    mrp = o.mrp,
-                    moq = o.moq,
-                    availableQuantity = o.availableQuantity,
-                    schemeType = scheme,
-                    schemeBuyQty = o.schemeBuyQty,
-                    schemeFreeQty = o.schemeFreeQty,
-                    schemeDiscountPercent = o.schemeDiscountPercent,
-                    schemeMinQtyForDiscount = o.schemeMinQtyForDiscount,
-                    validTillEpochMillis = o.validTillEpochMillis,
-                    isActive = o.isActive,
-                    lastUpdatedEpochMillis = o.lastUpdatedEpochMillis,
-                    trustScore = if ((perf?.completedOrdersCount ?: 0) >= 5) perf?.overallScore else null,
-                    hasSufficientTrustData = (perf?.completedOrdersCount ?: 0) >= 5
-                )
-            }
+            offers.map { o -> toOfferWithSupplier(o, usersMap, perfMap, remoteDir) }
         }
     }
 
     override suspend fun getApiProductOffers(productId: Long): List<OfferWithSupplier> {
         val offers = offerDao.getActiveOffersForProduct(productId)
         val users = userDao.getAllUsers().associateBy { it.id }
-        return offers.map { o ->
-            val sup = users[o.supplierId]
-            val perf = analyticsDao.getSupplierPerformance(o.supplierId)
-            val scheme = try { SchemeType.valueOf(o.schemeType) } catch (_: Exception) { SchemeType.NONE }
-            OfferWithSupplier(
-                offerId = o.id,
-                productId = o.productId,
-                supplierId = o.supplierId,
-                supplierName = sup?.fullName ?: "Supplier #${o.supplierId}",
-                supplierBusinessName = sup?.businessName ?: "Supplier",
-                unitPricePtr = o.unitPricePtr,
-                mrp = o.mrp,
-                moq = o.moq,
-                availableQuantity = o.availableQuantity,
-                schemeType = scheme,
-                schemeBuyQty = o.schemeBuyQty,
-                schemeFreeQty = o.schemeFreeQty,
-                schemeDiscountPercent = o.schemeDiscountPercent,
-                schemeMinQtyForDiscount = o.schemeMinQtyForDiscount,
-                validTillEpochMillis = o.validTillEpochMillis,
-                isActive = o.isActive,
-                lastUpdatedEpochMillis = o.lastUpdatedEpochMillis,
-                trustScore = if ((perf?.completedOrdersCount ?: 0) >= 5) perf?.overallScore else null,
-                hasSufficientTrustData = (perf?.completedOrdersCount ?: 0) >= 5
-            )
-        }
+        val remoteDir = remoteSupplierDirectory.value
+        val perfMap = offers.map { it.supplierId }.distinct()
+            .mapNotNull { id -> analyticsDao.getSupplierPerformance(id)?.let { id to it } }
+            .toMap()
+        return offers.map { o -> toOfferWithSupplier(o, users, perfMap, remoteDir) }
     }
 
     override fun getApiSupplierOffersFlow(supplierId: Long): Flow<List<OfferWithSupplier>> {
@@ -1163,8 +1816,18 @@ class PharmaRepositoryImpl(
         if (current == null || !current.role.isSupplier && current.role != UserRole.ADMIN) {
             return Result.failure(SecurityException("Only Suppliers and Admin can publish offers."))
         }
+        if (isProductionHttpMode()) {
+            val remote = pharmaRemoteDataSource
+                ?: return Result.failure(IllegalStateException("Remote API is not initialized."))
+            return when (val res = remote.createOffer(offer.copy(supplierId = current.id).toDto())) {
+                is NetworkResult.Success -> {
+                    val savedId = offerDao.insertOffer(res.data.toEntity())
+                    Result.success(savedId)
+                }
+                else -> Result.failure(res.toException())
+            }
+        }
         val id = offerDao.insertOffer(offer.copy(supplierId = current.id))
-        // Record stock snapshot
         analyticsDao.insertStockRecord(
             StockRecordEntity(
                 productId = offer.productId,
@@ -1174,7 +1837,6 @@ class PharmaRepositoryImpl(
                 reason = "Offer created"
             )
         )
-        // Evaluate shortage risk
         evaluateProductShortageRiskInternal(offer.productId)
         return Result.success(id)
     }
@@ -1183,6 +1845,17 @@ class PharmaRepositoryImpl(
         val current = getApiUsersMe()
         if (current == null || !current.role.isSupplier && current.role != UserRole.ADMIN) {
             return Result.failure(SecurityException("Only Suppliers and Admin can update offers."))
+        }
+        if (isProductionHttpMode()) {
+            val remote = pharmaRemoteDataSource
+                ?: return Result.failure(IllegalStateException("Remote API is not initialized."))
+            return when (val res = remote.updateOffer(offer.id, offer.toDto())) {
+                is NetworkResult.Success -> {
+                    offerDao.updateOffer(res.data.toEntity())
+                    Result.success(Unit)
+                }
+                else -> Result.failure(res.toException())
+            }
         }
         offerDao.updateOffer(offer.copy(lastUpdatedEpochMillis = System.currentTimeMillis()))
         analyticsDao.insertStockRecord(
@@ -1199,39 +1872,168 @@ class PharmaRepositoryImpl(
     }
 
     override suspend fun patchApiSupplierOfferDeactivate(offerId: Long, isActive: Boolean): Result<Unit> {
+        if (isProductionHttpMode()) {
+            val remote = pharmaRemoteDataSource
+                ?: return Result.failure(IllegalStateException("Remote API is not initialized."))
+            return when (val res = remote.updateOfferStatus(offerId, isActive)) {
+                is NetworkResult.Success -> {
+                    offerDao.setOfferActiveStatus(offerId, isActive)
+                    Result.success(Unit)
+                }
+                else -> Result.failure(res.toException())
+            }
+        }
         offerDao.setOfferActiveStatus(offerId, isActive)
         return Result.success(Unit)
     }
 
+    @OptIn(ExperimentalCoroutinesApi::class)
     override fun getApiBasketFlow(): Flow<BasketWithDetails> {
-        return combine(
+        val coreFlow = combine(
             dataStoreManager.loggedInUserIdFlow,
-            productDao.getAllActiveProductsFlow(),
-            offerDao.getAllActiveOffersFlow(),
-            userDao.getAllUsersFlow()
-        ) { buyerId, products, offers, users ->
-            val effectiveBuyerId = buyerId ?: users.firstOrNull { it.role == UserRole.STOCKIST.name }?.id ?: users.firstOrNull()?.id
-            if (effectiveBuyerId == null) {
-                return@combine emptyBasketWithDetails()
-            }
-            val basket = basketDao.getActiveBasketForBuyer(effectiveBuyerId) ?: return@combine emptyBasketWithDetails()
-            val items = basketDao.getBasketItems(basket.id)
-            val productsMap = products.associateBy { it.id }
-            val offersMap = offers.associateBy { it.id }
-            val usersMap = users.associateBy { it.id }
-
-            buildBasketDetails(basket.id, items, productsMap, offersMap, usersMap)
+            basketDao.getAllBasketsFlow(),
+            basketDao.getAllBasketItemsFlow(),
+            productDao.getAllProductsFlow(),
+            offerDao.getAllOffersFlow()
+        ) { buyerId, baskets, allItems, products, offers ->
+            Quintet(buyerId, baskets, allItems, products, offers)
         }
+        val metadataFlow = combine(
+            userDao.getAllUsersFlow(),
+            analyticsDao.getAllSupplierSettingsFlow(),
+            remoteSupplierDirectory,
+            basketRefreshTrigger,
+            latestCommittedBasket
+        ) { users, settingsList, remoteDir, refreshSeq, committed ->
+            Quintet(users, settingsList, remoteDir, refreshSeq, committed)
+        }
+        val sessionFlow = combine(
+            coreFlow,
+            metadataFlow,
+            dataStoreManager.authExecutionModeFlow
+        ) { core, meta, execMode ->
+            Triple(core, meta, execMode)
+        }
+        return sessionFlow.mapLatest { (core, meta, execMode) ->
+            val seqBeforeRead = basketMutationSeq.get()
+            val (buyerId, baskets, _, products, offers) = core
+            val (users, settingsList, remoteDir, _, committedSnapshot) = meta
+            val isProdMode = execMode == AuthExecutionMode.PRODUCTION_BACKEND_HTTP
+            val effectiveBuyerId = resolveEffectiveBuyerId(
+                loggedInUserId = buyerId,
+                users = users,
+                isProductionMode = isProdMode,
+                allowLocalFallback = true
+            ) ?: return@mapLatest emptyBasketWithDetails()
+
+            val basket = basketDao.getActiveBasketForBuyer(effectiveBuyerId)
+                ?: baskets.firstOrNull { it.buyerId == effectiveBuyerId && !it.isSaved }
+                ?: return@mapLatest emptyBasketWithDetails()
+            // Always read the latest committed rows for this basket from Room; mapLatest cancels
+            // any superseded in-flight calculation so stale snapshots can never overtake new writes.
+            val items = basketDao.getBasketItems(basket.id)
+            val productsMap = products.associateByTo(mutableMapOf()) { it.id }
+            val offersMap = offers.associateByTo(mutableMapOf()) { it.id }
+            for (item in items) {
+                if (!productsMap.containsKey(item.productId)) {
+                    productDao.getProductById(item.productId)?.let { productsMap[it.id] = it }
+                }
+                if (!offersMap.containsKey(item.offerId)) {
+                    offerDao.getOfferById(item.offerId)?.let { offersMap[it.id] = it }
+                }
+            }
+            val usersMap = users.associateBy { it.id }
+            val settingsMap = settingsList.associateBy { it.supplierId }
+
+            val computed = buildBasketDetails(
+                basketId = basket.id,
+                items = items,
+                productsMap = productsMap,
+                offersMap = offersMap,
+                usersMap = usersMap,
+                settingsMap = settingsMap,
+                remoteDir = remoteDir
+            )
+
+            // Guard against emitting a superseded Room snapshot if a newer committed mutation
+            // completed while this query block was executing.
+            val latest = latestCommittedBasket.value ?: committedSnapshot
+            if (latest != null && latest.buyerId == effectiveBuyerId && latest.seq > seqBeforeRead) {
+                latest.basket
+            } else {
+                computed
+            }
+        }.distinctUntilChanged()
+    }
+
+    private suspend fun readBasketDetailsForBuyer(buyerId: Long): BasketWithDetails {
+        val basket = basketDao.getActiveBasketForBuyer(buyerId) ?: return emptyBasketWithDetails()
+        val items = basketDao.getBasketItems(basket.id)
+        val products = productDao.getAllProducts().associateBy { it.id }
+        val offers = offerDao.getAllActiveOffers().associateByTo(mutableMapOf()) { it.id }
+        for (item in items) {
+            if (!offers.containsKey(item.offerId)) {
+                offerDao.getOfferById(item.offerId)?.let { offers[it.id] = it }
+            }
+        }
+        val users = userDao.getAllUsers().associateBy { it.id }
+        val settingsMap = analyticsDao.getAllSupplierSettings().associateBy { it.supplierId }
+        return buildBasketDetails(
+            basketId = basket.id,
+            items = items,
+            productsMap = products,
+            offersMap = offers,
+            usersMap = users,
+            settingsMap = settingsMap,
+            remoteDir = remoteSupplierDirectory.value
+        )
     }
 
     override suspend fun getApiBasket(): BasketWithDetails {
-        val buyer = getApiUsersMe() ?: return emptyBasketWithDetails()
-        val basket = basketDao.getActiveBasketForBuyer(buyer.id) ?: return emptyBasketWithDetails()
-        val items = basketDao.getBasketItems(basket.id)
-        val products = productDao.getAllProducts().associateBy { it.id }
-        val offers = offerDao.getAllActiveOffers().associateBy { it.id }
-        val users = userDao.getAllUsers().associateBy { it.id }
-        return buildBasketDetails(basket.id, items, products, offers, users)
+        val buyerId = resolveActiveBuyerId() ?: return emptyBasketWithDetails()
+        return readBasketDetailsForBuyer(buyerId)
+    }
+
+    override suspend fun refreshBasketFromBackend(): Result<Unit> {
+        if (!isProductionHttpMode()) return Result.success(Unit)
+        val remote = pharmaRemoteDataSource
+            ?: return Result.failure(IllegalStateException("Remote API is not initialized."))
+        val buyerId = getApiUsersMe()?.id
+            ?: return Result.failure(IllegalStateException("Please sign in to synchronize your basket."))
+        val seqBeforeFetch = basketMutationSeq.get()
+        return when (val res = remote.fetchActiveBasket()) {
+            is NetworkResult.Success -> {
+                // Only apply fetched snapshot if no newer basket mutation occurred while GET /basket was in flight.
+                if (basketMutationSeq.get() == seqBeforeFetch) {
+                    syncRemoteBasketToRoom(buyerId, res.data.items)
+                }
+                Result.success(Unit)
+            }
+            else -> Result.failure(res.toException())
+        }
+    }
+
+    override suspend fun refreshSavedBasketsFromBackend(): Result<Unit> {
+        if (!isProductionHttpMode()) return Result.success(Unit)
+        val remote = pharmaRemoteDataSource
+            ?: return Result.failure(IllegalStateException("Remote API is not initialized."))
+        val buyerId = getApiUsersMe()?.id
+            ?: return Result.failure(IllegalStateException("Please sign in to load saved templates."))
+        return when (val res = remote.fetchSavedBaskets()) {
+            is NetworkResult.Success -> {
+                val mapped = res.data.map { dto ->
+                    NamedBasketSummary(
+                        id = dto.id,
+                        name = dto.name,
+                        itemCount = dto.itemCount,
+                        updatedAtEpochMillis = dto.updatedAtEpochMillis
+                    )
+                }.sortedByDescending { it.updatedAtEpochMillis }
+                remoteSavedBasketsCache.value = remoteSavedBasketsCache.value + (buyerId to mapped)
+                Result.success(Unit)
+            }
+            else -> Result.failure(res.toException())
+        }
     }
 
     private suspend fun buildBasketDetails(
@@ -1239,7 +2041,9 @@ class PharmaRepositoryImpl(
         items: List<BasketItemEntity>,
         productsMap: Map<Long, ProductEntity>,
         offersMap: Map<Long, SupplierOfferEntity>,
-        usersMap: Map<Long, UserEntity>
+        usersMap: Map<Long, UserEntity>,
+        settingsMap: Map<Long, SupplierSettingsEntity> = emptyMap(),
+        remoteDir: Map<Long, Pair<String?, String?>> = emptyMap()
     ): BasketWithDetails {
         val details = mutableListOf<BasketItemDetail>()
         val supplierTotals = mutableMapOf<Long, SupplierAccumulator>()
@@ -1248,7 +2052,10 @@ class PharmaRepositoryImpl(
             val prod = productsMap[item.productId] ?: continue
             val offer = offersMap[item.offerId] ?: continue
             val supplier = usersMap[offer.supplierId]
-            val supplierName = supplier?.businessName ?: supplier?.fullName ?: "Supplier"
+            val supplierName = supplier?.businessName?.takeIf { it.isNotBlank() }
+                ?: supplier?.fullName?.takeIf { it.isNotBlank() }
+                ?: remoteDir[offer.supplierId]?.first?.takeIf { it.isNotBlank() }
+                ?: "Supplier #${offer.supplierId}"
 
             val scheme = try { SchemeType.valueOf(offer.schemeType) } catch (_: Exception) { SchemeType.NONE }
             val pricing = optimizeBasketUseCase.calculateSchemePrice(
@@ -1297,7 +2104,9 @@ class PharmaRepositoryImpl(
             )
 
             val accum = supplierTotals.getOrPut(offer.supplierId) {
-                val settings = analyticsDao.getSupplierSettings(offer.supplierId) ?: SupplierSettingsEntity(supplierId = offer.supplierId)
+                val settings = settingsMap[offer.supplierId]
+                    ?: analyticsDao.getSupplierSettings(offer.supplierId)
+                    ?: SupplierSettingsEntity(supplierId = offer.supplierId)
                 SupplierAccumulator(
                     supplierId = offer.supplierId,
                     supplierName = supplierName,
@@ -1365,165 +2174,568 @@ class PharmaRepositoryImpl(
     )
 
     override suspend fun postApiBasketItems(productId: Long, offerId: Long, quantity: Int): Result<Unit> {
-        val buyerId = getApiUsersMe()?.id ?: ensureDefaultStockistUser().id
-        var offer = if (offerId > 0) offerDao.getOfferById(offerId) else null
-        if (offer == null) {
-            val existing = offerDao.getActiveOffersForProduct(productId).firstOrNull()
-            if (existing != null) {
-                offer = existing
-            } else {
-                val supplier = ensureDefaultSupplierUser()
-                val newId = offerDao.insertOffer(
-                    SupplierOfferEntity(
-                        productId = productId,
-                        supplierId = supplier.id,
-                        unitPricePtr = 68.50,
-                        mrp = 76.00,
-                        moq = 1,
-                        availableQuantity = 10000,
-                        schemeType = SchemeType.NONE.name,
-                        validTillEpochMillis = System.currentTimeMillis() + 365L * 24 * 3600 * 1000
+        if (quantity <= 0) {
+            return Result.failure(IllegalArgumentException("Quantity must be greater than 0."))
+        }
+        val product = productDao.getProductById(productId)
+        if (product != null && !product.isActive) {
+            return Result.failure(IllegalStateException("This product is currently inactive and cannot be added."))
+        }
+
+        val now = System.currentTimeMillis()
+        val cachedOffer = if (offerId > 0L) {
+            offerDao.getOfferById(offerId)
+        } else {
+            offerDao.getActiveOffersForProduct(productId)
+                .filter { isOfferEligible(it, now) }
+                .minByOrNull { it.unitPricePtr }
+        }
+
+        if (cachedOffer != null) {
+            if (!cachedOffer.isActive) {
+                return Result.failure(IllegalStateException("Selected supplier quotation is inactive."))
+            }
+            if (cachedOffer.validTillEpochMillis in 1..now) {
+                return Result.failure(IllegalStateException("Selected supplier quotation has expired."))
+            }
+            if (cachedOffer.unitPricePtr <= 0.0) {
+                return Result.failure(IllegalStateException("Selected supplier quotation does not have a valid unit price."))
+            }
+            if (cachedOffer.availableQuantity <= 0) {
+                return Result.failure(IllegalStateException("Selected supplier offer is currently out of stock."))
+            }
+            if (cachedOffer.availableQuantity < cachedOffer.moq) {
+                return Result.failure(
+                    IllegalStateException(
+                        "Offer unavailable: available stock (${cachedOffer.availableQuantity}) is below supplier MOQ (${cachedOffer.moq})."
                     )
                 )
-                offer = offerDao.getOfferById(newId)
+            }
+            if (quantity < cachedOffer.moq) {
+                return Result.failure(
+                    IllegalArgumentException("Minimum order quantity (MOQ) for this supplier is ${cachedOffer.moq} units.")
+                )
+            }
+            if (quantity > cachedOffer.availableQuantity) {
+                return Result.failure(
+                    IllegalArgumentException("Requested quantity ($quantity) exceeds available supplier stock (${cachedOffer.availableQuantity}).")
+                )
             }
         }
-        val safeOffer = offer ?: return Result.failure(IllegalArgumentException("Offer not found."))
 
-        var basket = basketDao.getActiveBasketForBuyer(buyerId)
-        if (basket == null) {
-            val newId = basketDao.insertBasket(BasketEntity(buyerId = buyerId, isSaved = false))
-            basket = BasketEntity(id = newId, buyerId = buyerId, isSaved = false)
+        if (isProductionHttpMode()) {
+            val remote = pharmaRemoteDataSource
+                ?: return Result.failure(IllegalStateException("Remote API is not initialized."))
+            val buyerId = getApiUsersMe()?.id
+                ?: return Result.failure(IllegalStateException("Please sign in before modifying the basket."))
+            val resolvedOfferId = cachedOffer?.id ?: offerId
+            if (resolvedOfferId <= 0L) {
+                return Result.failure(IllegalArgumentException("Please select an eligible supplier quotation."))
+            }
+            if (cachedOffer != null) {
+                val activeBasket = basketDao.getActiveBasketForBuyer(buyerId)
+                if (activeBasket != null) {
+                    val existingSameOffer = basketDao.getBasketItemByProductAndOffer(activeBasket.id, productId, resolvedOfferId)
+                    if (existingSameOffer != null && existingSameOffer.quantity + quantity > cachedOffer.availableQuantity) {
+                        return Result.failure(
+                            IllegalArgumentException(
+                                "Cannot add $quantity more units: basket already has ${existingSameOffer.quantity} and only ${cachedOffer.availableQuantity} are available."
+                            )
+                        )
+                    }
+                }
+            }
+            return when (val res = remote.addBasketItem(productId, resolvedOfferId, quantity)) {
+                is NetworkResult.Success -> {
+                    syncRemoteBasketToRoom(buyerId, res.data.items)
+                    Result.success(Unit)
+                }
+                else -> Result.failure(res.toException())
+            }
         }
 
-        val safeQuantity = quantity.coerceAtLeast(1)
-        val existingItem = basketDao.getBasketItemByProduct(basket.id, productId)
-        if (existingItem != null) {
-            val newQty = existingItem.quantity + safeQuantity
-            basketDao.updateBasketItem(existingItem.id, newQty, safeOffer.id, safeOffer.supplierId)
-        } else {
-            basketDao.insertBasketItem(
-                BasketItemEntity(
-                    basketId = basket.id,
-                    productId = productId,
-                    offerId = safeOffer.id,
-                    supplierId = safeOffer.supplierId,
-                    quantity = safeQuantity
+        val safeOffer = cachedOffer
+            ?: return Result.failure(IllegalStateException("No eligible supplier quotation is available for this product."))
+        val buyerId = getApiUsersMe()?.id ?: ensureDefaultStockistUser().id
+
+        return try {
+            db.withTransaction {
+                var basket = basketDao.getActiveBasketForBuyer(buyerId)
+                if (basket == null) {
+                    val newId = basketDao.insertBasket(BasketEntity(buyerId = buyerId, isSaved = false))
+                    basket = BasketEntity(id = newId, buyerId = buyerId, isSaved = false)
+                }
+
+                val existingRows = basketDao.getBasketItemsByProduct(basket.id, productId)
+                if (existingRows.isNotEmpty()) {
+                    val primaryRow = existingRows.firstOrNull { it.offerId == safeOffer.id } ?: existingRows.first()
+                    existingRows.filter { it.id != primaryRow.id }.forEach { duplicate ->
+                        basketDao.deleteBasketItem(duplicate.id)
+                    }
+                    if (primaryRow.offerId == safeOffer.id) {
+                        val combinedQty = primaryRow.quantity + quantity
+                        if (combinedQty > safeOffer.availableQuantity) {
+                            throw IllegalArgumentException(
+                                "Cannot add $quantity more units: basket already has ${primaryRow.quantity} units and supplier has ${safeOffer.availableQuantity} available."
+                            )
+                        }
+                        basketDao.updateBasketItem(primaryRow.id, combinedQty, safeOffer.id, safeOffer.supplierId)
+                    } else {
+                        basketDao.updateBasketItem(primaryRow.id, quantity, safeOffer.id, safeOffer.supplierId)
+                    }
+                } else {
+                    basketDao.insertBasketItem(
+                        BasketItemEntity(
+                            basketId = basket.id,
+                            productId = productId,
+                            offerId = safeOffer.id,
+                            supplierId = safeOffer.supplierId,
+                            quantity = quantity
+                        )
+                    )
+                }
+                basketDao.updateBasketTimestamp(basket.id, now)
+            }
+            notifyBasketChanged()
+            Result.success(Unit)
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    private suspend fun syncRemoteBasketToRoom(
+        buyerId: Long,
+        remoteItems: List<com.example.data.remote.dto.BasketItemDto>
+    ) {
+        val now = System.currentTimeMillis()
+        val supplierUpdates = mutableMapOf<Long, Pair<String?, String?>>()
+        db.withTransaction {
+            var basket = basketDao.getActiveBasketForBuyer(buyerId)
+            if (basket == null) {
+                val newId = basketDao.insertBasket(BasketEntity(buyerId = buyerId, isSaved = false, updatedAtEpochMillis = now))
+                basket = BasketEntity(id = newId, buyerId = buyerId, isSaved = false, updatedAtEpochMillis = now)
+            }
+            basketDao.clearBasket(basket.id)
+            remoteItems.forEach { item ->
+                if (productDao.getProductById(item.productId) == null) {
+                    productDao.insertProduct(
+                        ProductEntity(
+                            id = item.productId,
+                            name = item.productName,
+                            brand = item.brand,
+                            saltComposition = item.saltComposition,
+                            strength = "",
+                            dosageForm = DosageForm.TABLET.name,
+                            therapeuticCategory = "General",
+                            manufacturerName = item.supplierName.ifBlank { "Authorized Manufacturer" },
+                            packSize = item.packSize,
+                            hsnCode = item.hsnCode,
+                            gstRatePercent = item.gstRatePercent,
+                            storageCondition = StorageCondition.ROOM_TEMPERATURE.name,
+                            isRx = true,
+                            isActive = true,
+                            createdBy = item.supplierId
+                        )
+                    )
+                }
+                val existingOffer = offerDao.getOfferById(item.offerId)
+                if (existingOffer == null) {
+                    offerDao.insertOffer(
+                        SupplierOfferEntity(
+                            id = item.offerId,
+                            productId = item.productId,
+                            supplierId = item.supplierId,
+                            unitPricePtr = item.unitPricePtr,
+                            mrp = item.mrp,
+                            moq = item.moq,
+                            availableQuantity = item.availableQuantity,
+                            schemeType = SchemeType.NONE.name,
+                            validTillEpochMillis = now + 30L * 24L * 60L * 60L * 1000L,
+                            isActive = true,
+                            lastUpdatedEpochMillis = now
+                        )
+                    )
+                } else {
+                    offerDao.insertOffer(
+                        existingOffer.copy(
+                            unitPricePtr = item.unitPricePtr,
+                            mrp = item.mrp,
+                            moq = item.moq,
+                            availableQuantity = item.availableQuantity,
+                            isActive = true,
+                            lastUpdatedEpochMillis = now
+                        )
+                    )
+                }
+                if (item.supplierName.isNotBlank()) {
+                    supplierUpdates[item.supplierId] = (item.supplierName to null)
+                }
+                basketDao.insertBasketItem(
+                    BasketItemEntity(
+                        id = item.itemId,
+                        basketId = basket.id,
+                        productId = item.productId,
+                        offerId = item.offerId,
+                        supplierId = item.supplierId,
+                        quantity = item.quantity
+                    )
                 )
-            )
+            }
+            basketDao.updateBasketTimestamp(basket.id, now)
         }
-        return Result.success(Unit)
+        if (supplierUpdates.isNotEmpty()) {
+            remoteSupplierDirectory.value = remoteSupplierDirectory.value + supplierUpdates
+        }
+        notifyBasketChanged(buyerId)
     }
 
     override suspend fun putApiBasketItemQuantity(itemId: Long, quantity: Int): Result<Unit> {
-        if (quantity <= 0) {
-            basketDao.deleteBasketItem(itemId)
-            return Result.success(Unit)
+        if (quantity < 0) {
+            return Result.failure(IllegalArgumentException("Quantity cannot be negative."))
         }
-        basketDao.updateBasketItemQuantity(itemId, quantity)
+        if (quantity == 0) {
+            return Result.failure(IllegalArgumentException("Quantity must be at least 1. Tap Remove to delete this item."))
+        }
+
+        val now = System.currentTimeMillis()
+        val buyerId = resolveActiveBuyerId()
+        val basket = buyerId?.let { basketDao.getActiveBasketForBuyer(it) }
+        val existingItem = basket?.let { basketDao.getBasketItems(it.id).firstOrNull { item -> item.id == itemId } }
+        val offer = existingItem?.let { offerDao.getOfferById(it.offerId) }
+
+        if (offer != null) {
+            if (!offer.isActive) {
+                return Result.failure(IllegalStateException("This supplier quotation is no longer active."))
+            }
+            if (offer.validTillEpochMillis in 1..now) {
+                return Result.failure(IllegalStateException("This supplier quotation has expired."))
+            }
+            if (offer.availableQuantity <= 0) {
+                return Result.failure(IllegalStateException("This item is currently out of stock."))
+            }
+            if (quantity < offer.moq) {
+                return Result.failure(IllegalArgumentException("Quantity cannot be below supplier MOQ (${offer.moq})."))
+            }
+            if (quantity > offer.availableQuantity) {
+                return Result.failure(IllegalArgumentException("Quantity ($quantity) exceeds available stock (${offer.availableQuantity})."))
+            }
+        }
+
+        if (isProductionHttpMode()) {
+            val remote = pharmaRemoteDataSource
+                ?: return Result.failure(IllegalStateException("Remote API is not initialized."))
+            val signedInBuyerId = getApiUsersMe()?.id
+                ?: return Result.failure(IllegalStateException("Please sign in."))
+            return when (val res = remote.updateBasketItemQuantity(itemId, quantity)) {
+                is NetworkResult.Success -> {
+                    syncRemoteBasketToRoom(signedInBuyerId, res.data.items)
+                    Result.success(Unit)
+                }
+                else -> Result.failure(res.toException())
+            }
+        }
+
+        if (basket == null || existingItem == null) {
+            return Result.failure(IllegalStateException("Basket item not found."))
+        }
+        db.withTransaction {
+            basketDao.updateBasketItemQuantity(itemId, quantity)
+            basketDao.updateBasketTimestamp(basket.id, now)
+        }
+        notifyBasketChanged(buyerId)
         return Result.success(Unit)
     }
 
     override suspend fun deleteApiBasketItem(itemId: Long): Result<Unit> {
-        basketDao.deleteBasketItem(itemId)
+        val buyerId = resolveActiveBuyerId()
+        val activeBasket = buyerId?.let { basketDao.getActiveBasketForBuyer(it) }
+        if (isProductionHttpMode()) {
+            val remote = pharmaRemoteDataSource
+                ?: return Result.failure(IllegalStateException("Remote API is not initialized."))
+            getApiUsersMe()?.id ?: return Result.failure(IllegalStateException("Please sign in."))
+            return when (val res = remote.removeBasketItem(itemId)) {
+                is NetworkResult.Success -> {
+                    db.withTransaction {
+                        basketDao.deleteBasketItem(itemId)
+                        activeBasket?.let { basketDao.updateBasketTimestamp(it.id) }
+                    }
+                    notifyBasketChanged(buyerId)
+                    Result.success(Unit)
+                }
+                else -> Result.failure(res.toException())
+            }
+        }
+        db.withTransaction {
+            basketDao.deleteBasketItem(itemId)
+            activeBasket?.let { basketDao.updateBasketTimestamp(it.id) }
+        }
+        notifyBasketChanged(buyerId)
         return Result.success(Unit)
     }
 
     override suspend fun deleteApiBasketClear(): Result<Unit> {
-        val buyer = getApiUsersMe() ?: return Result.success(Unit)
-        val basket = basketDao.getActiveBasketForBuyer(buyer.id) ?: return Result.success(Unit)
-        basketDao.clearBasket(basket.id)
+        val buyerId = resolveActiveBuyerId() ?: return Result.success(Unit)
+        if (isProductionHttpMode()) {
+            val remote = pharmaRemoteDataSource
+                ?: return Result.failure(IllegalStateException("Remote API is not initialized."))
+            val signedInBuyerId = getApiUsersMe()?.id
+                ?: return Result.failure(IllegalStateException("Please sign in."))
+            return when (val res = remote.clearBasket()) {
+                is NetworkResult.Success -> {
+                    basketDao.getActiveBasketForBuyer(signedInBuyerId)?.let { basket ->
+                        db.withTransaction {
+                            basketDao.clearBasket(basket.id)
+                            basketDao.updateBasketTimestamp(basket.id)
+                        }
+                    }
+                    notifyBasketChanged(signedInBuyerId)
+                    Result.success(Unit)
+                }
+                else -> Result.failure(res.toException())
+            }
+        }
+        val basket = basketDao.getActiveBasketForBuyer(buyerId) ?: return Result.success(Unit)
+        db.withTransaction {
+            basketDao.clearBasket(basket.id)
+            basketDao.updateBasketTimestamp(basket.id)
+        }
+        notifyBasketChanged(buyerId)
         return Result.success(Unit)
     }
 
-    override suspend fun postApiBasketSaveNamed(name: String): Result<Long> {
-        val buyer = getApiUsersMe() ?: return Result.failure(IllegalStateException("Please login."))
-        val activeBasket = basketDao.getActiveBasketForBuyer(buyer.id) ?: return Result.failure(IllegalStateException("Basket is empty."))
-        val items = basketDao.getBasketItems(activeBasket.id)
-        if (items.isEmpty()) return Result.failure(IllegalStateException("Cannot save an empty basket."))
+    override suspend fun postApiBasketSaveNamed(name: String): Result<Long> =
+        postApiBasketSaveNamed(name = name, overwriteExisting = false)
 
-        val savedBasketId = basketDao.insertBasket(
-            BasketEntity(buyerId = buyer.id, name = name.trim(), isSaved = true)
-        )
-        for (item in items) {
-            basketDao.insertBasketItem(
-                item.copy(id = 0, basketId = savedBasketId)
+    override suspend fun postApiBasketSaveNamed(name: String, overwriteExisting: Boolean): Result<Long> {
+        val trimmedName = name.trim()
+        if (trimmedName.isBlank()) {
+            return Result.failure(IllegalArgumentException("Please enter a template name."))
+        }
+        if (trimmedName.length > 60) {
+            return Result.failure(IllegalArgumentException("Template name must be 60 characters or fewer."))
+        }
+        val buyer = getApiUsersMe() ?: return Result.failure(IllegalStateException("Please sign in to save basket templates."))
+
+        if (isProductionHttpMode()) {
+            val remote = pharmaRemoteDataSource
+                ?: return Result.failure(IllegalStateException("Remote API is not initialized."))
+            val activeBasketItems = basketDao.getActiveBasketForBuyer(buyer.id)?.let { basketDao.getBasketItems(it.id) }.orEmpty()
+            if (activeBasketItems.isEmpty()) {
+                return Result.failure(IllegalStateException("Cannot save an empty basket as a template."))
+            }
+            if (!overwriteExisting) {
+                refreshSavedBasketsFromBackend()
+                val existingRemote = remoteSavedBasketsCache.value[buyer.id].orEmpty()
+                    .firstOrNull { it.name.trim().equals(trimmedName, ignoreCase = true) }
+                if (existingRemote != null) {
+                    return Result.failure(DuplicateBasketTemplateException(trimmedName))
+                }
+            }
+            return when (val res = remote.saveNamedBasket(trimmedName)) {
+                is NetworkResult.Success -> {
+                    val savedDto = res.data
+                    val summary = NamedBasketSummary(
+                        id = savedDto.id,
+                        name = savedDto.name,
+                        itemCount = savedDto.itemCount,
+                        updatedAtEpochMillis = savedDto.updatedAtEpochMillis
+                    )
+                    val existingList = remoteSavedBasketsCache.value[buyer.id].orEmpty()
+                        .filterNot { it.id == savedDto.id || it.name.trim().equals(trimmedName, ignoreCase = true) }
+                    remoteSavedBasketsCache.value = remoteSavedBasketsCache.value +
+                        (buyer.id to (listOf(summary) + existingList).sortedByDescending { it.updatedAtEpochMillis })
+                    Result.success(savedDto.id)
+                }
+                else -> Result.failure(res.toException())
+            }
+        }
+
+        val activeBasket = basketDao.getActiveBasketForBuyer(buyer.id)
+            ?: return Result.failure(IllegalStateException("Cannot save an empty basket as a template."))
+        val items = basketDao.getBasketItems(activeBasket.id)
+        if (items.isEmpty()) {
+            return Result.failure(IllegalStateException("Cannot save an empty basket as a template."))
+        }
+
+        val existingDuplicate = basketDao.getSavedBasketByName(buyer.id, trimmedName)
+        if (existingDuplicate != null && !overwriteExisting) {
+            return Result.failure(DuplicateBasketTemplateException(trimmedName))
+        }
+
+        val now = System.currentTimeMillis()
+        val savedBasketId = db.withTransaction {
+            if (existingDuplicate != null && overwriteExisting) {
+                basketDao.clearBasket(existingDuplicate.id)
+                basketDao.deleteBasket(existingDuplicate.id)
+            }
+            val newId = basketDao.insertBasket(
+                BasketEntity(
+                    buyerId = buyer.id,
+                    name = trimmedName,
+                    isSaved = true,
+                    updatedAtEpochMillis = now
+                )
             )
+            for (item in items) {
+                basketDao.insertBasketItem(
+                    item.copy(id = 0, basketId = newId)
+                )
+            }
+            val persistedBasket = basketDao.getBasketById(newId)
+            val persistedItems = basketDao.getBasketItems(newId)
+            if (persistedBasket == null || !persistedBasket.isSaved || persistedItems.size != items.size) {
+                throw IllegalStateException("Failed to verify saved template persistence.")
+            }
+            newId
         }
         return Result.success(savedBasketId)
     }
 
-    override fun getApiSavedBasketsFlow(): Flow<List<NamedBasketSummary>> = flow {
-        val buyer = getApiUsersMe()
-        if (buyer == null) {
-            emit(emptyList())
-        } else {
-            basketDao.getSavedBasketsFlow(buyer.id).collect { baskets ->
-                val summaries = baskets.map { b ->
-                    val items = basketDao.getBasketItems(b.id)
-                    NamedBasketSummary(
-                        id = b.id,
-                        name = b.name ?: "Saved Basket #${b.id}",
-                        itemCount = items.size,
-                        updatedAtEpochMillis = b.updatedAtEpochMillis
-                    )
+    @OptIn(ExperimentalCoroutinesApi::class)
+    override fun getApiSavedBasketsFlow(): Flow<List<NamedBasketSummary>> {
+        return dataStoreManager.loggedInUserIdFlow.flatMapLatest { loggedId ->
+            if (loggedId == null) {
+                flowOf(emptyList())
+            } else {
+                combine(
+                    dataStoreManager.authExecutionModeFlow,
+                    basketDao.getSavedBasketsFlow(loggedId),
+                    basketDao.getAllBasketItemsFlow(),
+                    remoteSavedBasketsCache
+                ) { mode, baskets, allItems, remoteMap ->
+                    if (mode == AuthExecutionMode.PRODUCTION_BACKEND_HTTP) {
+                        remoteMap[loggedId].orEmpty()
+                    } else {
+                        baskets.map { b ->
+                            val count = allItems.count { it.basketId == b.id }
+                            NamedBasketSummary(
+                                id = b.id,
+                                name = b.name ?: "Saved Basket #${b.id}",
+                                itemCount = count,
+                                updatedAtEpochMillis = b.updatedAtEpochMillis
+                            )
+                        }
+                    }
                 }
-                emit(summaries)
             }
         }
     }
 
     override suspend fun postApiBasketLoadSaved(savedBasketId: Long): Result<BasketLoadReport> {
-        val buyer = getApiUsersMe() ?: return Result.failure(IllegalStateException("Please login."))
-        val savedItems = basketDao.getBasketItems(savedBasketId)
-        if (savedItems.isEmpty()) return Result.failure(IllegalStateException("Saved basket has no items."))
-
-        var activeBasket = basketDao.getActiveBasketForBuyer(buyer.id)
-        if (activeBasket == null) {
-            val newId = basketDao.insertBasket(BasketEntity(buyerId = buyer.id, isSaved = false))
-            activeBasket = BasketEntity(id = newId, buyerId = buyer.id, isSaved = false)
-        } else {
-            basketDao.clearBasket(activeBasket.id)
+        val buyer = getApiUsersMe() ?: return Result.failure(IllegalStateException("Please sign in."))
+        if (isProductionHttpMode()) {
+            val remote = pharmaRemoteDataSource
+                ?: return Result.failure(IllegalStateException("Remote API is not initialized."))
+            val loadRes = remote.loadSavedBasket(savedBasketId)
+            if (loadRes !is NetworkResult.Success) {
+                return Result.failure(loadRes.toException())
+            }
+            val refreshRes = refreshBasketFromBackend()
+            if (refreshRes.isFailure) {
+                return Result.failure(refreshRes.exceptionOrNull() ?: IllegalStateException("Loaded template on server, but failed to refresh basket."))
+            }
+            val dto = loadRes.data
+            return Result.success(
+                BasketLoadReport(
+                    itemsLoadedCount = dto.itemsLoadedCount,
+                    priceChangeWarnings = dto.priceChangeWarnings,
+                    unavailableWarnings = dto.unavailableWarnings
+                )
+            )
         }
 
+        val savedBasket = basketDao.getBasketById(savedBasketId)
+            ?: return Result.failure(IllegalStateException("Saved basket template was not found."))
+        val savedItems = basketDao.getBasketItems(savedBasketId)
+        if (savedItems.isEmpty()) {
+            return Result.failure(IllegalStateException("Saved basket template has no items."))
+        }
+
+        val now = System.currentTimeMillis()
         val priceWarnings = mutableListOf<String>()
         val unavailableWarnings = mutableListOf<String>()
-        var loadedCount = 0
+        val itemsToLoad = mutableListOf<BasketItemEntity>()
 
         for (item in savedItems) {
             val offer = offerDao.getOfferById(item.offerId)
             val prod = productDao.getProductById(item.productId)
             val prodName = prod?.name ?: "Product #${item.productId}"
 
-            if (offer == null || !offer.isActive || offer.availableQuantity <= 0) {
-                unavailableWarnings.add("$prodName is currently out of stock or offer was deactivated.")
+            if (prod != null && !prod.isActive) {
+                unavailableWarnings.add("$prodName is no longer active in the catalogue.")
+                continue
+            }
+            if (offer == null || !offer.isActive || (offer.validTillEpochMillis in 1..now) || offer.availableQuantity <= 0) {
+                unavailableWarnings.add("$prodName is currently out of stock or supplier quotation expired.")
+                continue
+            }
+            if (offer.availableQuantity < offer.moq) {
+                unavailableWarnings.add("$prodName cannot be ordered because available stock (${offer.availableQuantity}) is below MOQ (${offer.moq}).")
                 continue
             }
 
-            val adjustedQty = Math.min(item.quantity, offer.availableQuantity)
+            var adjustedQty = item.quantity.coerceAtMost(offer.availableQuantity)
             if (adjustedQty < item.quantity) {
-                unavailableWarnings.add("$prodName quantity adjusted from ${item.quantity} to $adjustedQty due to limited availability.")
+                unavailableWarnings.add("$prodName quantity reduced from ${item.quantity} to $adjustedQty due to available stock.")
+            }
+            if (adjustedQty < offer.moq) {
+                adjustedQty = offer.moq
+                unavailableWarnings.add("$prodName quantity raised to supplier MOQ (${offer.moq} units).")
             }
 
-            basketDao.insertBasketItem(
+            itemsToLoad.add(
                 BasketItemEntity(
-                    basketId = activeBasket.id,
+                    basketId = 0L, // resolved inside transaction
                     productId = item.productId,
                     offerId = offer.id,
                     supplierId = offer.supplierId,
                     quantity = adjustedQty
                 )
             )
-            loadedCount++
         }
+
+        if (itemsToLoad.isEmpty()) {
+            return Result.failure(
+                IllegalStateException(
+                    unavailableWarnings.firstOrNull()
+                        ?: "None of the items in '${savedBasket.name ?: "template"}' are currently available."
+                )
+            )
+        }
+
+        db.withTransaction {
+            var activeBasket = basketDao.getActiveBasketForBuyer(buyer.id)
+            if (activeBasket == null) {
+                val newId = basketDao.insertBasket(BasketEntity(buyerId = buyer.id, isSaved = false, updatedAtEpochMillis = now))
+                activeBasket = BasketEntity(id = newId, buyerId = buyer.id, isSaved = false, updatedAtEpochMillis = now)
+            } else {
+                basketDao.clearBasket(activeBasket.id)
+            }
+            itemsToLoad.forEach { entity ->
+                basketDao.insertBasketItem(entity.copy(basketId = activeBasket.id))
+            }
+            basketDao.updateBasketTimestamp(activeBasket.id, now)
+        }
+        notifyBasketChanged()
 
         return Result.success(
             BasketLoadReport(
-                itemsLoadedCount = loadedCount,
+                itemsLoadedCount = itemsToLoad.size,
                 priceChangeWarnings = priceWarnings,
                 unavailableWarnings = unavailableWarnings
             )
         )
+    }
+
+    override suspend fun deleteApiSavedBasket(savedBasketId: Long): Result<Unit> {
+        if (isProductionHttpMode()) {
+            return Result.failure(UnsupportedOperationException("Deleting saved templates on remote server is not yet supported."))
+        }
+        db.withTransaction {
+            basketDao.clearBasket(savedBasketId)
+            basketDao.deleteBasket(savedBasketId)
+        }
+        return Result.success(Unit)
     }
 
     override suspend fun postApiBasketOptimize(preferReliableSuppliers: Boolean): OptimizationResult {
@@ -1585,10 +2797,12 @@ class PharmaRepositoryImpl(
                 )
             }
         }
+        notifyBasketChanged()
         return Result.success(Unit)
     }
 
     override suspend fun ensureDefaultOrdersSeeded() {
+        if (isProductionHttpMode()) return
         if (orderDao.getTotalOrderCount() > 0) return
 
         ensureDefaultCatalogueSeeded()
@@ -1813,14 +3027,75 @@ class PharmaRepositoryImpl(
         orderDao.insertStatusHistory(OrderStatusHistoryEntity(orderId = o5Id, status = OrderStatus.PLACED.name, changedAtEpochMillis = now - 3 * 3600 * 1000L, note = "PO submitted by Hospital Procurement Officer", changedByUserId = buyer.id))
     }
 
+    private fun buildOrderIdempotencyKey(
+        buyerId: Long,
+        deliveryAddress: String,
+        notes: String,
+        basketSignature: String
+    ): String {
+        val raw = "$buyerId|${deliveryAddress.trim()}|${notes.trim()}|$basketSignature"
+        val digest = MessageDigest.getInstance("SHA-256").digest(raw.toByteArray(Charsets.UTF_8))
+        return digest.joinToString("") { "%02x".format(it) }.take(32)
+    }
+
     override suspend fun postApiOrders(deliveryAddress: String, notes: String): Result<List<Long>> {
+        val trimmedAddress = deliveryAddress.trim()
+        if (trimmedAddress.isBlank()) {
+            return Result.failure(IllegalArgumentException("Please enter a valid delivery address."))
+        }
         val buyer = getApiUsersMe() ?: return Result.failure(IllegalStateException("Please login to place order."))
-        val basketDetails = getApiBasket()
-        if (basketDetails.items.isEmpty()) {
+        val activeBasket = basketDao.getActiveBasketForBuyer(buyer.id)
+        val activeItems = if (activeBasket != null) basketDao.getBasketItems(activeBasket.id) else emptyList()
+        if (activeItems.isEmpty()) {
             return Result.failure(IllegalStateException("Cannot place order with empty basket."))
         }
+        val basketSignature = activeItems.joinToString(",") { "${it.productId}:${it.offerId}:${it.quantity}" }
+        val submissionKey = buildOrderIdempotencyKey(buyer.id, trimmedAddress, notes.trim(), basketSignature)
 
-        val orderIds = mutableListOf<Long>()
+        val acquired = orderSubmitMutex.withLock {
+            if (inFlightOrderSubmissionKeys.contains(submissionKey)) {
+                false
+            } else {
+                inFlightOrderSubmissionKeys.add(submissionKey)
+                true
+            }
+        }
+        if (!acquired) {
+            return Result.failure(IllegalStateException("Order placement already in progress for this basket."))
+        }
+
+        try {
+            if (isProductionHttpMode()) {
+                val remote = pharmaRemoteDataSource
+                    ?: return Result.failure(IllegalStateException("Remote API is not initialized."))
+                return when (
+                    val res = remote.createOrdersFromBasket(
+                        deliveryAddress = trimmedAddress,
+                        notes = notes.trim(),
+                        idempotencyKey = submissionKey
+                    )
+                ) {
+                    is NetworkResult.Success -> {
+                        if (res.data.isEmpty()) {
+                            return Result.failure(IllegalStateException("Backend did not confirm order creation."))
+                        }
+                        val createdIds = db.withTransaction {
+                            val ids = res.data.map { upsertRemoteOrder(it) }
+                            basketDao.getActiveBasketForBuyer(buyer.id)?.let { basketDao.clearBasket(it.id) }
+                            ids
+                        }
+                        notifyBasketChanged()
+                        Result.success(createdIds)
+                    }
+                    else -> Result.failure(res.toException())
+                }
+            }
+            val basketDetails = getApiBasket()
+            if (basketDetails.items.isEmpty()) {
+                return Result.failure(IllegalStateException("Cannot place order with empty basket."))
+            }
+
+            val orderIds = mutableListOf<Long>()
 
         db.withTransaction {
             // Group items per supplier to split into separate orders
@@ -1930,19 +3205,68 @@ class PharmaRepositoryImpl(
             basketDao.clearBasket(basketDetails.basketId)
         }
 
+        notifyBasketChanged()
         return Result.success(orderIds)
+        } finally {
+            orderSubmitMutex.withLock {
+                inFlightOrderSubmissionKeys.remove(submissionKey)
+            }
+        }
     }
 
-    override fun getApiOrdersFlow(): Flow<List<OrderEntity>> = flow {
-        val user = getApiUsersMe()
-        if (user == null) {
-            emit(emptyList())
-        } else if (user.role == UserRole.ADMIN) {
-            orderDao.getAllOrdersFlow().collect { emit(it) }
-        } else if (user.role.isSupplier) {
-            orderDao.getOrdersForSupplierFlow(user.id).collect { emit(it) }
-        } else {
-            orderDao.getOrdersForBuyerFlow(user.id).collect { emit(it) }
+    @OptIn(ExperimentalCoroutinesApi::class)
+    override fun getApiOrdersFlow(): Flow<List<OrderEntity>> =
+        dataStoreManager.loggedInUserIdFlow.flatMapLatest { userId ->
+            val user = userId?.let { userDao.getUserById(it) }
+            when {
+                user == null -> flowOf(emptyList())
+                user.role == UserRole.ADMIN.name -> orderDao.getAllOrdersFlow()
+                UserRole.fromString(user.role).isSupplier -> orderDao.getOrdersForSupplierFlow(user.id)
+                else -> orderDao.getOrdersForBuyerFlow(user.id)
+            }
+        }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    override fun getApiLivePipelineOrdersFlow(): Flow<List<OrderEntity>> =
+        dataStoreManager.loggedInUserIdFlow.flatMapLatest { userId ->
+            val user = userId?.let { userDao.getUserById(it) }
+            when {
+                user == null -> flowOf(emptyList())
+                user.role == UserRole.ADMIN.name -> orderDao.getAllOrdersFlow()
+                UserRole.fromString(user.role).isSupplier -> orderDao.getOrdersForSupplierFlow(user.id)
+                else -> flowOf(emptyList())
+            }
+        }
+
+    override suspend fun getOrderTaxInvoice(orderId: Long): Result<TaxInvoiceData> {
+        if (isProductionHttpMode()) {
+            val remote = pharmaRemoteDataSource
+                ?: return Result.failure(IllegalStateException("Remote API is not initialized."))
+            return when (val res = remote.fetchOrderTaxInvoice(orderId)) {
+                is NetworkResult.Success -> Result.success(res.data.toDomain())
+                else -> Result.failure(res.toException())
+            }
+        }
+        val details = getApiOrderById(orderId)
+            ?: return Result.failure(IllegalArgumentException("Order not found."))
+        val sellerCompliance = complianceDao.getComplianceByUserId(details.order.supplierId)
+        return Result.success(
+            TaxInvoiceBuilder.build(
+                details = details,
+                sellerComplianceGstin = sellerCompliance?.gstin
+            )
+        )
+    }
+
+    override suspend fun downloadBackendTaxInvoicePdf(orderId: Long): Result<ByteArray> {
+        if (!isProductionHttpMode()) {
+            return Result.failure(IllegalStateException("Backend PDF stream is only available in production backend mode."))
+        }
+        val remote = pharmaRemoteDataSource
+            ?: return Result.failure(IllegalStateException("Remote API is not initialized."))
+        return when (val res = remote.downloadOrderTaxInvoicePdf(orderId)) {
+            is NetworkResult.Success -> Result.success(res.data)
+            else -> Result.failure(res.toException())
         }
     }
 
@@ -2000,9 +3324,54 @@ class PharmaRepositoryImpl(
         transporterName: String?
     ): Result<Unit> {
         val user = getApiUsersMe() ?: return Result.failure(IllegalStateException("Please login."))
+        if (!user.role.isSupplier && user.role != UserRole.ADMIN) {
+            return Result.failure(
+                SecurityException("Unauthorized: Only supplier or manufacturer accounts can progress order fulfillment statuses.")
+            )
+        }
+        if (isProductionHttpMode()) {
+            val remote = pharmaRemoteDataSource
+                ?: return Result.failure(IllegalStateException("Remote API is not initialized."))
+            val req = UpdateOrderStatusRequestDto(
+                newStatus = newStatus,
+                note = note,
+                dispatchEpochMillis = dispatchEpochMillis,
+                expectedDeliveryEpochMillis = expectedDeliveryEpochMillis,
+                ewayBillNumber = ewayBillNumber,
+                vehicleNumber = vehicleNumber,
+                transporterName = transporterName
+            )
+            return when (val res = remote.updateOrderStatus(orderId, req)) {
+                is NetworkResult.Success -> {
+                    upsertRemoteOrder(res.data)
+                    Result.success(Unit)
+                }
+                else -> Result.failure(res.toException())
+            }
+        }
         val order = orderDao.getOrderById(orderId) ?: return Result.failure(IllegalArgumentException("Order not found."))
+        if (user.role != UserRole.ADMIN && order.supplierId != user.id) {
+            return Result.failure(
+                SecurityException("Unauthorized: Order ${order.orderNumber} belongs to another supplier.")
+            )
+        }
 
         db.withTransaction {
+            val shouldIssueInvoice = newStatus == OrderStatus.PACKED.name ||
+                newStatus == OrderStatus.DISPATCHED.name ||
+                newStatus == OrderStatus.DELIVERED.name ||
+                newStatus == OrderStatus.PARTIALLY_FULFILLED.name
+            val resolvedInvoiceNumber = if (shouldIssueInvoice && order.invoiceNumber.isNullOrBlank()) {
+                "INV-${order.orderNumber.removePrefix("PO-")}"
+            } else {
+                order.invoiceNumber
+            }
+            val resolvedInvoiceIssuedAt = if (resolvedInvoiceNumber != null) {
+                order.invoiceIssuedAtEpochMillis ?: System.currentTimeMillis()
+            } else {
+                order.invoiceIssuedAtEpochMillis
+            }
+
             val updated = order.copy(
                 status = newStatus,
                 dispatchEpochMillis = dispatchEpochMillis ?: order.dispatchEpochMillis,
@@ -2011,7 +3380,9 @@ class PharmaRepositoryImpl(
                 isEwayBillGenerated = !ewayBillNumber.isNullOrBlank() || order.isEwayBillGenerated,
                 ewayBillNumber = ewayBillNumber ?: order.ewayBillNumber,
                 vehicleNumber = vehicleNumber ?: order.vehicleNumber,
-                transporterName = transporterName ?: order.transporterName
+                transporterName = transporterName ?: order.transporterName,
+                invoiceNumber = resolvedInvoiceNumber,
+                invoiceIssuedAtEpochMillis = resolvedInvoiceIssuedAt
             )
             orderDao.updateOrder(updated)
 
@@ -2072,6 +3443,30 @@ class PharmaRepositoryImpl(
         batchNumber: String?,
         expiryDateEpochMillis: Long?
     ): Result<Unit> {
+        if (isProductionHttpMode()) {
+            val remote = pharmaRemoteDataSource
+                ?: return Result.failure(IllegalStateException("Remote API is not initialized."))
+            return when (
+                val res = remote.updateOrderItemFulfillment(
+                    orderItemId,
+                    FulfillOrderItemRequestDto(fulfilledQty, batchNumber?.trim(), expiryDateEpochMillis)
+                )
+            ) {
+                is NetworkResult.Success -> {
+                    orderDao.getOrderItemById(orderItemId)?.let { item ->
+                        orderDao.updateOrderItem(
+                            item.copy(
+                                fulfilledQuantity = fulfilledQty,
+                                batchNumber = batchNumber?.trim(),
+                                expiryDateEpochMillis = expiryDateEpochMillis
+                            )
+                        )
+                    }
+                    Result.success(Unit)
+                }
+                else -> Result.failure(res.toException())
+            }
+        }
         val item = orderDao.getOrderItemById(orderItemId) ?: return Result.failure(IllegalArgumentException("Item not found."))
         orderDao.updateOrderItem(
             item.copy(
@@ -2091,6 +3486,25 @@ class PharmaRepositoryImpl(
         shortQuantity: Int,
         damagedQuantity: Int
     ): Result<Unit> {
+        if (isProductionHttpMode()) {
+            val remote = pharmaRemoteDataSource
+                ?: return Result.failure(IllegalStateException("Remote API is not initialized."))
+            return when (
+                val res = remote.submitProofOfDelivery(
+                    orderId,
+                    SubmitPodRequestDto(
+                        receivedByName = receivedByName.trim(),
+                        notes = notes.trim(),
+                        photoUri = photoUri,
+                        shortQuantity = shortQuantity,
+                        damagedQuantity = damagedQuantity
+                    )
+                )
+            ) {
+                is NetworkResult.Success -> Result.success(Unit)
+                else -> Result.failure(res.toException())
+            }
+        }
         val order = orderDao.getOrderById(orderId) ?: return Result.failure(IllegalArgumentException("Order not found."))
         analyticsDao.insertProofOfDelivery(
             ProofOfDeliveryEntity(
@@ -2108,6 +3522,17 @@ class PharmaRepositoryImpl(
     }
 
     override suspend fun postApiOrderReorder(pastOrderId: Long): Result<Unit> {
+        if (isProductionHttpMode()) {
+            val remote = pharmaRemoteDataSource
+                ?: return Result.failure(IllegalStateException("Remote API is not initialized."))
+            return when (val res = remote.reorderPastOrder(pastOrderId)) {
+                is NetworkResult.Success -> {
+                    refreshBasketFromBackend()
+                    Result.success(Unit)
+                }
+                else -> Result.failure(res.toException())
+            }
+        }
         val buyer = getApiUsersMe() ?: return Result.failure(IllegalStateException("Please login."))
         val pastItems = orderDao.getOrderItems(pastOrderId)
         if (pastItems.isEmpty()) return Result.failure(IllegalArgumentException("Order has no line items."))
@@ -2129,16 +3554,25 @@ class PharmaRepositoryImpl(
         return Result.success(Unit)
     }
 
+    @OptIn(ExperimentalCoroutinesApi::class)
     override fun getOrderHistoryTransactionsFlow(): Flow<List<com.example.ui.components.OrderTransactionUiModel>> {
         return combine(
+            dataStoreManager.loggedInUserIdFlow,
             orderDao.getAllOrdersFlow(),
             orderDao.getAllOrderItemsFlow(),
             userDao.getAllUsersFlow()
-        ) { orders, items, users ->
-            val itemsByOrderId = items.groupBy { it.orderId }
+        ) { currentUserId, allOrders, items, users ->
             val usersById = users.associateBy { it.id }
+            val currentUser = currentUserId?.let { usersById[it] }
+            val scopedOrders = when {
+                currentUser == null -> emptyList()
+                currentUser.role == UserRole.ADMIN.name -> allOrders
+                UserRole.fromString(currentUser.role).isSupplier -> allOrders.filter { it.supplierId == currentUser.id }
+                else -> allOrders.filter { it.buyerId == currentUser.id }
+            }
+            val itemsByOrderId = items.groupBy { it.orderId }
 
-            orders.map { order ->
+            scopedOrders.map { order ->
                 val orderItems = itemsByOrderId[order.id] ?: emptyList()
                 val buyer = usersById[order.buyerId]
                 val supplier = usersById[order.supplierId]
@@ -2226,6 +3660,17 @@ class PharmaRepositoryImpl(
     }
 
     override suspend fun postApiBatches(batch: BatchEntity): Result<Long> {
+        if (isProductionHttpMode()) {
+            val remote = pharmaRemoteDataSource
+                ?: return Result.failure(IllegalStateException("Remote API is not initialized."))
+            return when (val res = remote.createBatch(batch.toDto())) {
+                is NetworkResult.Success -> {
+                    val savedId = batchDao.insertBatch(res.data.toEntity())
+                    Result.success(savedId)
+                }
+                else -> Result.failure(res.toException())
+            }
+        }
         val id = batchDao.insertBatch(batch)
         return Result.success(id)
     }
@@ -2383,8 +3828,19 @@ class PharmaRepositoryImpl(
     }
 
     override suspend fun adjustBatchStock(batchId: Long, newQuantity: Int, reason: String): Result<Unit> {
+        val safeQty = newQuantity.coerceAtLeast(0)
+        if (isProductionHttpMode() && batchId > 0) {
+            val remote = pharmaRemoteDataSource
+                ?: return Result.failure(IllegalStateException("Remote API is not initialized."))
+            return when (val res = remote.adjustBatchStock(batchId, safeQty, reason)) {
+                is NetworkResult.Success -> {
+                    batchDao.insertBatch(res.data.toEntity())
+                    Result.success(Unit)
+                }
+                else -> Result.failure(res.toException())
+            }
+        }
         return try {
-            val safeQty = newQuantity.coerceAtLeast(0)
             if (batchId > 0) {
                 batchDao.updateBatchQuantity(batchId, safeQty)
             }
@@ -2418,10 +3874,28 @@ class PharmaRepositoryImpl(
     }
 
     override suspend fun insertOrUpdateProductInventory(inventory: ProductInventoryEntity): Long {
+        if (isProductionHttpMode()) {
+            val remote = pharmaRemoteDataSource ?: throw IllegalStateException("Remote API is not initialized.")
+            return when (val res = remote.upsertInventoryItem(inventory.toDto())) {
+                is NetworkResult.Success -> productInventoryDao.insertInventory(res.data.toEntity())
+                else -> throw res.toException()
+            }
+        }
         return productInventoryDao.insertInventory(inventory)
     }
 
     override suspend fun updateProductInventoryStock(sku: String, newStock: Int): Result<Unit> {
+        if (isProductionHttpMode()) {
+            val remote = pharmaRemoteDataSource
+                ?: return Result.failure(IllegalStateException("Remote API is not initialized."))
+            return when (val res = remote.adjustInventoryStock(sku = sku, newStock = newStock, reason = "Inventory Update")) {
+                is NetworkResult.Success -> {
+                    productInventoryDao.insertInventory(res.data.toEntity())
+                    Result.success(Unit)
+                }
+                else -> Result.failure(res.toException())
+            }
+        }
         return try {
             productInventoryDao.updateCurrentStockBySku(sku, newStock)
             Result.success(Unit)
@@ -2431,6 +3905,17 @@ class PharmaRepositoryImpl(
     }
 
     override suspend fun updateProductInventoryReorderThreshold(sku: String, newThreshold: Int): Result<Unit> {
+        if (isProductionHttpMode()) {
+            val remote = pharmaRemoteDataSource
+                ?: return Result.failure(IllegalStateException("Remote API is not initialized."))
+            return when (val res = remote.updateReorderThreshold(sku, newThreshold)) {
+                is NetworkResult.Success -> {
+                    productInventoryDao.insertInventory(res.data.toEntity())
+                    Result.success(Unit)
+                }
+                else -> Result.failure(res.toException())
+            }
+        }
         return try {
             productInventoryDao.updateReorderThresholdBySku(sku, newThreshold)
             Result.success(Unit)
@@ -2458,12 +3943,34 @@ class PharmaRepositoryImpl(
     }
 
     override suspend fun patchApiNotificationRead(id: Long): Result<Unit> {
+        if (isProductionHttpMode()) {
+            val remote = pharmaRemoteDataSource
+                ?: return Result.failure(IllegalStateException("Remote API is not initialized."))
+            return when (val res = remote.markNotificationRead(id)) {
+                is NetworkResult.Success -> {
+                    notificationDao.markAsRead(id)
+                    Result.success(Unit)
+                }
+                else -> Result.failure(res.toException())
+            }
+        }
         notificationDao.markAsRead(id)
         return Result.success(Unit)
     }
 
     override suspend fun patchApiNotificationsReadAll(): Result<Unit> {
         val user = getApiUsersMe() ?: return Result.success(Unit)
+        if (isProductionHttpMode()) {
+            val remote = pharmaRemoteDataSource
+                ?: return Result.failure(IllegalStateException("Remote API is not initialized."))
+            return when (val res = remote.markAllNotificationsRead()) {
+                is NetworkResult.Success -> {
+                    notificationDao.markAllAsRead(user.id)
+                    Result.success(Unit)
+                }
+                else -> Result.failure(res.toException())
+            }
+        }
         notificationDao.markAllAsRead(user.id)
         return Result.success(Unit)
     }
@@ -2593,6 +4100,26 @@ class PharmaRepositoryImpl(
         severity: String
     ): Result<Long> {
         val current = getApiUsersMe() ?: return Result.failure(IllegalStateException("Please login."))
+        if (isProductionHttpMode()) {
+            val remote = pharmaRemoteDataSource
+                ?: return Result.failure(IllegalStateException("Remote API is not initialized."))
+            return when (
+                val res = remote.createRecall(
+                    CreateRecallRequestDto(
+                        productId = productId,
+                        batchNumbersCsv = batchNumbersCsv.trim(),
+                        reason = reason.trim(),
+                        severity = severity
+                    )
+                )
+            ) {
+                is NetworkResult.Success -> {
+                    val savedId = recallDao.insertRecall(res.data.toEntity())
+                    Result.success(savedId)
+                }
+                else -> Result.failure(res.toException())
+            }
+        }
         val product = productDao.getProductById(productId) ?: return Result.failure(IllegalArgumentException("Product not found."))
 
         val recallId = recallDao.insertRecall(
@@ -2605,11 +4132,6 @@ class PharmaRepositoryImpl(
                 createdBySupplierId = current.id
             )
         )
-
-        // Find buyers holding affected batches and notify them
-        val targetBatches = batchNumbersCsv.split(",").map { it.trim() }
-        val affectedBatches = batchDao.getBatchesByNumbers(targetBatches)
-        val affectedSupplierIds = affectedBatches.map { it.supplierId }.distinct()
 
         val allBuyers = userDao.getAllUsers().filter { it.role == UserRole.STOCKIST.name }
         for (buyer in allBuyers) {
@@ -2659,6 +4181,27 @@ class PharmaRepositoryImpl(
         batchNumber: String
     ): Result<Long> {
         val buyer = getApiUsersMe() ?: return Result.failure(IllegalStateException("Please login."))
+        if (isProductionHttpMode()) {
+            val remote = pharmaRemoteDataSource
+                ?: return Result.failure(IllegalStateException("Remote API is not initialized."))
+            return when (
+                val res = remote.createReturn(
+                    CreateReturnRequestDto(
+                        orderId = orderId,
+                        orderItemId = orderItemId,
+                        quantity = quantity,
+                        reason = reason.name,
+                        batchNumber = batchNumber.trim()
+                    )
+                )
+            ) {
+                is NetworkResult.Success -> {
+                    val savedId = returnDao.insertReturn(res.data.toEntity())
+                    Result.success(savedId)
+                }
+                else -> Result.failure(res.toException())
+            }
+        }
         val order = orderDao.getOrderById(orderId) ?: return Result.failure(IllegalArgumentException("Order not found."))
         val item = orderDao.getOrderItemById(orderItemId) ?: return Result.failure(IllegalArgumentException("Item not found."))
 
@@ -2691,6 +4234,14 @@ class PharmaRepositoryImpl(
     }
 
     override suspend fun patchApiReturnStatus(returnId: Long, isApproved: Boolean, decisionNotes: String): Result<Unit> {
+        if (isProductionHttpMode()) {
+            val remote = pharmaRemoteDataSource
+                ?: return Result.failure(IllegalStateException("Remote API is not initialized."))
+            return when (val res = remote.decideReturn(returnId, isApproved, decisionNotes.trim())) {
+                is NetworkResult.Success -> Result.success(Unit)
+                else -> Result.failure(res.toException())
+            }
+        }
         val ret = returnDao.getReturnById(returnId) ?: return Result.failure(IllegalArgumentException("Return not found."))
         val item = orderDao.getOrderItemById(ret.orderItemId)
 
@@ -2797,6 +4348,14 @@ class PharmaRepositoryImpl(
         if (!supplier.role.isSupplier && supplier.role != UserRole.ADMIN) {
             return Result.failure(SecurityException("Only suppliers can record payments received."))
         }
+        if (isProductionHttpMode()) {
+            val remote = pharmaRemoteDataSource
+                ?: return Result.failure(IllegalStateException("Remote API is not initialized."))
+            return when (val res = remote.recordLedgerPayment(buyerId, amount, notes)) {
+                is NetworkResult.Success -> Result.success(Unit)
+                else -> Result.failure(res.toException())
+            }
+        }
 
         val currentBal = ledgerDao.getLatestBalanceBetweenParties(buyerId, supplier.id) ?: 0.0
         val newBal = currentBal - amount
@@ -2834,6 +4393,17 @@ class PharmaRepositoryImpl(
     }
 
     override suspend fun putApiSupplierSettings(settings: SupplierSettingsEntity): Result<Unit> {
+        if (isProductionHttpMode()) {
+            val remote = pharmaRemoteDataSource
+                ?: return Result.failure(IllegalStateException("Remote API is not initialized."))
+            return when (val res = remote.updateSupplierSettings(settings.supplierId, settings.toDto())) {
+                is NetworkResult.Success -> {
+                    analyticsDao.insertOrUpdateSupplierSettings(res.data.toEntity())
+                    Result.success(Unit)
+                }
+                else -> Result.failure(res.toException())
+            }
+        }
         analyticsDao.insertOrUpdateSupplierSettings(settings)
         return Result.success(Unit)
     }
@@ -2929,4 +4499,19 @@ class PharmaRepositoryImpl(
             bestOfferId = bestOfferId
         )
     }
+
+    private data class Quartet<A, B, C, D>(
+        val first: A,
+        val second: B,
+        val third: C,
+        val fourth: D
+    )
+
+    private data class Quintet<A, B, C, D, E>(
+        val first: A,
+        val second: B,
+        val third: C,
+        val fourth: D,
+        val fifth: E
+    )
 }

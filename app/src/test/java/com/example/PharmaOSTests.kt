@@ -20,12 +20,17 @@ import com.example.domain.repository.BasketItemDetail
 import com.example.domain.usecase.CalculateTrustScoreUseCase
 import com.example.domain.usecase.EvaluateShortageRiskUseCase
 import com.example.data.local.dao.ProductDao
+import com.example.data.local.entity.ProductInventoryEntity
 import com.example.data.repository.ProductRepository
 import com.example.domain.usecase.OptimizeBasketUseCase
 import com.example.domain.usecase.ParsePurchaseListUseCase
+import com.example.ui.components.SkuVelocityCategory
+import com.example.ui.components.generateHistoricalTrendData
+import com.example.ui.components.generateSkuTurnoverRankings
 import com.example.util.PasswordHasher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.runBlocking
@@ -623,7 +628,9 @@ class PharmaOSTests {
         assertFalse(updatedAug.currentStock <= updatedAug.reorderThreshold)
 
         // 7. Test ViewModel search and filter logic
-        val viewModel = com.example.ui.screens.products.ProductListViewModel(repository)
+        val testJob = kotlinx.coroutines.Job()
+        val testScope = kotlinx.coroutines.CoroutineScope(Dispatchers.Unconfined + testJob)
+        val viewModel = com.example.ui.screens.products.ProductListViewModel(repository, testScope)
         viewModel.onSearchQueryChange("Augmentin")
         val searchResults = viewModel.uiState.value.filteredProducts
         assertEquals(1, searchResults.size)
@@ -637,6 +644,148 @@ class PharmaOSTests {
             reorderThreshold = 20
         )
         assertEquals(3, repository.getProductInventoryFlow().first().size)
+        testJob.cancel()
+    }
+
+    // 16. Shortage Alerts Dashboard Component Inventory & Critical Reorder Logic Tests
+    @Test
+    fun testShortageAlertsDashboardComponentLogic() = runBlocking {
+        val fakeProductDao = FakeProductDao()
+        val fakeInventoryDao = FakeProductInventoryDao()
+        val repository = ProductRepository(
+            productDao = fakeProductDao,
+            inventoryDao = fakeInventoryDao,
+            ioDispatcher = Dispatchers.Unconfined
+        )
+
+        // 1. Seed 3 products with different shortage levels
+        // Critical Low Stock Item
+        repository.addProduct(
+            productName = "Augmentin 625 Duo",
+            sku = "SKU-AUG-625-10T",
+            currentStock = 14,
+            reorderThreshold = 25,
+            dosageForm = "Tablet",
+            unitPricePtr = 142.50
+        )
+        // Critical Out-of-Stock Item
+        repository.addProduct(
+            productName = "Azithromycin 500mg",
+            sku = "SKU-AZTH-500-5T",
+            currentStock = 0,
+            reorderThreshold = 30,
+            dosageForm = "Tablet",
+            unitPricePtr = 94.00
+        )
+        // Healthy Buffer Item
+        repository.addProduct(
+            productName = "Paracetamol 650mg",
+            sku = "SKU-DOLO-650-15T",
+            currentStock = 120,
+            reorderThreshold = 50,
+            dosageForm = "Tablet",
+            unitPricePtr = 28.50
+        )
+
+        val inventoryList = repository.getProductInventoryFlow().first()
+        assertEquals(3, inventoryList.size)
+
+        // 2. Verify critical items flagged for reorder (currentStock <= reorderThreshold)
+        val criticalItems = inventoryList.filter { it.currentStock <= it.reorderThreshold }
+        assertEquals(2, criticalItems.size)
+        assertTrue(criticalItems.any { it.sku == "SKU-AUG-625-10T" })
+        assertTrue(criticalItems.any { it.sku == "SKU-AZTH-500-5T" })
+
+        // 3. Verify completely depleted / out of stock items
+        val outOfStockItems = inventoryList.filter { it.currentStock <= 0 }
+        assertEquals(1, outOfStockItems.size)
+        assertEquals("SKU-AZTH-500-5T", outOfStockItems[0].sku)
+
+        // 4. Verify replenishment units calculation (reorderThreshold * 2 - currentStock)
+        val augItem = criticalItems.first { it.sku == "SKU-AUG-625-10T" }
+        val azthItem = criticalItems.first { it.sku == "SKU-AZTH-500-5T" }
+        assertEquals(36, (augItem.reorderThreshold * 2) - augItem.currentStock) // (25 * 2) - 14 = 36
+        assertEquals(60, (azthItem.reorderThreshold * 2) - azthItem.currentStock) // (30 * 2) - 0 = 60
+
+        // 5. Test real-time stock replenishment adjustment (+20 units to Augmentin)
+        repository.adjustStockBySku("SKU-AUG-625-10T", delta = +20)
+        val afterRestock = repository.getProductInventoryFlow().first()
+        val restockedAug = afterRestock.first { it.sku == "SKU-AUG-625-10T" }
+        assertEquals(34, restockedAug.currentStock)
+        assertFalse(restockedAug.currentStock <= restockedAug.reorderThreshold) // Now healthy buffer!
+
+        // 6. Verify critical count automatically decrements in real-time
+        val newCriticalCount = afterRestock.count { it.currentStock <= it.reorderThreshold }
+        assertEquals(1, newCriticalCount) // Only Azithromycin remains critical
+    }
+
+    // 17. Historical Inventory Trends & Stock Turnover Velocity Tests
+    @Test
+    fun testInventoryHistoricalTrendsAndTurnoverVelocity() {
+        val inventory = listOf(
+            ProductInventoryEntity(
+                productName = "Augmentin 625 Duo",
+                sku = "SKU-AUG-625-10T",
+                currentStock = 14,
+                reorderThreshold = 25,
+                unitPricePtr = 142.50
+            ),
+            ProductInventoryEntity(
+                productName = "Azithromycin 500mg",
+                sku = "SKU-AZTH-500-5T",
+                currentStock = 0,
+                reorderThreshold = 30,
+                unitPricePtr = 94.00
+            ),
+            ProductInventoryEntity(
+                productName = "Paracetamol 650mg",
+                sku = "SKU-DOLO-650-15T",
+                currentStock = 120,
+                reorderThreshold = 50,
+                unitPricePtr = 28.50
+            )
+        )
+
+        // 1. Verify 7D trend generation produces exactly 7 chronological points
+        val trend7D = generateHistoricalTrendData(inventory, "7D", null)
+        assertEquals(7, trend7D.size)
+        assertEquals("Day 1", trend7D.first().dayLabel)
+        assertEquals("Today", trend7D.last().dayLabel)
+        assertTrue(trend7D.all { it.totalStockUnits > 0 })
+        assertTrue(trend7D.all { it.reorderThresholdUnits == (25 + 30 + 50) })
+
+        // 2. Verify 30D and 90D sampling ranges
+        val trend30D = generateHistoricalTrendData(inventory, "30D", null)
+        assertEquals(14, trend30D.size)
+        val trend90D = generateHistoricalTrendData(inventory, "90D", null)
+        assertEquals(12, trend90D.size)
+
+        // 3. Verify SKU-specific filtering
+        val augTrend = generateHistoricalTrendData(inventory, "7D", "SKU-AUG-625-10T")
+        assertEquals(7, augTrend.size)
+        assertEquals(25, augTrend.first().reorderThresholdUnits)
+
+        // 4. Verify SKU turnover rankings & velocity calculations
+        val rankings = generateSkuTurnoverRankings(inventory)
+        assertEquals(3, rankings.size)
+
+        // Lowest days remaining sorted first (Azithromycin has 0 stock -> 0.0 days left)
+        assertEquals("SKU-AZTH-500-5T", rankings[0].sku)
+        assertEquals(0.0f, rankings[0].daysOfInventoryRemaining, 0.01f)
+        assertEquals(SkuVelocityCategory.CRITICAL_SHORTAGE, rankings[0].velocityCategory)
+        assertTrue(rankings[0].runoutWarning.contains("Depleted"))
+
+        // Low buffer item (Augmentin stock 14 <= threshold 25)
+        val augModel = rankings.first { it.sku == "SKU-AUG-625-10T" }
+        assertEquals(SkuVelocityCategory.LOW_BUFFER, augModel.velocityCategory)
+        assertTrue(augModel.daysOfInventoryRemaining > 0)
+        assertTrue(augModel.runoutWarning.contains("Est. runout in"))
+
+        // Fast moving / high turnover item (Dolo / Paracetamol with 14.2x turnover)
+        val doloModel = rankings.first { it.sku == "SKU-DOLO-650-15T" }
+        assertEquals(14.2f, doloModel.annualTurnoverRate, 0.1f)
+        assertEquals(SkuVelocityCategory.FAST_MOVING, doloModel.velocityCategory)
+        assertTrue(doloModel.runoutWarning.contains("Healthy buffer"))
     }
 }
 
@@ -725,31 +874,41 @@ private class FakeProductDao : ProductDao {
 
 private class FakeProductInventoryDao : com.example.data.local.dao.ProductInventoryDao {
     val items = mutableListOf<com.example.data.local.entity.ProductInventoryEntity>()
+    private val itemsFlow = MutableStateFlow<List<com.example.data.local.entity.ProductInventoryEntity>>(emptyList())
     var nextId = 1L
+
+    private fun notifyFlow() {
+        itemsFlow.value = items.toList()
+    }
 
     override suspend fun insertInventory(inventory: com.example.data.local.entity.ProductInventoryEntity): Long {
         val id = if (inventory.id > 0) inventory.id else nextId++
         val saved = inventory.copy(id = id)
         items.removeAll { it.sku == inventory.sku || it.id == id }
         items.add(saved)
+        notifyFlow()
         return id
     }
 
     override suspend fun insertAll(items: List<com.example.data.local.entity.ProductInventoryEntity>): List<Long> {
-        return items.map { insertInventory(it) }
+        val result = items.map { insertInventory(it) }
+        notifyFlow()
+        return result
     }
 
     override suspend fun updateInventory(inventory: com.example.data.local.entity.ProductInventoryEntity) {
         val idx = items.indexOfFirst { it.id == inventory.id || it.sku == inventory.sku }
         if (idx >= 0) items[idx] = inventory
+        notifyFlow()
     }
 
     override suspend fun deleteInventory(inventory: com.example.data.local.entity.ProductInventoryEntity) {
         items.removeAll { it.id == inventory.id || it.sku == inventory.sku }
+        notifyFlow()
     }
 
     override fun getAllInventoryFlow(): Flow<List<com.example.data.local.entity.ProductInventoryEntity>> {
-        return flowOf(items.toList())
+        return itemsFlow
     }
 
     override fun getAllInventoryIncludingInactiveFlow(): Flow<List<com.example.data.local.entity.ProductInventoryEntity>> {
@@ -800,33 +959,40 @@ private class FakeProductInventoryDao : com.example.data.local.dao.ProductInvent
     override suspend fun updateReorderThreshold(id: Long, newThreshold: Int) {
         val idx = items.indexOfFirst { it.id == id }
         if (idx >= 0) items[idx] = items[idx].copy(reorderThreshold = newThreshold)
+        notifyFlow()
     }
 
     override suspend fun updateReorderThresholdBySku(sku: String, newThreshold: Int) {
         val idx = items.indexOfFirst { it.sku == sku }
         if (idx >= 0) items[idx] = items[idx].copy(reorderThreshold = newThreshold)
+        notifyFlow()
     }
 
     override suspend fun addStock(sku: String, quantityToAdd: Int, timestamp: Long) {
         val idx = items.indexOfFirst { it.sku == sku }
         if (idx >= 0) items[idx] = items[idx].copy(currentStock = items[idx].currentStock + quantityToAdd)
+        notifyFlow()
     }
 
     override suspend fun deductStock(sku: String, quantityToDeduct: Int, timestamp: Long) {
         val idx = items.indexOfFirst { it.sku == sku }
         if (idx >= 0) items[idx] = items[idx].copy(currentStock = maxOf(0, items[idx].currentStock - quantityToDeduct))
+        notifyFlow()
     }
 
     override suspend fun deleteById(id: Long) {
         items.removeAll { it.id == id }
+        notifyFlow()
     }
 
     override suspend fun deleteBySku(sku: String) {
         items.removeAll { it.sku == sku }
+        notifyFlow()
     }
 
     override suspend fun deleteAll() {
         items.clear()
+        notifyFlow()
     }
 }
 

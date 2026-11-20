@@ -24,20 +24,29 @@ import androidx.compose.material.icons.filled.FileDownload
 import androidx.compose.material.icons.filled.LocalShipping
 import androidx.compose.material.icons.filled.Logout
 import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -45,10 +54,13 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.data.remote.config.AuthExecutionMode
 import com.example.domain.model.UserRole
 import com.example.domain.model.AuthUser
 import com.example.domain.model.AccountStatus
 import com.example.ui.components.AppTopBar
+import com.example.ui.components.BackendConfigDialog
+import com.example.ui.components.BackendStatusBar
 
 import android.content.res.Configuration
 import androidx.compose.ui.tooling.preview.Preview
@@ -71,6 +83,10 @@ fun ProfileSettingsScreen(
         onNavigateToCsv = onNavigateToCsv,
         onNavigateToAdminUsers = onNavigateToAdminUsers,
         onToggleDarkTheme = { viewModel.setDarkTheme(it) },
+        onSelectAuthMode = { viewModel.setAuthExecutionMode(it) },
+        onConfigureBackendUrl = { viewModel.configureBackendUrl(it) },
+        onSyncFromBackend = { viewModel.syncFromBackend() },
+        onClearMessages = { viewModel.clearMessages() },
         onLogout = { viewModel.logout(onLoggedOut) }
     )
 }
@@ -84,11 +100,26 @@ fun ProfileSettingsContent(
     onNavigateToCsv: () -> Unit,
     onNavigateToAdminUsers: () -> Unit,
     onToggleDarkTheme: (Boolean) -> Unit,
+    onSelectAuthMode: (AuthExecutionMode) -> Unit = {},
+    onConfigureBackendUrl: (String) -> Unit = {},
+    onSyncFromBackend: () -> Unit = {},
+    onClearMessages: () -> Unit = {},
     onLogout: () -> Unit
 ) {
     val user = uiState.currentUser
+    val snackbarHostState = remember { SnackbarHostState() }
+    var showBackendDialog by remember { mutableStateOf(false) }
+
+    LaunchedEffect(uiState.errorMessage, uiState.successMessage) {
+        val msg = uiState.errorMessage ?: uiState.successMessage
+        if (msg != null) {
+            snackbarHostState.showSnackbar(msg)
+            onClearMessages()
+        }
+    }
 
     Scaffold(
+        snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
             AppTopBar(
                 title = "Settings & Profile",
@@ -169,6 +200,46 @@ fun ProfileSettingsContent(
                 }
             }
 
+            // Backend API & Sync Configuration
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Text(
+                        text = "Backend API & Sync",
+                        fontWeight = FontWeight.Bold,
+                        style = MaterialTheme.typography.titleSmall
+                    )
+                    BackendStatusBar(
+                        authExecutionMode = uiState.authExecutionMode,
+                        backendBaseUrl = uiState.backendBaseUrl,
+                        isBackendConfigured = uiState.isBackendConfigured,
+                        onConfigureClick = { showBackendDialog = true }
+                    )
+                    OutlinedButton(
+                        onClick = onSyncFromBackend,
+                        enabled = !uiState.isSyncing,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("sync_backend_button")
+                    ) {
+                        if (uiState.isSyncing) {
+                            CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("Syncing...")
+                        } else {
+                            Icon(Icons.Default.Sync, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("Sync Catalogue, Orders & Alerts")
+                        }
+                    }
+                }
+            }
+
             // Navigation Links
             Text("Business Operations", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleSmall)
 
@@ -213,6 +284,16 @@ fun ProfileSettingsContent(
                 Text("Log Out / Switch Account", fontWeight = FontWeight.Bold)
             }
         }
+    }
+
+    if (showBackendDialog) {
+        BackendConfigDialog(
+            currentMode = uiState.authExecutionMode,
+            currentBaseUrl = uiState.backendBaseUrl,
+            onDismiss = { showBackendDialog = false },
+            onSelectMode = onSelectAuthMode,
+            onSaveBaseUrl = onConfigureBackendUrl
+        )
     }
 }
 

@@ -19,9 +19,11 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
@@ -31,6 +33,7 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.ReceiptLong
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Clear
@@ -41,12 +44,13 @@ import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.LocalShipping
 import androidx.compose.material.icons.filled.Medication
 import androidx.compose.material.icons.filled.Percent
-import androidx.compose.material.icons.filled.ReceiptLong
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.ShoppingCartCheckout
 import androidx.compose.material.icons.filled.Storefront
+import androidx.compose.material.icons.filled.SyncProblem
 import androidx.compose.material.icons.filled.Verified
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -80,7 +84,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
@@ -91,8 +94,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.example.domain.model.EffectivePriceCalculation
 import com.example.domain.repository.BasketItemDetail
 import com.example.domain.repository.BasketWithDetails
 import com.example.ui.components.EmptyState
@@ -120,26 +123,32 @@ data class SelectedPharmaceuticalProduct(
     val unitPricePtr: Double, // Price To Retailer
     val mrp: Double,
     val moq: Int = 1,
+    val availableQuantity: Int = 99999,
     val quantity: Int,
     val freeQuantity: Int = 0,
     val schemeDescription: String = "",
     val supplierName: String,
-    val discountPercent: Double = 0.0
+    val discountPercent: Double = 0.0,
+    val pricingGrossAmount: Double? = null,
+    val pricingDiscountAmount: Double? = null,
+    val pricingTaxableAmount: Double? = null,
+    val pricingGstAmount: Double? = null,
+    val pricingTotalAmount: Double? = null
 ) {
     val lineGrossAmount: Double
-        get() = unitPricePtr * quantity
+        get() = pricingGrossAmount ?: (unitPricePtr * quantity)
 
     val lineDiscountAmount: Double
-        get() = lineGrossAmount * (discountPercent / 100.0)
+        get() = pricingDiscountAmount ?: (lineGrossAmount * (discountPercent / 100.0))
 
     val lineTaxableAmount: Double
-        get() = lineGrossAmount - lineDiscountAmount
+        get() = pricingTaxableAmount ?: (lineGrossAmount - lineDiscountAmount)
 
     val lineGstAmount: Double
-        get() = lineTaxableAmount * (gstRatePercent / 100.0)
+        get() = pricingGstAmount ?: (lineTaxableAmount * (gstRatePercent / 100.0))
 
     val lineTotalAmount: Double
-        get() = lineTaxableAmount + lineGstAmount
+        get() = pricingTotalAmount ?: (lineTaxableAmount + lineGstAmount)
 
     val retailMarginPercent: Double
         get() = if (mrp > 0) ((mrp - unitPricePtr) / mrp) * 100.0 else 0.0
@@ -161,13 +170,15 @@ data class OrderValueSummary(
     val grandTotal: Double
 ) {
     val isFreeDeliveryUnlocked: Boolean
-        get() = grossSubtotal >= freeDeliveryThreshold
+        get() = totalItemsCount > 0 && deliveryCharge <= 0.0
 
     val amountNeededForFreeDelivery: Double
-        get() = (freeDeliveryThreshold - grossSubtotal).coerceAtLeast(0.0)
+        get() = if (isFreeDeliveryUnlocked) 0.0 else (freeDeliveryThreshold - netTaxableAmount).coerceAtLeast(0.0)
 
     val deliveryProgress: Float
-        get() = (grossSubtotal / freeDeliveryThreshold).toFloat().coerceIn(0f, 1f)
+        get() = if (isFreeDeliveryUnlocked) 1f else if (freeDeliveryThreshold > 0.0) {
+            (netTaxableAmount / freeDeliveryThreshold).toFloat().coerceIn(0f, 1f)
+        } else 1f
 }
 
 /**
@@ -184,14 +195,29 @@ fun SelectedProductsOrderSummaryScreen(
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val basket = uiState.basket
+    val basketRevision = uiState.basketRevision
 
-    val selectedProducts = remember(basket) {
+    val selectedProducts = remember(basket, basketRevision) {
         basket?.items?.map { it.toSelectedPharmaceuticalProduct() } ?: emptyList()
     }
 
     SelectedProductsScreenContent(
         products = selectedProducts,
+        basket = basket,
+        basketRevision = basketRevision,
         isLoading = uiState.isLoading,
+        syncErrorMessage = uiState.syncErrorMessage,
+        errorMessage = uiState.errorMessage,
+        successMessage = uiState.successMessage,
+        messageNonce = uiState.messageNonce,
+        onClearMessages = { viewModel.clearMessages() },
+        onRetrySync = { viewModel.refreshBasket() },
+        onAdjustQuantity = { itemId, delta ->
+            viewModel.adjustQuantity(itemId, delta)
+        },
+        onQuickAdd = { itemId, preset ->
+            viewModel.quickAddQuantity(itemId, preset)
+        },
         onQuantityChanged = { itemId, newQty ->
             viewModel.updateQuantity(itemId, newQty)
         },
@@ -216,7 +242,17 @@ fun SelectedProductsOrderSummaryScreen(
 @Composable
 fun SelectedProductsScreenContent(
     products: List<SelectedPharmaceuticalProduct>,
+    basket: BasketWithDetails? = null,
+    basketRevision: Long = 0L,
     isLoading: Boolean = false,
+    syncErrorMessage: String? = null,
+    errorMessage: String? = null,
+    successMessage: String? = null,
+    messageNonce: Long = 0L,
+    onClearMessages: () -> Unit = {},
+    onRetrySync: () -> Unit = {},
+    onAdjustQuantity: ((Long, Int) -> Unit)? = null,
+    onQuickAdd: ((Long, Int) -> Unit)? = null,
     onQuantityChanged: (Long, Int) -> Unit,
     onRemoveItem: (Long) -> Unit,
     onClearAll: () -> Unit,
@@ -228,15 +264,38 @@ fun SelectedProductsScreenContent(
     val snackbarHostState = remember { SnackbarHostState() }
     var searchQuery by remember { mutableStateOf("") }
     var showClearConfirmDialog by remember { mutableStateOf(false) }
-    var itemPendingRemoval by remember { mutableStateOf<SelectedPharmaceuticalProduct?>(null) }
+    var itemPendingRemovalId by remember { mutableStateOf<Long?>(null) }
+    val itemPendingRemoval = itemPendingRemovalId?.let { pendingId ->
+        products.firstOrNull { it.itemId == pendingId }
+    }
 
-    // Summary calculations
-    val summary = remember(products) {
-        calculateOrderValueSummary(products)
+    LaunchedEffect(errorMessage, messageNonce) {
+        errorMessage?.let {
+            snackbarHostState.currentSnackbarData?.dismiss()
+            snackbarHostState.showSnackbar(it)
+            onClearMessages()
+        }
+    }
+
+    LaunchedEffect(successMessage, messageNonce) {
+        successMessage?.let {
+            snackbarHostState.currentSnackbarData?.dismiss()
+            snackbarHostState.showSnackbar(it)
+            onClearMessages()
+        }
+    }
+
+    // Single-source-of-truth order summary derived directly from the latest basket state
+    val summary = remember(basket, products, basketRevision) {
+        if (basket != null) {
+            calculateOrderValueSummaryFromBasket(basket, products)
+        } else {
+            calculateOrderValueSummary(products)
+        }
     }
 
     // Filtered list
-    val filteredProducts = remember(products, searchQuery) {
+    val filteredProducts = remember(products, searchQuery, basketRevision) {
         if (searchQuery.isBlank()) {
             products
         } else {
@@ -264,9 +323,10 @@ fun SelectedProductsScreenContent(
                             overflow = TextOverflow.Ellipsis
                         )
                         Text(
-                            text = "${products.size} pharmaceutical item(s) selected",
+                            text = "${summary.totalItemsCount} item(s) • ${summary.totalUnitsCount} total units",
                             style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.testTag("selected_products_header_summary")
                         )
                     }
                 },
@@ -339,6 +399,52 @@ fun SelectedProductsScreenContent(
                 contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
                 verticalArrangement = Arrangement.spacedBy(14.dp)
             ) {
+                // Sync error banner when backend refresh fails
+                syncErrorMessage?.let { syncErr ->
+                    item(key = "selected_products_sync_error") {
+                        Surface(
+                            color = MaterialTheme.colorScheme.errorContainer,
+                            shape = RoundedCornerShape(10.dp),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("selected_products_sync_error_banner")
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(12.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Row(
+                                    modifier = Modifier.weight(1f),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.SyncProblem,
+                                        contentDescription = "Sync Issue",
+                                        tint = MaterialTheme.colorScheme.onErrorContainer,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text(
+                                        text = "Sync issue: $syncErr",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onErrorContainer
+                                    )
+                                }
+                                TextButton(onClick = onRetrySync) {
+                                    Icon(
+                                        imageVector = Icons.Default.Refresh,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text("Retry", fontWeight = FontWeight.Bold)
+                                }
+                            }
+                        }
+                    }
+                }
+
                 // Free Delivery Progress Banner
                 item(key = "free_delivery_progress") {
                     FreeDeliveryProgressBanner(summary = summary)
@@ -390,7 +496,8 @@ fun SelectedProductsScreenContent(
                     item(key = "supplier_header_$supplierName") {
                         SupplierHeaderRow(
                             supplierName = supplierName,
-                            itemCount = supplierProducts.size
+                            itemCount = supplierProducts.size,
+                            totalUnits = supplierProducts.sumOf { it.quantity }
                         )
                     }
 
@@ -400,15 +507,36 @@ fun SelectedProductsScreenContent(
                     ) { item ->
                         SelectedProductItemCard(
                             product = item,
+                            onAdjustQuantity = { delta ->
+                                if (onAdjustQuantity != null) {
+                                    onAdjustQuantity(item.itemId, delta)
+                                } else {
+                                    val next = item.quantity + delta
+                                    if (next <= 0) {
+                                        itemPendingRemovalId = item.itemId
+                                    } else {
+                                        onQuantityChanged(item.itemId, next)
+                                    }
+                                }
+                            },
+                            onQuickAdd = { preset ->
+                                if (onQuickAdd != null) {
+                                    onQuickAdd(item.itemId, preset)
+                                } else if (onAdjustQuantity != null) {
+                                    onAdjustQuantity(item.itemId, preset)
+                                } else {
+                                    onQuantityChanged(item.itemId, item.quantity + preset)
+                                }
+                            },
                             onQuantityChanged = { newQty ->
                                 if (newQty <= 0) {
-                                    itemPendingRemoval = item
+                                    itemPendingRemovalId = item.itemId
                                 } else {
                                     onQuantityChanged(item.itemId, newQty)
                                 }
                             },
                             onRemoveClick = {
-                                itemPendingRemoval = item
+                                itemPendingRemovalId = item.itemId
                             }
                         )
                     }
@@ -427,7 +555,8 @@ fun SelectedProductsScreenContent(
     // Confirmation Dialog for Item Removal
     itemPendingRemoval?.let { item ->
         AlertDialog(
-            onDismissRequest = { itemPendingRemoval = null },
+            onDismissRequest = { itemPendingRemovalId = null },
+            properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false),
             icon = {
                 Icon(
                     imageVector = Icons.Default.DeleteOutline,
@@ -446,7 +575,7 @@ fun SelectedProductsScreenContent(
                 Button(
                     onClick = {
                         onRemoveItem(item.itemId)
-                        itemPendingRemoval = null
+                        itemPendingRemovalId = null
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
                     modifier = Modifier.testTag("confirm_remove_item_button")
@@ -455,7 +584,7 @@ fun SelectedProductsScreenContent(
                 }
             },
             dismissButton = {
-                OutlinedButton(onClick = { itemPendingRemoval = null }) {
+                OutlinedButton(onClick = { itemPendingRemovalId = null }) {
                     Text("Keep Item")
                 }
             }
@@ -466,6 +595,7 @@ fun SelectedProductsScreenContent(
     if (showClearConfirmDialog) {
         AlertDialog(
             onDismissRequest = { showClearConfirmDialog = false },
+            properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false),
             icon = {
                 Icon(
                     imageVector = Icons.Default.Delete,
@@ -507,7 +637,9 @@ fun SelectedProductItemCard(
     product: SelectedPharmaceuticalProduct,
     onQuantityChanged: (Int) -> Unit,
     onRemoveClick: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    onAdjustQuantity: ((Int) -> Unit)? = null,
+    onQuickAdd: ((Int) -> Unit)? = null
 ) {
     Card(
         shape = RoundedCornerShape(16.dp),
@@ -724,11 +856,27 @@ fun SelectedProductItemCard(
 
                 // Interactive Quantity Adjuster Controls
                 QuantityAdjustControls(
+                    itemId = product.itemId,
                     quantity = product.quantity,
                     moq = product.moq,
-                    onQuantityChanged = onQuantityChanged
+                    availableQuantity = product.availableQuantity,
+                    onAdjustQuantity = { delta ->
+                        if (onAdjustQuantity != null) {
+                            onAdjustQuantity(delta)
+                        } else {
+                            onQuantityChanged(product.quantity + delta)
+                        }
+                    },
+                    onQuantityChanged = onQuantityChanged,
+                    onRequestRemove = onRemoveClick
                 )
             }
+
+            Text(
+                text = "MOQ: ${product.moq} • Available stock: ${product.availableQuantity}",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.outline
+            )
 
             // Quick Wholesale Batch Preset Chips (+10, +25, +50, +100)
             Spacer(modifier = Modifier.height(8.dp))
@@ -736,7 +884,7 @@ fun SelectedProductItemCard(
                 modifier = Modifier
                     .fillMaxWidth()
                     .horizontalScroll(rememberScrollState()),
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
@@ -746,28 +894,65 @@ fun SelectedProductItemCard(
                 )
                 listOf(10, 25, 50, 100).forEach { preset ->
                     Surface(
+                        onClick = {
+                            if (onQuickAdd != null) {
+                                onQuickAdd(preset)
+                            } else if (onAdjustQuantity != null) {
+                                onAdjustQuantity(preset)
+                            } else {
+                                onQuantityChanged(product.quantity + preset)
+                            }
+                        },
                         shape = RoundedCornerShape(8.dp),
-                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
-                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                        color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f),
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.35f)),
                         modifier = Modifier
-                            .clickable { onQuantityChanged(product.quantity + preset) }
+                            .heightIn(min = 44.dp)
+                            .widthIn(min = 52.dp)
                             .testTag("quick_add_${preset}_${product.itemId}")
                     ) {
-                        Text(
-                            text = "+$preset",
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-                        )
+                        Box(
+                            contentAlignment = Alignment.Center,
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
+                        ) {
+                            Text(
+                                text = "+$preset",
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.primary,
+                                maxLines = 1,
+                                softWrap = false
+                            )
+                        }
                     }
                 }
-                Spacer(modifier = Modifier.weight(1f))
+            }
+
+            // Dedicated Product Subtotal Row (always visible, never clipped by horizontal scroll)
+            Spacer(modifier = Modifier.height(8.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "Taxable: ${Formatters.formatInr(product.lineTaxableAmount)} • GST ${String.format("%.0f", product.gstRatePercent)}%: ${Formatters.formatInr(product.lineGstAmount)}",
+                    fontSize = 11.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier
+                        .weight(1f)
+                        .testTag("product_taxable_${product.itemId}")
+                )
+                Spacer(modifier = Modifier.width(8.dp))
                 Text(
                     text = "Subtotal: ${Formatters.formatInr(product.lineTotalAmount)}",
                     fontSize = 12.sp,
                     fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.onSurface
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1,
+                    modifier = Modifier.testTag("product_subtotal_${product.itemId}")
                 )
             }
         }
@@ -782,24 +967,40 @@ fun QuantityAdjustControls(
     quantity: Int,
     moq: Int,
     onQuantityChanged: (Int) -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    itemId: Long = 0L,
+    availableQuantity: Int = 99999,
+    onAdjustQuantity: ((Int) -> Unit)? = null,
+    onRequestRemove: (() -> Unit)? = null
 ) {
     var showEditDialog by remember { mutableStateOf(false) }
+    val minusTag = if (itemId > 0L) "quantity_minus_$itemId" else "quantity_minus_button"
+    val displayTag = if (itemId > 0L) "quantity_display_$itemId" else "quantity_display_pill"
+    val plusTag = if (itemId > 0L) "quantity_plus_$itemId" else "quantity_plus_button"
 
     Row(
         modifier = modifier,
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(6.dp)
+        horizontalArrangement = Arrangement.spacedBy(4.dp)
     ) {
         // Decrement button
         IconButton(
             onClick = {
-                val newQty = quantity - 1
-                onQuantityChanged(newQty)
+                if (quantity <= 1) {
+                    if (onRequestRemove != null) {
+                        onRequestRemove()
+                    } else {
+                        onQuantityChanged(0)
+                    }
+                } else if (onAdjustQuantity != null) {
+                    onAdjustQuantity(-1)
+                } else {
+                    onQuantityChanged(quantity - 1)
+                }
             },
             modifier = Modifier
                 .size(48.dp)
-                .testTag("quantity_minus_button")
+                .testTag(minusTag)
         ) {
             Surface(
                 shape = CircleShape,
@@ -820,22 +1021,27 @@ fun QuantityAdjustControls(
 
         // Clickable quantity pill (tap to enter number directly)
         Surface(
+            onClick = { showEditDialog = true },
             shape = RoundedCornerShape(8.dp),
             color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f),
             border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.5f)),
             modifier = Modifier
-                .width(54.dp)
-                .height(34.dp)
-                .clickable { showEditDialog = true }
-                .testTag("quantity_display_pill")
+                .widthIn(min = 56.dp)
+                .height(36.dp)
+                .testTag(displayTag)
         ) {
-            Box(contentAlignment = Alignment.Center) {
+            Box(
+                contentAlignment = Alignment.Center,
+                modifier = Modifier.padding(horizontal = 8.dp)
+            ) {
                 Text(
                     text = "$quantity",
                     style = MaterialTheme.typography.bodyMedium,
                     fontWeight = FontWeight.Bold,
                     color = MaterialTheme.colorScheme.onSurface,
-                    textAlign = TextAlign.Center
+                    textAlign = TextAlign.Center,
+                    maxLines = 1,
+                    softWrap = false
                 )
             }
         }
@@ -843,11 +1049,15 @@ fun QuantityAdjustControls(
         // Increment button
         IconButton(
             onClick = {
-                onQuantityChanged(quantity + 1)
+                if (onAdjustQuantity != null) {
+                    onAdjustQuantity(1)
+                } else {
+                    onQuantityChanged(quantity + 1)
+                }
             },
             modifier = Modifier
                 .size(48.dp)
-                .testTag("quantity_plus_button")
+                .testTag(plusTag)
         ) {
             Surface(
                 shape = CircleShape,
@@ -868,46 +1078,67 @@ fun QuantityAdjustControls(
 
     // Direct Quantity Input Dialog
     if (showEditDialog) {
-        var textValue by remember { mutableStateOf(quantity.toString()) }
-        val focusManager = LocalFocusManager.current
+        var textValue by remember(quantity, showEditDialog) { mutableStateOf(quantity.toString()) }
+        var inlineError by remember(showEditDialog) { mutableStateOf<String?>(null) }
+
+        val submitDirectQuantity: () -> Unit = {
+            val parsed = textValue.trim().toIntOrNull()
+            when {
+                parsed == null -> inlineError = "Enter a valid whole number."
+                parsed <= 0 -> inlineError = "Quantity must be at least 1."
+                parsed < moq -> inlineError = "Minimum order quantity is $moq units."
+                parsed > availableQuantity -> inlineError = "Exceeds available stock ($availableQuantity units)."
+                else -> {
+                    onQuantityChanged(parsed)
+                    showEditDialog = false
+                }
+            }
+        }
 
         AlertDialog(
             onDismissRequest = { showEditDialog = false },
+            properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false),
             title = { Text("Set Order Quantity") },
             text = {
-                Column {
-                    Text("Enter wholesale order quantity (Units):", style = MaterialTheme.typography.bodySmall)
-                    Spacer(modifier = Modifier.height(8.dp))
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        text = "Enter wholesale order quantity (MOQ: $moq • Available: $availableQuantity units):",
+                        style = MaterialTheme.typography.bodySmall
+                    )
                     OutlinedTextField(
                         value = textValue,
                         onValueChange = { input ->
                             if (input.all { it.isDigit() }) {
                                 textValue = input
+                                inlineError = null
                             }
                         },
+                        isError = inlineError != null,
                         keyboardOptions = KeyboardOptions(
                             keyboardType = KeyboardType.Number,
                             imeAction = ImeAction.Done
                         ),
                         keyboardActions = KeyboardActions(
-                            onDone = {
-                                val parsed = textValue.toIntOrNull() ?: quantity
-                                onQuantityChanged(parsed.coerceAtLeast(1))
-                                showEditDialog = false
-                            }
+                            onDone = { submitDirectQuantity() }
                         ),
                         singleLine = true,
-                        modifier = Modifier.fillMaxWidth().testTag("direct_quantity_input_field")
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("direct_quantity_input_field")
                     )
+                    if (inlineError != null) {
+                        Text(
+                            text = inlineError!!,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error
+                        )
+                    }
                 }
             },
             confirmButton = {
                 Button(
-                    onClick = {
-                        val parsed = textValue.toIntOrNull() ?: quantity
-                        onQuantityChanged(parsed.coerceAtLeast(1))
-                        showEditDialog = false
-                    }
+                    onClick = submitDirectQuantity,
+                    modifier = Modifier.testTag("confirm_direct_quantity_button")
                 ) {
                     Text("Update")
                 }
@@ -987,6 +1218,7 @@ fun FreeDeliveryProgressBanner(
 fun SupplierHeaderRow(
     supplierName: String,
     itemCount: Int,
+    totalUnits: Int = 0,
     modifier: Modifier = Modifier
 ) {
     Row(
@@ -1024,7 +1256,7 @@ fun SupplierHeaderRow(
             color = MaterialTheme.colorScheme.surfaceVariant
         ) {
             Text(
-                text = "$itemCount item(s)",
+                text = if (totalUnits > 0) "$itemCount item(s) • $totalUnits units" else "$itemCount item(s)",
                 fontSize = 11.sp,
                 fontWeight = FontWeight.SemiBold,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -1061,7 +1293,7 @@ fun DetailedOrderValueSummaryCard(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Icon(
-                    imageVector = Icons.Default.ReceiptLong,
+                    imageVector = Icons.AutoMirrored.Filled.ReceiptLong,
                     contentDescription = null,
                     tint = MaterialTheme.colorScheme.primary,
                     modifier = Modifier.size(18.dp)
@@ -1078,8 +1310,9 @@ fun DetailedOrderValueSummaryCard(
 
             // Gross Subtotal (PTR Value)
             SummaryRow(
-                label = "Gross Subtotal (${summary.totalUnitsCount} Units)",
-                value = Formatters.formatInr(summary.grossSubtotal)
+                label = "Gross Subtotal (${summary.totalItemsCount} items • ${summary.totalUnitsCount} units)",
+                value = Formatters.formatInr(summary.grossSubtotal),
+                valueTestTag = "summary_gross_subtotal"
             )
 
             // Scheme Savings & Bonus Units
@@ -1087,27 +1320,31 @@ fun DetailedOrderValueSummaryCard(
                 SummaryRow(
                     label = "Scheme Discounts (${summary.totalFreeUnitsCount} Free Units)",
                     value = "-${Formatters.formatInr(summary.schemeSavings)}",
-                    valueColor = Color(0xFF15803D)
+                    valueColor = Color(0xFF15803D),
+                    valueTestTag = "summary_scheme_savings"
                 )
             }
 
             // Net Taxable Value
             SummaryRow(
                 label = "Taxable Turnover",
-                value = Formatters.formatInr(summary.netTaxableAmount)
+                value = Formatters.formatInr(summary.netTaxableAmount),
+                valueTestTag = "summary_net_taxable"
             )
 
             // GST Breakdown
             SummaryRow(
-                label = "Pharma GST (CGST + SGST 12%)",
-                value = Formatters.formatInr(summary.gstAmount)
+                label = "Pharma GST (CGST + SGST)",
+                value = Formatters.formatInr(summary.gstAmount),
+                valueTestTag = "summary_gst_amount"
             )
 
             // Delivery Charge
             SummaryRow(
                 label = "Delivery / Freight",
                 value = if (summary.isFreeDeliveryUnlocked) "FREE" else Formatters.formatInr(summary.deliveryCharge),
-                valueColor = if (summary.isFreeDeliveryUnlocked) Color(0xFF15803D) else MaterialTheme.colorScheme.onSurface
+                valueColor = if (summary.isFreeDeliveryUnlocked) Color(0xFF15803D) else MaterialTheme.colorScheme.onSurface,
+                valueTestTag = "summary_delivery_charge"
             )
 
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
@@ -1135,7 +1372,8 @@ fun DetailedOrderValueSummaryCard(
                     text = Formatters.formatInr(summary.grandTotal),
                     style = MaterialTheme.typography.titleLarge,
                     fontWeight = FontWeight.ExtraBold,
-                    color = MaterialTheme.colorScheme.primary
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.testTag("summary_grand_total")
                 )
             }
         }
@@ -1156,7 +1394,9 @@ fun TotalOrderValueStickyBottomBar(
         tonalElevation = 6.dp,
         shadowElevation = 8.dp,
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
-        modifier = modifier.fillMaxWidth()
+        modifier = modifier
+            .fillMaxWidth()
+            .navigationBarsPadding()
     ) {
         Row(
             modifier = Modifier
@@ -1167,15 +1407,17 @@ fun TotalOrderValueStickyBottomBar(
         ) {
             Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    text = "Total Order Value",
+                    text = "Total Order Value (${summary.totalItemsCount} items • ${summary.totalUnitsCount} units)",
                     style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.testTag("sticky_item_units_summary")
                 )
                 Text(
                     text = Formatters.formatInr(summary.grandTotal),
                     style = MaterialTheme.typography.titleLarge,
                     fontWeight = FontWeight.ExtraBold,
-                    color = MaterialTheme.colorScheme.primary
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.testTag("sticky_total_order_value")
                 )
                 if (summary.schemeSavings > 0) {
                     Text(
@@ -1215,7 +1457,8 @@ fun TotalOrderValueStickyBottomBar(
 private fun SummaryRow(
     label: String,
     value: String,
-    valueColor: Color = MaterialTheme.colorScheme.onSurface
+    valueColor: Color = MaterialTheme.colorScheme.onSurface,
+    valueTestTag: String? = null
 ) {
     Row(
         modifier = Modifier.fillMaxWidth(),
@@ -1231,9 +1474,34 @@ private fun SummaryRow(
             text = value,
             style = MaterialTheme.typography.bodyMedium,
             fontWeight = FontWeight.SemiBold,
-            color = valueColor
+            color = valueColor,
+            modifier = if (valueTestTag != null) Modifier.testTag(valueTestTag) else Modifier
         )
     }
+}
+
+fun calculateOrderValueSummaryFromBasket(
+    basket: BasketWithDetails,
+    products: List<SelectedPharmaceuticalProduct>
+): OrderValueSummary {
+    val totalItems = basket.items.size
+    val totalUnits = basket.items.sumOf { it.quantity }
+    val totalFreeUnits = basket.items.sumOf { it.pricing.freeQuantity }
+    val grossSubtotal = basket.items.sumOf { it.pricing.grossAmount }
+    val freeThreshold = basket.supplierSubtotals.values.sumOf { it.freeDeliveryThreshold }
+        .takeIf { it > 0.0 } ?: 5000.0
+    return OrderValueSummary(
+        totalItemsCount = totalItems,
+        totalUnitsCount = totalUnits,
+        totalFreeUnitsCount = totalFreeUnits,
+        grossSubtotal = grossSubtotal,
+        schemeSavings = basket.totalSavings,
+        netTaxableAmount = basket.subtotal,
+        gstAmount = basket.totalGst,
+        deliveryCharge = basket.totalDeliveryCharges,
+        freeDeliveryThreshold = freeThreshold,
+        grandTotal = basket.grandTotal
+    )
 }
 
 /**
@@ -1284,11 +1552,17 @@ fun BasketItemDetail.toSelectedPharmaceuticalProduct(): SelectedPharmaceuticalPr
         unitPricePtr = this.unitPricePtr,
         mrp = this.mrp,
         moq = this.moq,
+        availableQuantity = this.availableQuantity,
         quantity = this.quantity,
         freeQuantity = this.pricing.freeQuantity,
         schemeDescription = this.schemeDescription,
         supplierName = this.supplierName,
-        discountPercent = this.pricing.savingsPercent
+        discountPercent = this.pricing.savingsPercent,
+        pricingGrossAmount = this.pricing.grossAmount,
+        pricingDiscountAmount = this.pricing.savingsAmount,
+        pricingTaxableAmount = this.pricing.netAmount,
+        pricingGstAmount = this.pricing.gstAmount,
+        pricingTotalAmount = this.pricing.totalWithGst
     )
 }
 

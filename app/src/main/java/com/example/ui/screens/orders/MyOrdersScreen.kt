@@ -39,7 +39,9 @@ import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.Vaccines
 import androidx.compose.material.icons.filled.Verified
 import androidx.compose.material.icons.outlined.Person
+import androidx.compose.material.icons.outlined.ShoppingCart
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Badge
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -85,6 +87,7 @@ fun MyOrdersScreen(
     viewModel: OrdersViewModel,
     onNavigateBack: () -> Unit,
     onOrderClick: (Long) -> Unit,
+    onNavigateToBasket: () -> Unit = {},
     onNavigateToDashboard: () -> Unit = {},
     onNavigateToCatalogue: () -> Unit = {},
     onNavigateToOcr: () -> Unit = {},
@@ -105,6 +108,7 @@ fun MyOrdersScreen(
                 onNavigateToCatalogue()
             }
         },
+        onNavigateToBasket = onNavigateToBasket,
         onNavigateToDashboard = onNavigateToDashboard,
         onNavigateToCatalogue = onNavigateToCatalogue,
         onNavigateToOcr = onNavigateToOcr,
@@ -123,6 +127,7 @@ fun MyOrdersContent(
     onSelectSortOption: (String) -> Unit,
     onSelectViewMode: (String) -> Unit = {},
     onReorderClick: ((Long) -> Unit)? = null,
+    onNavigateToBasket: () -> Unit = {},
     onNavigateToDashboard: () -> Unit = {},
     onNavigateToCatalogue: () -> Unit = {},
     onNavigateToOcr: () -> Unit = {},
@@ -146,76 +151,80 @@ fun MyOrdersContent(
         topBar = {
             Column {
                 OrderPipelineTopBar(
-                    onBackClick = onNavigateBack
+                    onBackClick = onNavigateBack,
+                    cartItemCount = uiState.cartItemCount,
+                    onBasketClick = onNavigateToBasket
                 )
 
-                // View Mode Toggle: Order History (Room) vs Live Manufacturing Pipeline
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 6.dp)
-                        .background(Color(0xFFE2E8F0), RoundedCornerShape(12.dp))
-                        .padding(3.dp),
-                    horizontalArrangement = Arrangement.spacedBy(4.dp)
-                ) {
-                    val isHistory = uiState.activeViewMode == "HISTORY"
-                    Surface(
-                        shape = RoundedCornerShape(9.dp),
-                        color = if (isHistory) Color.White else Color.Transparent,
-                        shadowElevation = if (isHistory) 1.dp else 0.dp,
+                if (uiState.isLivePipelineAuthorized) {
+                    // View Mode Toggle: Order History (Room) vs Live Manufacturing Pipeline
+                    Row(
                         modifier = Modifier
-                            .weight(1f)
-                            .clickable { onSelectViewMode("HISTORY") }
-                            .testTag("tab_order_history_mode")
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 6.dp)
+                            .background(Color(0xFFE2E8F0), RoundedCornerShape(12.dp))
+                            .padding(3.dp),
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
                     ) {
-                        Row(
-                            modifier = Modifier.padding(vertical = 8.dp),
-                            horizontalArrangement = Arrangement.Center,
-                            verticalAlignment = Alignment.CenterVertically
+                        val isHistory = uiState.activeViewMode == "HISTORY"
+                        Surface(
+                            shape = RoundedCornerShape(9.dp),
+                            color = if (isHistory) Color.White else Color.Transparent,
+                            shadowElevation = if (isHistory) 1.dp else 0.dp,
+                            modifier = Modifier
+                                .weight(1f)
+                                .clickable { onSelectViewMode("HISTORY") }
+                                .testTag("tab_order_history_mode")
                         ) {
-                            Icon(
-                                imageVector = Icons.Default.ReceiptLong,
-                                contentDescription = null,
-                                tint = if (isHistory) Color(0xFF1D64EC) else Color(0xFF64748B),
-                                modifier = Modifier.size(16.dp)
-                            )
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text(
-                                text = "Order History (${uiState.transactions.size})",
-                                fontSize = 13.sp,
-                                fontWeight = if (isHistory) FontWeight.Bold else FontWeight.Medium,
-                                color = if (isHistory) Color(0xFF1D64EC) else Color(0xFF64748B)
-                            )
+                            Row(
+                                modifier = Modifier.padding(vertical = 8.dp),
+                                horizontalArrangement = Arrangement.Center,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.ReceiptLong,
+                                    contentDescription = null,
+                                    tint = if (isHistory) Color(0xFF1D64EC) else Color(0xFF64748B),
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = "Order History (${uiState.transactions.size})",
+                                    fontSize = 13.sp,
+                                    fontWeight = if (isHistory) FontWeight.Bold else FontWeight.Medium,
+                                    color = if (isHistory) Color(0xFF1D64EC) else Color(0xFF64748B)
+                                )
+                            }
                         }
-                    }
 
-                    Surface(
-                        shape = RoundedCornerShape(9.dp),
-                        color = if (!isHistory) Color.White else Color.Transparent,
-                        shadowElevation = if (!isHistory) 1.dp else 0.dp,
-                        modifier = Modifier
-                            .weight(1f)
-                            .clickable { onSelectViewMode("PIPELINE") }
-                            .testTag("tab_pipeline_mode")
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(vertical = 8.dp),
-                            horizontalArrangement = Arrangement.Center,
-                            verticalAlignment = Alignment.CenterVertically
+                        Surface(
+                            shape = RoundedCornerShape(9.dp),
+                            color = if (!isHistory) Color.White else Color.Transparent,
+                            shadowElevation = if (!isHistory) 1.dp else 0.dp,
+                            modifier = Modifier
+                                .weight(1f)
+                                .clickable { onSelectViewMode("PIPELINE") }
+                                .testTag("tab_pipeline_mode")
                         ) {
-                            Icon(
-                                imageVector = Icons.Default.LocalShipping,
-                                contentDescription = null,
-                                tint = if (!isHistory) Color(0xFF1D64EC) else Color(0xFF64748B),
-                                modifier = Modifier.size(16.dp)
-                            )
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text(
-                                text = "Live Pipeline",
-                                fontSize = 13.sp,
-                                fontWeight = if (!isHistory) FontWeight.Bold else FontWeight.Medium,
-                                color = if (!isHistory) Color(0xFF1D64EC) else Color(0xFF64748B)
-                            )
+                            Row(
+                                modifier = Modifier.padding(vertical = 8.dp),
+                                horizontalArrangement = Arrangement.Center,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.LocalShipping,
+                                    contentDescription = null,
+                                    tint = if (!isHistory) Color(0xFF1D64EC) else Color(0xFF64748B),
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = "Live Pipeline",
+                                    fontSize = 13.sp,
+                                    fontWeight = if (!isHistory) FontWeight.Bold else FontWeight.Medium,
+                                    color = if (!isHistory) Color(0xFF1D64EC) else Color(0xFF64748B)
+                                )
+                            }
                         }
                     }
                 }
@@ -236,7 +245,7 @@ fun MyOrdersContent(
             )
         }
     ) { paddingValues ->
-        if (uiState.activeViewMode == "HISTORY") {
+        if (!uiState.isLivePipelineAuthorized || uiState.activeViewMode == "HISTORY") {
             Box(
                 modifier = Modifier
                     .fillMaxSize()
@@ -250,7 +259,10 @@ fun MyOrdersContent(
                     headerContent = {
                         PipelineHeaderSection(
                             companyName = uiState.currentUser?.businessName ?: "Apex Life Sciences",
-                            activeCount = uiState.transactions.size
+                            activeCount = uiState.transactions.size,
+                            isBuyerHistory = true,
+                            basketCount = uiState.cartItemCount,
+                            onBasketClick = onNavigateToBasket
                         )
                     }
                 )
@@ -496,7 +508,9 @@ fun MyOrdersContent(
 
 @Composable
 private fun OrderPipelineTopBar(
-    onBackClick: () -> Unit
+    onBackClick: () -> Unit,
+    cartItemCount: Int = 0,
+    onBasketClick: () -> Unit = {}
 ) {
     Surface(
         color = Color.White,
@@ -524,8 +538,7 @@ private fun OrderPipelineTopBar(
 
             // Centered PharmaOS Logo
             Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.padding(end = 36.dp)
+                verticalAlignment = Alignment.CenterVertically
             ) {
                 Box(
                     modifier = Modifier
@@ -581,6 +594,49 @@ private fun OrderPipelineTopBar(
             }
 
             Spacer(modifier = Modifier.weight(1f))
+
+            // Basket icon button with live count badge
+            Box(
+                modifier = Modifier.size(48.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                IconButton(
+                    onClick = onBasketClick,
+                    modifier = Modifier
+                        .size(48.dp)
+                        .testTag("orders_basket_button")
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(40.dp)
+                            .clip(CircleShape)
+                            .background(Color(0xFFF1F5F9)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Outlined.ShoppingCart,
+                            contentDescription = "Open Basket ($cartItemCount items)",
+                            tint = Color(0xFF0F172A),
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+                }
+                if (cartItemCount > 0) {
+                    Badge(
+                        containerColor = Color(0xFF2563EB),
+                        contentColor = Color.White,
+                        modifier = Modifier
+                            .align(Alignment.TopEnd)
+                            .padding(top = 2.dp, end = 2.dp)
+                    ) {
+                        Text(
+                            text = if (cartItemCount > 99) "99+" else "$cartItemCount",
+                            fontSize = 10.sp,
+                            modifier = Modifier.testTag("orders_basket_badge")
+                        )
+                    }
+                }
+            }
         }
     }
 }
@@ -592,16 +648,19 @@ private fun OrderPipelineTopBar(
 @Composable
 private fun PipelineHeaderSection(
     companyName: String,
-    activeCount: Int
+    activeCount: Int,
+    isBuyerHistory: Boolean = false,
+    basketCount: Int = 0,
+    onBasketClick: (() -> Unit)? = null
 ) {
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Column {
+        Column(modifier = Modifier.weight(1f)) {
             Text(
-                text = "Order Pipeline 📦",
+                text = if (isBuyerHistory) "My Orders & Invoices" else "Order Pipeline 📦",
                 fontSize = 20.sp,
                 fontWeight = FontWeight.Bold,
                 color = Color(0xFF0F172A)
@@ -612,10 +671,12 @@ private fun PipelineHeaderSection(
                     text = companyName,
                     fontSize = 12.sp,
                     color = Color(0xFF64748B),
-                    fontWeight = FontWeight.Medium
+                    fontWeight = FontWeight.Medium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
                 )
                 Text(
-                    text = " • $activeCount Active Shipments",
+                    text = if (isBuyerHistory) " • $activeCount Orders" else " • $activeCount Active Shipments",
                     fontSize = 12.sp,
                     color = Color(0xFF1D64EC),
                     fontWeight = FontWeight.Bold
@@ -623,30 +684,60 @@ private fun PipelineHeaderSection(
             }
         }
 
-        // Live Dispatch Badge matching reference
-        Surface(
-            shape = RoundedCornerShape(14.dp),
-            color = Color(0xFFEFF6FF),
-            border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFBFDBFE))
-        ) {
-            Row(
-                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-                verticalAlignment = Alignment.CenterVertically
+        if (onBasketClick != null) {
+            Surface(
+                shape = RoundedCornerShape(14.dp),
+                color = Color(0xFFEFF6FF),
+                border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFBFDBFE)),
+                modifier = Modifier
+                    .clickable { onBasketClick() }
+                    .testTag("orders_header_basket_button")
             ) {
-                Box(
-                    modifier = Modifier
-                        .size(6.dp)
-                        .clip(CircleShape)
-                        .background(Color(0xFF1D64EC))
-                )
-                Spacer(modifier = Modifier.width(6.dp))
-                Text(
-                    text = "DISPATCH ON SCHEDULE",
-                    fontSize = 9.5.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = Color(0xFF1D64EC),
-                    letterSpacing = 0.5.sp
-                )
+                Row(
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        imageVector = Icons.Outlined.ShoppingCart,
+                        contentDescription = "Open Basket",
+                        tint = Color(0xFF1D64EC),
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = if (basketCount > 0) "Basket ($basketCount)" else "Basket",
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Color(0xFF1D64EC)
+                    )
+                }
+            }
+        } else {
+            // Live Dispatch Badge matching reference
+            Surface(
+                shape = RoundedCornerShape(14.dp),
+                color = Color(0xFFEFF6FF),
+                border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFBFDBFE))
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(6.dp)
+                            .clip(CircleShape)
+                            .background(Color(0xFF1D64EC))
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = "DISPATCH ON SCHEDULE",
+                        fontSize = 9.5.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Color(0xFF1D64EC),
+                        letterSpacing = 0.5.sp
+                    )
+                }
             }
         }
     }

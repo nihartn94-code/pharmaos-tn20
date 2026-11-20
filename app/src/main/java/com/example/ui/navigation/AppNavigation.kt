@@ -22,10 +22,12 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.example.PharmaApplication
+import com.example.domain.repository.LaunchDestination
 import com.example.ui.PharmaViewModelFactory
 import com.example.ui.screens.auth.AuthViewModel
 import com.example.ui.screens.auth.LoginScreen
 import com.example.ui.screens.auth.RegisterScreen
+import com.example.ui.screens.auth.WelcomeScreen
 import com.example.ui.screens.basket.BasketScreen
 import com.example.ui.screens.basket.BasketViewModel
 import com.example.ui.screens.catalogue.AddEditProductScreen
@@ -84,17 +86,15 @@ fun AppNavigation() {
     ) {
         // Splash
         composable(NavRoutes.SPLASH) {
-            val authViewModel: AuthViewModel = viewModel(factory = factory)
             LaunchedEffect(Unit) {
-                val current = app.repository.getApiUsersMe()
-                if (current != null) {
-                    navController.navigate(NavRoutes.DASHBOARD) {
-                        popUpTo(NavRoutes.SPLASH) { inclusive = true }
-                    }
-                } else {
-                    navController.navigate(NavRoutes.LOGIN) {
-                        popUpTo(NavRoutes.SPLASH) { inclusive = true }
-                    }
+                val targetRoute = when (app.repository.resolveLaunchDestination()) {
+                    LaunchDestination.DASHBOARD -> NavRoutes.DASHBOARD
+                    LaunchDestination.COMPLIANCE_VERIFICATION -> NavRoutes.COMPLIANCE_VERIFICATION
+                    LaunchDestination.LOGIN -> NavRoutes.LOGIN
+                    LaunchDestination.WELCOME -> NavRoutes.WELCOME
+                }
+                navController.navigate(targetRoute) {
+                    popUpTo(NavRoutes.SPLASH) { inclusive = true }
                 }
             }
             Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -102,15 +102,35 @@ fun AppNavigation() {
             }
         }
 
+        // First-time Welcome Screen (shown only before initial account setup is completed)
+        composable(NavRoutes.WELCOME) {
+            WelcomeScreen(
+                onGetStarted = {
+                    navController.navigate(NavRoutes.REGISTER) {
+                        launchSingleTop = true
+                    }
+                },
+                onSignIn = {
+                    navController.navigate(NavRoutes.LOGIN) {
+                        launchSingleTop = true
+                    }
+                }
+            )
+        }
+
         // Auth
         composable(NavRoutes.LOGIN) {
             val authViewModel: AuthViewModel = viewModel(factory = factory)
             LoginScreen(
                 viewModel = authViewModel,
-                onNavigateToRegister = { navController.navigate(NavRoutes.REGISTER) },
+                onNavigateToRegister = {
+                    navController.navigate(NavRoutes.REGISTER) {
+                        launchSingleTop = true
+                    }
+                },
                 onLoginSuccess = {
                     navController.navigate(NavRoutes.DASHBOARD) {
-                        popUpTo(NavRoutes.LOGIN) { inclusive = true }
+                        popUpTo(0) { inclusive = true }
                     }
                 }
             )
@@ -121,14 +141,19 @@ fun AppNavigation() {
             RegisterScreen(
                 viewModel = authViewModel,
                 onNavigateBack = { navController.popBackStack() },
+                onNavigateToLogin = {
+                    navController.navigate(NavRoutes.LOGIN) {
+                        launchSingleTop = true
+                    }
+                },
                 onRegisterSuccess = { role ->
                     if (role == com.example.domain.model.UserRole.ADMIN) {
                         navController.navigate(NavRoutes.DASHBOARD) {
-                            popUpTo(NavRoutes.REGISTER) { inclusive = true }
+                            popUpTo(0) { inclusive = true }
                         }
                     } else {
                         navController.navigate(NavRoutes.COMPLIANCE_VERIFICATION) {
-                            popUpTo(NavRoutes.REGISTER) { inclusive = true }
+                            popUpTo(0) { inclusive = true }
                         }
                     }
                 }
@@ -140,13 +165,17 @@ fun AppNavigation() {
             com.example.ui.screens.compliance.ComplianceVerificationScreen(
                 viewModel = complianceViewModel,
                 onNavigateBack = {
-                    navController.navigate(NavRoutes.DASHBOARD) {
-                        popUpTo(NavRoutes.COMPLIANCE_VERIFICATION) { inclusive = true }
+                    if (navController.previousBackStackEntry != null) {
+                        navController.popBackStack()
+                    } else {
+                        navController.navigate(NavRoutes.DASHBOARD) {
+                            popUpTo(0) { inclusive = true }
+                        }
                     }
                 },
                 onVerificationComplete = {
                     navController.navigate(NavRoutes.DASHBOARD) {
-                        popUpTo(NavRoutes.COMPLIANCE_VERIFICATION) { inclusive = true }
+                        popUpTo(0) { inclusive = true }
                     }
                 }
             )
@@ -235,7 +264,8 @@ fun AppNavigation() {
                 viewModel = catalogueViewModel,
                 onNavigateBack = { navController.popBackStack() },
                 onProductClick = { id -> navController.navigate(NavRoutes.medicineDetails(id)) },
-                onAddOfferClick = { id -> navController.navigate(NavRoutes.addEditOffer(id)) }
+                onAddOfferClick = { id -> navController.navigate(NavRoutes.addEditOffer(id)) },
+                onNavigateToBasket = { navController.navigate(NavRoutes.BASKET) }
             )
         }
 
@@ -280,8 +310,18 @@ fun AppNavigation() {
             )
         }
 
-        composable(NavRoutes.SELECTED_PRODUCTS_SUMMARY) {
-            val basketViewModel: BasketViewModel = viewModel(factory = factory)
+        composable(NavRoutes.SELECTED_PRODUCTS_SUMMARY) { backStackEntry ->
+            val basketOwner = remember(backStackEntry) {
+                try {
+                    navController.getBackStackEntry(NavRoutes.BASKET)
+                } catch (_: IllegalArgumentException) {
+                    backStackEntry
+                }
+            }
+            val basketViewModel: BasketViewModel = viewModel(
+                viewModelStoreOwner = basketOwner,
+                factory = factory
+            )
             SelectedProductsOrderSummaryScreen(
                 viewModel = basketViewModel,
                 onNavigateBack = { navController.popBackStack() },
@@ -329,7 +369,9 @@ fun AppNavigation() {
                 viewModel = ordersViewModel,
                 onNavigateBack = { navController.popBackStack() },
                 onProceedToPayment = { addr, notes ->
-                    navController.navigate(NavRoutes.payment(addr, notes))
+                    navController.navigate(NavRoutes.payment(addr, notes)) {
+                        launchSingleTop = true
+                    }
                 },
                 onOrderPlaced = { ids ->
                     navController.navigate(NavRoutes.orderConfirmation(ids)) {
@@ -415,6 +457,7 @@ fun AppNavigation() {
                 viewModel = ordersViewModel,
                 onNavigateBack = { navController.popBackStack() },
                 onOrderClick = { id -> navController.navigate(NavRoutes.orderDetails(id)) },
+                onNavigateToBasket = { navController.navigate(NavRoutes.BASKET) },
                 onNavigateToDashboard = {
                     navController.navigate(NavRoutes.DASHBOARD) {
                         popUpTo(NavRoutes.DASHBOARD) { inclusive = true }

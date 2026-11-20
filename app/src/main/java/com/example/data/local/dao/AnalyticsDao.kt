@@ -72,4 +72,10 @@ interface AnalyticsDao {
 
     @Query("SELECT * FROM supplier_settings WHERE supplierId = :supplierId LIMIT 1")
     fun getSupplierSettingsFlow(supplierId: Long): Flow<SupplierSettingsEntity?>
+
+    @Query("SELECT * FROM supplier_settings")
+    fun getAllSupplierSettingsFlow(): Flow<List<SupplierSettingsEntity>>
+
+    @Query("SELECT * FROM supplier_settings")
+    suspend fun getAllSupplierSettings(): List<SupplierSettingsEntity>
 }

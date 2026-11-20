@@ -4,6 +4,12 @@ import com.example.data.local.dao.ProductDao
 import com.example.data.local.dao.ProductInventoryDao
 import com.example.data.local.entity.ProductEntity
 import com.example.data.local.entity.ProductInventoryEntity
+import com.example.data.remote.dto.ProductDto
+import com.example.data.remote.dto.ProductInventoryDto
+import com.example.data.remote.mapper.toDto
+import com.example.data.remote.mapper.toEntity
+import com.example.data.remote.source.PharmaRemoteDataSource
+import com.example.data.remote.util.NetworkResult
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
@@ -13,18 +19,21 @@ import kotlinx.coroutines.withContext
 
 /**
  * Repository class that bridges the Room Database DAO ([ProductDao], [ProductInventoryDao])
- * with ViewModels across the application.
+ * and [PharmaRemoteDataSource] (Spring Boot REST API) with ViewModels across the application.
  *
  * Implements the Repository Pattern recommended by Android Architecture guidelines:
- * - Abstracts Room data sources from UI components and ViewModels.
+ * - Abstracts Room data sources & remote HTTP endpoints from UI components and ViewModels.
  * - Dispatches all operations safely to [Dispatchers.IO].
- * - Exposes reactive [Flow] streams for real-time UI updates with StateFlow/collectAsStateWithLifecycle.
- * - Provides suspend functions for inserting, updating, deleting, and fetching products.
+ * - Exposes reactive [Flow] streams backed by Room for real-time UI updates.
+ * - When remote sync is active, write operations execute HTTP requests first and fail explicitly
+ *   without silent fallback to local-only success if the backend request fails.
  */
 class ProductRepository(
     private val productDao: ProductDao,
     private val inventoryDao: ProductInventoryDao? = null,
-    private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO
+    private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
+    private val remoteDataSource: PharmaRemoteDataSource? = null,
+    private val isRemoteSyncEnabled: () -> Boolean = { false }
 ) {
 
     // =========================================================================
@@ -92,6 +101,46 @@ class ProductRepository(
     }
 
     // =========================================================================
+    // REMOTE SYNCHRONIZATION (SPRING BOOT REST API -> ROOM CACHE)
+    // =========================================================================
+
+    /**
+     * Pulls the product catalogue from the Spring Boot REST API and updates Room cache on HTTP 2xx.
+     */
+    suspend fun syncProductsFromBackend(): Result<Int> = withContext(ioDispatcher) {
+        val remote = remoteDataSource
+            ?: return@withContext Result.failure(IllegalStateException("Remote data source is not attached."))
+        when (val res = remote.fetchProducts()) {
+            is NetworkResult.Success -> {
+                val entities = res.data.map { it.toEntity() }
+                if (entities.isNotEmpty()) {
+                    productDao.insertProducts(entities)
+                }
+                Result.success(entities.size)
+            }
+            else -> Result.failure(res.toException())
+        }
+    }
+
+    /**
+     * Pulls SKU inventory records from the Spring Boot REST API and updates Room cache on HTTP 2xx.
+     */
+    suspend fun syncInventoryFromBackend(): Result<Int> = withContext(ioDispatcher) {
+        val remote = remoteDataSource
+            ?: return@withContext Result.failure(IllegalStateException("Remote data source is not attached."))
+        when (val res = remote.fetchInventory()) {
+            is NetworkResult.Success -> {
+                val entities = res.data.map { it.toEntity() }
+                if (entities.isNotEmpty()) {
+                    inventoryDao?.insertAll(entities)
+                }
+                Result.success(entities.size)
+            }
+            else -> Result.failure(res.toException())
+        }
+    }
+
+    // =========================================================================
     // ONE-OFF FETCHING FUNCTIONS (SUSPEND)
     // =========================================================================
 
@@ -121,9 +170,19 @@ class ProductRepository(
     // =========================================================================
 
     /**
-     * Inserts a single product into the database, returning the generated row ID.
+     * Inserts a single product into backend (when remote sync enabled) + Room cache,
+     * returning the generated row ID. Throws on remote write failure instead of silent fallback.
      */
     suspend fun insertProduct(product: ProductEntity): Long = withContext(ioDispatcher) {
+        if (isRemoteSyncEnabled() && remoteDataSource != null) {
+            when (val res = remoteDataSource.createProduct(product.toDto())) {
+                is NetworkResult.Success -> {
+                    val savedEntity = res.data.toEntity()
+                    return@withContext productDao.insertProduct(savedEntity)
+                }
+                else -> throw res.toException()
+            }
+        }
         productDao.insertProduct(product)
     }
 
@@ -139,9 +198,18 @@ class ProductRepository(
     // =========================================================================
 
     /**
-     * Updates an existing product entity in the database.
+     * Updates an existing product entity via REST API (when remote enabled) and Room cache.
      */
     suspend fun updateProduct(product: ProductEntity): Unit = withContext(ioDispatcher) {
+        if (isRemoteSyncEnabled() && remoteDataSource != null) {
+            when (val res = remoteDataSource.updateProduct(product.id, product.toDto())) {
+                is NetworkResult.Success -> {
+                    productDao.updateProduct(res.data.toEntity())
+                    return@withContext
+                }
+                else -> throw res.toException()
+            }
+        }
         productDao.updateProduct(product)
     }
 
@@ -149,6 +217,15 @@ class ProductRepository(
      * Toggles or updates the active status flag of a product by ID.
      */
     suspend fun setProductActiveStatus(productId: Long, isActive: Boolean): Unit = withContext(ioDispatcher) {
+        if (isRemoteSyncEnabled() && remoteDataSource != null) {
+            when (val res = remoteDataSource.updateProductStatus(productId, isActive)) {
+                is NetworkResult.Success -> {
+                    productDao.setProductActiveStatus(productId, isActive)
+                    return@withContext
+                }
+                else -> throw res.toException()
+            }
+        }
         productDao.setProductActiveStatus(productId, isActive)
     }
 
@@ -157,9 +234,18 @@ class ProductRepository(
     // =========================================================================
 
     /**
-     * Deletes a specific product entity from the database.
+     * Deletes a specific product entity from the backend (when remote enabled) and Room cache.
      */
     suspend fun deleteProduct(product: ProductEntity): Unit = withContext(ioDispatcher) {
+        if (isRemoteSyncEnabled() && remoteDataSource != null) {
+            when (val res = remoteDataSource.deleteProduct(product.id)) {
+                is NetworkResult.Success -> {
+                    productDao.deleteProduct(product)
+                    return@withContext
+                }
+                else -> throw res.toException()
+            }
+        }
         productDao.deleteProduct(product)
     }
 
@@ -167,11 +253,20 @@ class ProductRepository(
      * Deletes a product by its primary key ID.
      */
     suspend fun deleteProductById(productId: Long): Unit = withContext(ioDispatcher) {
+        if (isRemoteSyncEnabled() && remoteDataSource != null) {
+            when (val res = remoteDataSource.deleteProduct(productId)) {
+                is NetworkResult.Success -> {
+                    productDao.deleteProductById(productId)
+                    return@withContext
+                }
+                else -> throw res.toException()
+            }
+        }
         productDao.deleteProductById(productId)
     }
 
     /**
-     * Clears all products from the database table.
+     * Clears all products from the local Room cache table.
      */
     suspend fun deleteAllProducts(): Unit = withContext(ioDispatcher) {
         productDao.deleteAllProducts()
@@ -211,11 +306,20 @@ class ProductRepository(
      * Inserts a product inventory record with SKU and reorder threshold.
      */
     suspend fun insertProductInventory(inventory: ProductInventoryEntity): Long = withContext(ioDispatcher) {
+        if (isRemoteSyncEnabled() && remoteDataSource != null) {
+            when (val res = remoteDataSource.upsertInventoryItem(inventory.toDto())) {
+                is NetworkResult.Success -> {
+                    return@withContext inventoryDao?.insertInventory(res.data.toEntity()) ?: res.data.id
+                }
+                else -> throw res.toException()
+            }
+        }
         inventoryDao?.insertInventory(inventory) ?: -1L
     }
 
     /**
      * Convenience method to insert a new product into both catalogue and inventory tracking.
+     * In Backend HTTP mode, sends remote POST/PUT calls and fails explicitly on HTTP errors.
      */
     suspend fun addProduct(
         productName: String,
@@ -232,6 +336,55 @@ class ProductRepository(
     ): Long = withContext(ioDispatcher) {
         val cleanName = productName.trim()
         val cleanSku = sku.trim().uppercase()
+
+        if (isRemoteSyncEnabled() && remoteDataSource != null) {
+            val remoteProductRes = remoteDataSource.createProduct(
+                ProductDto(
+                    name = cleanName,
+                    brand = cleanName.substringBefore(" ").trim(),
+                    saltComposition = saltComposition.ifBlank { cleanName },
+                    strength = "Standard",
+                    dosageForm = dosageForm,
+                    therapeuticCategory = "General Medicine",
+                    manufacturerName = "PharmaOS Formulation",
+                    packSize = packSize,
+                    hsnCode = "3004",
+                    gstRatePercent = 12.0,
+                    storageCondition = storageCondition,
+                    isRx = false,
+                    createdBy = createdBy
+                )
+            )
+            val savedProduct = when (remoteProductRes) {
+                is NetworkResult.Success -> {
+                    val savedId = productDao.insertProduct(remoteProductRes.data.toEntity())
+                    remoteProductRes.data.toEntity().copy(id = savedId)
+                }
+                else -> throw remoteProductRes.toException()
+            }
+
+            val remoteInventoryRes = remoteDataSource.upsertInventoryItem(
+                ProductInventoryDto(
+                    productName = cleanName,
+                    sku = cleanSku,
+                    currentStock = currentStock,
+                    reorderThreshold = reorderThreshold,
+                    productId = savedProduct.id,
+                    saltComposition = saltComposition.ifBlank { cleanName },
+                    dosageForm = dosageForm,
+                    packSize = packSize,
+                    unitPricePtr = unitPricePtr,
+                    mrp = mrp,
+                    storageCondition = storageCondition
+                )
+            )
+            return@withContext when (remoteInventoryRes) {
+                is NetworkResult.Success -> {
+                    inventoryDao?.insertInventory(remoteInventoryRes.data.toEntity()) ?: savedProduct.id
+                }
+                else -> throw remoteInventoryRes.toException()
+            }
+        }
 
         // 1. Insert into ProductEntity for general catalogue access
         val productEntity = ProductEntity(
@@ -276,6 +429,15 @@ class ProductRepository(
      * Updates the current stock count for a given SKU.
      */
     suspend fun updateCurrentStockBySku(sku: String, newStock: Int): Unit = withContext(ioDispatcher) {
+        if (isRemoteSyncEnabled() && remoteDataSource != null) {
+            when (val res = remoteDataSource.adjustInventoryStock(sku = sku, newStock = newStock, reason = "Direct Stock Update")) {
+                is NetworkResult.Success -> {
+                    inventoryDao?.insertInventory(res.data.toEntity())
+                    return@withContext
+                }
+                else -> throw res.toException()
+            }
+        }
         inventoryDao?.updateCurrentStockBySku(sku, newStock)
     }
 
@@ -283,6 +445,15 @@ class ProductRepository(
      * Increments or decrements stock count for a given SKU by delta.
      */
     suspend fun adjustStockBySku(sku: String, delta: Int): Unit = withContext(ioDispatcher) {
+        if (isRemoteSyncEnabled() && remoteDataSource != null) {
+            when (val res = remoteDataSource.adjustInventoryStock(sku = sku, delta = delta, reason = "Quick Adjustment")) {
+                is NetworkResult.Success -> {
+                    inventoryDao?.insertInventory(res.data.toEntity())
+                    return@withContext
+                }
+                else -> throw res.toException()
+            }
+        }
         if (delta > 0) {
             inventoryDao?.addStock(sku, delta)
         } else if (delta < 0) {
@@ -294,6 +465,15 @@ class ProductRepository(
      * Updates the reorder alert threshold for a given SKU.
      */
     suspend fun updateReorderThresholdBySku(sku: String, newThreshold: Int): Unit = withContext(ioDispatcher) {
+        if (isRemoteSyncEnabled() && remoteDataSource != null) {
+            when (val res = remoteDataSource.updateReorderThreshold(sku, newThreshold)) {
+                is NetworkResult.Success -> {
+                    inventoryDao?.insertInventory(res.data.toEntity())
+                    return@withContext
+                }
+                else -> throw res.toException()
+            }
+        }
         inventoryDao?.updateReorderThresholdBySku(sku, newThreshold)
     }
 
@@ -301,6 +481,15 @@ class ProductRepository(
      * Deletes an inventory record by SKU.
      */
     suspend fun deleteInventoryBySku(sku: String): Unit = withContext(ioDispatcher) {
+        if (isRemoteSyncEnabled() && remoteDataSource != null) {
+            when (val res = remoteDataSource.deleteInventoryBySku(sku)) {
+                is NetworkResult.Success -> {
+                    inventoryDao?.deleteBySku(sku)
+                    return@withContext
+                }
+                else -> throw res.toException()
+            }
+        }
         inventoryDao?.deleteBySku(sku)
     }
 

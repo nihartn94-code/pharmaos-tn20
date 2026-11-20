@@ -36,6 +36,8 @@ import androidx.compose.material.icons.outlined.Inventory2
 import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material.icons.outlined.QrCodeScanner
 import androidx.compose.material.icons.outlined.ShoppingBag
+import androidx.compose.material.icons.outlined.ShoppingCart
+import androidx.compose.material3.Badge
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -202,8 +204,10 @@ fun MedicineCatalogueContent(
             CatalogueTopBar(
                 title = screenTitle,
                 subtitle = subtitleCount,
+                cartItemsCount = uiState.cartItemsCount,
                 onBackClick = onNavigateBack,
-                onFilterClick = { showFilterSheet = true }
+                onFilterClick = { showFilterSheet = true },
+                onBasketClick = onNavigateToBasket
             )
         },
         bottomBar = {
@@ -335,8 +339,10 @@ fun MedicineCatalogueContent(
 private fun CatalogueTopBar(
     title: String,
     subtitle: String,
+    cartItemsCount: Int = 0,
     onBackClick: () -> Unit,
-    onFilterClick: () -> Unit
+    onFilterClick: () -> Unit,
+    onBasketClick: () -> Unit = {}
 ) {
     Surface(
         color = Color(0xFFF8FAFC),
@@ -392,6 +398,40 @@ private fun CatalogueTopBar(
                     tint = Color(0xFF0F172A),
                     modifier = Modifier.size(22.dp)
                 )
+            }
+
+            Box(
+                modifier = Modifier.size(48.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                IconButton(
+                    onClick = onBasketClick,
+                    modifier = Modifier
+                        .size(48.dp)
+                        .testTag("catalogue_basket_button")
+                ) {
+                    Icon(
+                        imageVector = Icons.Outlined.ShoppingCart,
+                        contentDescription = "Open Basket ($cartItemsCount items)",
+                        tint = Color(0xFF0F172A),
+                        modifier = Modifier.size(22.dp)
+                    )
+                }
+                if (cartItemsCount > 0) {
+                    Badge(
+                        containerColor = Color(0xFF2563EB),
+                        contentColor = Color.White,
+                        modifier = Modifier
+                            .align(Alignment.TopEnd)
+                            .padding(top = 4.dp, end = 4.dp)
+                    ) {
+                        Text(
+                            text = if (cartItemsCount > 99) "99+" else "$cartItemsCount",
+                            fontSize = 10.sp,
+                            modifier = Modifier.testTag("catalogue_basket_badge")
+                        )
+                    }
+                }
             }
         }
     }

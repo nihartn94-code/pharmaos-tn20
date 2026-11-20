@@ -2,6 +2,7 @@ package com.example.ui.navigation
 
 object NavRoutes {
     const val SPLASH = "splash"
+    const val WELCOME = "welcome"
     const val LOGIN = "login"
     const val REGISTER = "register"
     const val COMPLIANCE_VERIFICATION = "compliance_verification"

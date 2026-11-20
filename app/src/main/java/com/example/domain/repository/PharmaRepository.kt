@@ -15,6 +15,7 @@ import com.example.data.local.entity.ReturnEntity
 import com.example.data.local.entity.SupplierOfferEntity
 import com.example.data.local.entity.SupplierSettingsEntity
 import com.example.data.local.entity.UserEntity
+import com.example.domain.model.AlternativeBrandQuotation
 import com.example.domain.model.AuthUser
 import com.example.domain.model.EffectivePriceCalculation
 import com.example.domain.model.InventoryDashboardSummary
@@ -25,6 +26,8 @@ import com.example.domain.model.ParsedOcrItem
 import com.example.domain.model.ProductDetail
 import com.example.domain.model.ReturnReason
 import com.example.domain.model.ShortageEvaluationResult
+import com.example.domain.model.SupplierQuotationItem
+import com.example.domain.model.SupplierQuotationSummary
 import com.example.domain.model.TrustScoreBreakdown
 import com.example.domain.model.UserRole
 import kotlinx.coroutines.flow.Flow
@@ -74,6 +77,22 @@ interface PharmaRepository {
     ): Result<Unit>
     fun getComplianceVerificationFlow(userId: Long): Flow<com.example.data.local.entity.ComplianceVerificationEntity?>
 
+    // Onboarding & Initial Setup Persistence
+    fun getOnboardingCompletedFlow(): Flow<Boolean>
+    suspend fun isOnboardingCompleted(): Boolean
+    suspend fun setOnboardingCompleted(completed: Boolean)
+    suspend fun resolveLaunchDestination(): LaunchDestination
+
+    // Backend & Execution Mode Configuration
+    fun getAuthExecutionModeFlow(): Flow<com.example.data.remote.config.AuthExecutionMode>
+    suspend fun setAuthExecutionMode(mode: com.example.data.remote.config.AuthExecutionMode)
+    fun getBackendBaseUrlFlow(): Flow<String>
+    suspend fun setBackendBaseUrl(baseUrl: String): Result<String>
+    fun isBackendConfigured(): Boolean
+    suspend fun syncCatalogueFromBackend(): Result<Int>
+    suspend fun syncOrdersFromBackend(): Result<Int>
+    suspend fun syncNotificationsFromBackend(): Result<Int>
+
     // Products
     suspend fun ensureDefaultCatalogueSeeded()
     fun getApiProductsFlow(): Flow<List<ProductDetail>>
@@ -84,6 +103,9 @@ interface PharmaRepository {
     suspend fun putApiProducts(product: ProductEntity): Result<Unit>
     suspend fun patchApiProductDeactivate(id: Long, isActive: Boolean): Result<Unit>
     fun getApiProductAlternativeBrandsFlow(id: Long): Flow<List<ProductEntity>>
+    suspend fun refreshProductDetailsFromBackend(productId: Long): Result<Unit>
+    fun getApiProductQuotationsFlow(productId: Long): Flow<Pair<SupplierQuotationSummary, List<SupplierQuotationItem>>>
+    fun getApiAlternativeBrandQuotationsFlow(productId: Long): Flow<List<AlternativeBrandQuotation>>
 
     // Offers
     fun getApiProductOffersFlow(productId: Long): Flow<List<OfferWithSupplier>>
@@ -96,13 +118,17 @@ interface PharmaRepository {
     // Basket
     fun getApiBasketFlow(): Flow<BasketWithDetails>
     suspend fun getApiBasket(): BasketWithDetails
+    suspend fun refreshBasketFromBackend(): Result<Unit>
+    suspend fun refreshSavedBasketsFromBackend(): Result<Unit>
     suspend fun postApiBasketItems(productId: Long, offerId: Long, quantity: Int): Result<Unit>
     suspend fun putApiBasketItemQuantity(itemId: Long, quantity: Int): Result<Unit>
     suspend fun deleteApiBasketItem(itemId: Long): Result<Unit>
     suspend fun deleteApiBasketClear(): Result<Unit>
     suspend fun postApiBasketSaveNamed(name: String): Result<Long>
+    suspend fun postApiBasketSaveNamed(name: String, overwriteExisting: Boolean): Result<Long>
     fun getApiSavedBasketsFlow(): Flow<List<NamedBasketSummary>>
     suspend fun postApiBasketLoadSaved(savedBasketId: Long): Result<BasketLoadReport>
+    suspend fun deleteApiSavedBasket(savedBasketId: Long): Result<Unit>
 
     // Optimization
     suspend fun postApiBasketOptimize(preferReliableSuppliers: Boolean): OptimizationResult
@@ -110,6 +136,10 @@ interface PharmaRepository {
 
     // Orders
     suspend fun ensureDefaultOrdersSeeded()
+    suspend fun syncLivePipelineFromBackend(): Result<Int>
+    fun getApiLivePipelineOrdersFlow(): Flow<List<OrderEntity>>
+    suspend fun getOrderTaxInvoice(orderId: Long): Result<com.example.domain.model.TaxInvoiceData>
+    suspend fun downloadBackendTaxInvoicePdf(orderId: Long): Result<ByteArray>
     suspend fun postApiOrders(deliveryAddress: String, notes: String): Result<List<Long>>
     fun getApiOrdersFlow(): Flow<List<OrderEntity>>
     suspend fun getApiOrders(): List<OrderEntity>
@@ -317,3 +347,17 @@ data class DashboardKpis(
     val totalOrdersCount: Int = 0,
     val activeRecallsCount: Int = 0
 )
+
+enum class LaunchDestination {
+    WELCOME,
+    LOGIN,
+    COMPLIANCE_VERIFICATION,
+    DASHBOARD
+}
+
+class DuplicateBasketTemplateException(
+    val templateName: String
+) : IllegalStateException(
+    "A basket template named '$templateName' already exists. Choose a different name or replace the existing template."
+)
+

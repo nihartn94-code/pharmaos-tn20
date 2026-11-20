@@ -43,6 +43,7 @@ import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.ui.window.DialogProperties
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -58,8 +59,14 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.filled.ShoppingCart
+import androidx.compose.material3.IconButton
+import androidx.compose.ui.platform.LocalContext
 import com.example.domain.model.OrderStatus
 import com.example.domain.model.ReturnReason
+import com.example.domain.model.TaxInvoiceData
 import com.example.domain.model.UserRole
 import com.example.ui.components.AppTopBar
 import com.example.ui.components.PriceText
@@ -88,12 +95,21 @@ fun OrderDetailsScreen(
     var podShortQty by remember { mutableIntStateOf(0) }
     var podDamagedQty by remember { mutableIntStateOf(0) }
 
+    val context = LocalContext.current
+
     LaunchedEffect(orderId) {
         viewModel.loadOrderDetails(orderId)
     }
 
     LaunchedEffect(uiState.successMessage) {
         uiState.successMessage?.let {
+            snackbarHostState.showSnackbar(it)
+            viewModel.clearMessages()
+        }
+    }
+
+    LaunchedEffect(uiState.errorMessage) {
+        uiState.errorMessage?.let {
             snackbarHostState.showSnackbar(it)
             viewModel.clearMessages()
         }
@@ -106,7 +122,15 @@ fun OrderDetailsScreen(
             AppTopBar(
                 title = details?.order?.orderNumber ?: "Order Details",
                 subtitle = details?.let { "Placed on ${Formatters.formatDateTime(it.order.createdAtEpochMillis)}" },
-                onBackClick = onNavigateBack
+                onBackClick = onNavigateBack,
+                actions = {
+                    IconButton(
+                        onClick = onNavigateToBasket,
+                        modifier = Modifier.testTag("order_details_basket_button")
+                    ) {
+                        Icon(Icons.Default.ShoppingCart, contentDescription = "Open Basket")
+                    }
+                }
             )
         },
         snackbarHost = { SnackbarHost(snackbarHostState) }
@@ -358,41 +382,25 @@ fun OrderDetailsScreen(
                     }
                 }
 
-                // Tax Invoice View per Order
+                // Tax Invoice Section (Non-Fabricated + PDF Download & Share)
                 item {
-                    Card(
-                        modifier = Modifier.fillMaxWidth(),
-                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
-                    ) {
-                        Column(modifier = Modifier.padding(16.dp)) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(Icons.Default.Receipt, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text("Tax Invoice Breakdown", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium)
-                            }
-                            Spacer(modifier = Modifier.height(10.dp))
-                            Text("Supplier GSTIN: ${details.supplier?.gstin ?: "N/A"}", style = MaterialTheme.typography.bodySmall)
-                            Text("Buyer GSTIN: ${details.buyer?.gstin ?: "N/A"}", style = MaterialTheme.typography.bodySmall)
-                            HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
-                            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                                Text("Subtotal (Taxable Value):", style = MaterialTheme.typography.bodySmall)
-                                Text(Formatters.formatInr(order.subtotal), style = MaterialTheme.typography.bodySmall)
-                            }
-                            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                                Text("GST (CGST/SGST 12%):", style = MaterialTheme.typography.bodySmall)
-                                Text(Formatters.formatInr(order.gstAmount), style = MaterialTheme.typography.bodySmall)
-                            }
-                            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                                Text("Delivery Charges:", style = MaterialTheme.typography.bodySmall)
-                                Text(if (order.deliveryCharge > 0) Formatters.formatInr(order.deliveryCharge) else "FREE", style = MaterialTheme.typography.bodySmall)
-                            }
-                            HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
-                            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                                Text("Invoice Total Amount:", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodyMedium)
-                                PriceText(amount = order.totalAmount)
+                    TaxInvoiceSection(
+                        invoice = uiState.taxInvoice,
+                        isLoading = uiState.isLoadingTaxInvoice,
+                        errorMessage = uiState.taxInvoiceError,
+                        isDownloading = uiState.isDownloadingTaxInvoice,
+                        lastSavedPath = uiState.lastSavedInvoicePath,
+                        onDownloadPdf = { viewModel.downloadTaxInvoicePdf(context, orderId) },
+                        onSharePdf = {
+                            viewModel.shareTaxInvoicePdf(context, orderId) { shareIntent ->
+                                try {
+                                    context.startActivity(shareIntent)
+                                } catch (_: Exception) {
+                                    // Handled gracefully if no PDF share target installed
+                                }
                             }
                         }
-                    }
+                    )
                 }
             }
         }
@@ -401,6 +409,7 @@ fun OrderDetailsScreen(
         if (showDispatchDialog) {
             AlertDialog(
                 onDismissRequest = { showDispatchDialog = false },
+                properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false),
                 title = { Text("Dispatch Order & Enter Logistics", fontWeight = FontWeight.Bold) },
                 text = {
                     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -520,3 +529,252 @@ fun OrderDetailsScreen(
         }
     }
 }
+
+@Composable
+private fun TaxInvoiceSection(
+    invoice: TaxInvoiceData?,
+    isLoading: Boolean,
+    errorMessage: String?,
+    isDownloading: Boolean,
+    lastSavedPath: String?,
+    onDownloadPdf: () -> Unit,
+    onSharePdf: () -> Unit
+) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("tax_invoice_card"),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Default.Receipt, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Tax Invoice", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium)
+                }
+                if (invoice != null) {
+                    Surface(
+                        shape = RoundedCornerShape(8.dp),
+                        color = if (invoice.isEligible) Color(0xFFDCFCE7) else Color(0xFFF1F5F9)
+                    ) {
+                        Text(
+                            text = when {
+                                !invoice.isEligible -> "Not Eligible Yet"
+                                invoice.isBackendAuthoritative -> "Backend Verified"
+                                else -> "Eligible"
+                            },
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = if (invoice.isEligible) Color(0xFF15803D) else Color(0xFF475569),
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                        )
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            when {
+                isLoading && invoice == null -> {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Loading billing & GST details...", style = MaterialTheme.typography.bodySmall)
+                    }
+                }
+                errorMessage != null && invoice == null -> {
+                    Text(
+                        text = errorMessage,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                }
+                invoice != null && !invoice.isEligible -> {
+                    Surface(
+                        shape = RoundedCornerShape(10.dp),
+                        color = Color(0xFFF8FAFC),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("tax_invoice_ineligible_notice")
+                    ) {
+                        Text(
+                            text = invoice.eligibilityReason
+                                ?: "Tax invoice is only available for packed, dispatched, or delivered orders.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(12.dp)
+                        )
+                    }
+                }
+                invoice != null -> {
+                    Text(
+                        text = "Invoice No: ${invoice.invoiceNumber ?: "Not Issued"}",
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.testTag("tax_invoice_number_text")
+                    )
+                    Text(
+                        text = "Invoice Date: ${Formatters.formatDate(invoice.invoiceDateEpochMillis)}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    Text(
+                        text = "Seller: ${invoice.seller.legalName ?: "Unavailable"}",
+                        style = MaterialTheme.typography.bodySmall,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    Text(
+                        text = "Seller GSTIN: ${invoice.seller.gstin ?: "Not Registered / Unavailable"}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.testTag("tax_invoice_seller_gstin")
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = "Buyer: ${invoice.buyer.legalName ?: "Unavailable"}",
+                        style = MaterialTheme.typography.bodySmall,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    Text(
+                        text = "Buyer GSTIN: ${invoice.buyer.gstin ?: "Not Registered / Unavailable"}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.testTag("tax_invoice_buyer_gstin")
+                    )
+                    if (!invoice.placeOfSupply.isNullOrBlank() || !invoice.gstTaxType.isNullOrBlank()) {
+                        Text(
+                            text = listOfNotNull(
+                                invoice.gstTaxType?.let { "Tax Regime: $it" },
+                                invoice.placeOfSupply?.let { "Place of Supply: $it" }
+                            ).joinToString(" • "),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    }
+
+                    HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Text("Taxable Subtotal:", style = MaterialTheme.typography.bodySmall)
+                        Text(Formatters.formatInr(invoice.subtotalTaxable), style = MaterialTheme.typography.bodySmall)
+                    }
+                    if (invoice.cgstTotal != null && invoice.sgstTotal != null) {
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                            Text("CGST:", style = MaterialTheme.typography.bodySmall)
+                            Text(Formatters.formatInr(invoice.cgstTotal), style = MaterialTheme.typography.bodySmall)
+                        }
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                            Text("SGST:", style = MaterialTheme.typography.bodySmall)
+                            Text(Formatters.formatInr(invoice.sgstTotal), style = MaterialTheme.typography.bodySmall)
+                        }
+                    } else if (invoice.igstTotal != null) {
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                            Text("IGST:", style = MaterialTheme.typography.bodySmall)
+                            Text(Formatters.formatInr(invoice.igstTotal), style = MaterialTheme.typography.bodySmall)
+                        }
+                    } else {
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                            Text("Total GST:", style = MaterialTheme.typography.bodySmall)
+                            Text(
+                                invoice.totalGstAmount?.let { Formatters.formatInr(it) } ?: "Unavailable",
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                        }
+                    }
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Text("Delivery Charges:", style = MaterialTheme.typography.bodySmall)
+                        Text(
+                            if (invoice.deliveryCharge > 0) Formatters.formatInr(invoice.deliveryCharge) else "FREE",
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
+
+                    HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Text("Invoice Total Amount:", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodyMedium)
+                        PriceText(amount = invoice.grandTotal)
+                    }
+
+                    if (invoice.missingFields.isNotEmpty()) {
+                        Spacer(modifier = Modifier.height(10.dp))
+                        Surface(
+                            shape = RoundedCornerShape(8.dp),
+                            color = Color(0xFFFEF3C7),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("tax_invoice_missing_fields_warning")
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(10.dp),
+                                verticalAlignment = Alignment.Top
+                            ) {
+                                Icon(
+                                    Icons.Default.Warning,
+                                    contentDescription = null,
+                                    tint = Color(0xFFB45309),
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    text = "Missing billing details (not fabricated): ${invoice.missingFields.joinToString(", ")}",
+                                    fontSize = 11.sp,
+                                    color = Color(0xFF92400E)
+                                )
+                            }
+                        }
+                    }
+
+                    if (!lastSavedPath.isNullOrBlank()) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            text = "Downloaded: $lastSavedPath",
+                            fontSize = 11.sp,
+                            color = Color(0xFF15803D),
+                            fontWeight = FontWeight.Medium
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Button(
+                            onClick = onDownloadPdf,
+                            enabled = !isDownloading,
+                            modifier = Modifier
+                                .weight(1f)
+                                .testTag("download_tax_invoice_button")
+                        ) {
+                            Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(if (isDownloading) "Generating..." else "Download PDF")
+                        }
+
+                        OutlinedButton(
+                            onClick = onSharePdf,
+                            enabled = !isDownloading,
+                            modifier = Modifier
+                                .weight(1f)
+                                .testTag("share_tax_invoice_button")
+                        ) {
+                            Icon(Icons.Default.Share, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Share PDF")
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+

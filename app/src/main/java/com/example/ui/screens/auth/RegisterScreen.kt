@@ -98,6 +98,9 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import android.content.res.Configuration
 import androidx.compose.ui.tooling.preview.Preview
+import com.example.data.remote.config.AuthExecutionMode
+import com.example.ui.components.BackendConfigDialog
+import com.example.ui.components.BackendStatusBar
 import com.example.ui.theme.PharmaOSTheme
 import com.example.domain.model.UserRole
 import kotlinx.coroutines.launch
@@ -106,6 +109,7 @@ import kotlinx.coroutines.launch
 fun RegisterScreen(
     viewModel: AuthViewModel,
     onNavigateBack: () -> Unit,
+    onNavigateToLogin: () -> Unit = onNavigateBack,
     onRegisterSuccess: (UserRole) -> Unit
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
@@ -116,10 +120,19 @@ fun RegisterScreen(
             viewModel.register(fullName, businessName, email, phone, gstin, address, password, confirmPassword, role, onSuccess)
         },
         onGoogleSignIn = { email, displayName, role, onSuccess ->
-            viewModel.signInWithGoogle(email, displayName, role, onSuccess)
+            viewModel.signInWithGoogle(
+                email = email,
+                displayName = displayName,
+                role = role,
+                markOnboardingCompleted = (role == UserRole.ADMIN),
+                onSuccess = onSuccess
+            )
         },
+        onSelectAuthMode = { viewModel.setAuthExecutionMode(it) },
+        onConfigureBackendUrl = { viewModel.configureBackendUrl(it) },
         onClearMessages = { viewModel.clearMessages() },
         onNavigateBack = onNavigateBack,
+        onNavigateToLogin = onNavigateToLogin,
         onRegisterSuccess = onRegisterSuccess
     )
 }
@@ -131,8 +144,11 @@ fun RegisterScreenContent(
     onRoleSelected: (UserRole) -> Unit,
     onRegister: (String, String, String, String, String?, String, String, String, UserRole, () -> Unit) -> Unit,
     onGoogleSignIn: (String, String, UserRole, () -> Unit) -> Unit,
+    onSelectAuthMode: (AuthExecutionMode) -> Unit = {},
+    onConfigureBackendUrl: (String) -> Unit = {},
     onClearMessages: () -> Unit,
     onNavigateBack: () -> Unit,
+    onNavigateToLogin: () -> Unit = onNavigateBack,
     onRegisterSuccess: (UserRole) -> Unit
 ) {
     val snackbarHostState = remember { SnackbarHostState() }
@@ -154,6 +170,7 @@ fun RegisterScreenContent(
     // Terms Agreement checkbox
     var agreedToTerms by remember { mutableStateOf(true) }
     var showTermsDialog by remember { mutableStateOf(false) }
+    var showBackendConfigDialog by remember { mutableStateOf(false) }
 
     // Google Sign-up modal states
     var showGoogleAccountPicker by remember { mutableStateOf(false) }
@@ -170,9 +187,10 @@ fun RegisterScreenContent(
         )
     }
 
-    LaunchedEffect(uiState.errorMessage) {
-        uiState.errorMessage?.let {
-            snackbarHostState.showSnackbar(it)
+    LaunchedEffect(uiState.errorMessage, uiState.successMessage) {
+        val msg = uiState.errorMessage ?: uiState.successMessage
+        if (msg != null) {
+            snackbarHostState.showSnackbar(msg)
             onClearMessages()
         }
     }
@@ -269,6 +287,14 @@ fun RegisterScreenContent(
                     )
                 }
             }
+
+            BackendStatusBar(
+                authExecutionMode = uiState.authExecutionMode,
+                backendBaseUrl = uiState.backendBaseUrl,
+                isBackendConfigured = uiState.isBackendConfigured,
+                onConfigureClick = { showBackendConfigDialog = true },
+                modifier = Modifier.padding(bottom = 8.dp)
+            )
 
             // 2. Hero Header Section with 3D Pill Illustration (Matching reference image)
             Row(
@@ -976,7 +1002,7 @@ fun RegisterScreenContent(
                     fontWeight = FontWeight.Bold,
                     color = Color(0xFF2563EB),
                     modifier = Modifier
-                        .clickable { onNavigateBack() }
+                        .clickable { onNavigateToLogin() }
                         .padding(vertical = 4.dp)
                         .testTag("register_to_login_button")
                 )
@@ -1010,6 +1036,16 @@ fun RegisterScreenContent(
 
             Spacer(modifier = Modifier.height(12.dp))
         }
+    }
+
+    if (showBackendConfigDialog) {
+        BackendConfigDialog(
+            currentMode = uiState.authExecutionMode,
+            currentBaseUrl = uiState.backendBaseUrl,
+            onDismiss = { showBackendConfigDialog = false },
+            onSelectMode = onSelectAuthMode,
+            onSaveBaseUrl = onConfigureBackendUrl
+        )
     }
 
     // Terms of Service & B2B Policy Dialog

@@ -1,3 +1,12 @@
 <resources>
     <string name="app_name">PharmaOS</string>
+    <string name="orders_open_basket">Open Basket</string>
+    <string name="orders_history_title">My Orders</string>
+    <string name="orders_pipeline_title">Live Pipeline</string>
+    <string name="orders_pipeline_restricted">Live Pipeline is restricted to authorized Manufacturer and Brand accounts.</string>
+    <string name="tax_invoice_title">Tax Invoice</string>
+    <string name="tax_invoice_download">Download PDF</string>
+    <string name="tax_invoice_share">Share PDF</string>
+    <string name="tax_invoice_not_issued">Not Issued</string>
+    <string name="tax_invoice_gstin_unavailable">Not Registered / Unavailable</string>
 </resources>

@@ -134,6 +134,8 @@ data class OrderEntity(
     val expectedDeliveryEpochMillis: Long? = null,
     val dispatchEpochMillis: Long? = null,
     val deliveredEpochMillis: Long? = null,
+    val invoiceNumber: String? = null,
+    val invoiceIssuedAtEpochMillis: Long? = null,
     val createdAtEpochMillis: Long = System.currentTimeMillis()
 )
 

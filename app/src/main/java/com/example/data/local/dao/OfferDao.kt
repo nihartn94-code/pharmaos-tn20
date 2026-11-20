@@ -28,6 +28,12 @@ interface OfferDao {
     @Query("SELECT * FROM supplier_offers WHERE productId = :productId AND isActive = 1 ORDER BY unitPricePtr ASC")
     suspend fun getActiveOffersForProduct(productId: Long): List<SupplierOfferEntity>
 
+    @Query("SELECT * FROM supplier_offers WHERE productId = :productId ORDER BY unitPricePtr ASC")
+    fun getAllOffersForProductFlow(productId: Long): Flow<List<SupplierOfferEntity>>
+
+    @Query("SELECT * FROM supplier_offers WHERE productId = :productId ORDER BY unitPricePtr ASC")
+    suspend fun getAllOffersForProduct(productId: Long): List<SupplierOfferEntity>
+
     @Query("SELECT * FROM supplier_offers WHERE supplierId = :supplierId ORDER BY lastUpdatedEpochMillis DESC")
     fun getOffersBySupplierFlow(supplierId: Long): Flow<List<SupplierOfferEntity>>
 
@@ -39,6 +45,9 @@ interface OfferDao {
 
     @Query("SELECT * FROM supplier_offers WHERE isActive = 1")
     fun getAllActiveOffersFlow(): Flow<List<SupplierOfferEntity>>
+
+    @Query("SELECT * FROM supplier_offers")
+    fun getAllOffersFlow(): Flow<List<SupplierOfferEntity>>
 
     @Query("UPDATE supplier_offers SET availableQuantity = :newQuantity, lastUpdatedEpochMillis = :updatedTime WHERE id = :offerId")
     suspend fun updateOfferQuantity(offerId: Long, newQuantity: Int, updatedTime: Long = System.currentTimeMillis())

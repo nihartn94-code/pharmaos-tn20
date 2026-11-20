@@ -98,6 +98,9 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import android.content.res.Configuration
 import androidx.compose.ui.tooling.preview.Preview
+import com.example.data.remote.config.AuthExecutionMode
+import com.example.ui.components.BackendConfigDialog
+import com.example.ui.components.BackendStatusBar
 import com.example.ui.theme.PharmaOSTheme
 import com.example.domain.model.UserRole
 import kotlinx.coroutines.launch
@@ -114,6 +117,8 @@ fun LoginScreen(
         onRoleSelected = { viewModel.selectRole(it) },
         onLogin = { id, pass, role, onSuccess -> viewModel.login(id, pass, role, onSuccess) },
         onGoogleSignIn = { email, name, role, onSuccess -> viewModel.signInWithGoogle(email, name, role, onSuccess) },
+        onSelectAuthMode = { viewModel.setAuthExecutionMode(it) },
+        onConfigureBackendUrl = { viewModel.configureBackendUrl(it) },
         onClearMessages = { viewModel.clearMessages() },
         onNavigateToRegister = onNavigateToRegister,
         onLoginSuccess = onLoginSuccess
@@ -127,6 +132,8 @@ fun LoginScreenContent(
     onRoleSelected: (UserRole) -> Unit,
     onLogin: (String, String, UserRole, () -> Unit) -> Unit,
     onGoogleSignIn: (String, String, UserRole, () -> Unit) -> Unit,
+    onSelectAuthMode: (AuthExecutionMode) -> Unit = {},
+    onConfigureBackendUrl: (String) -> Unit = {},
     onClearMessages: () -> Unit,
     onNavigateToRegister: () -> Unit,
     onLoginSuccess: () -> Unit
@@ -138,6 +145,7 @@ fun LoginScreenContent(
     var password by remember { mutableStateOf("") }
     var passwordVisible by remember { mutableStateOf(false) }
     var showForgotPasswordDialog by remember { mutableStateOf(false) }
+    var showBackendConfigDialog by remember { mutableStateOf(false) }
     var forgotIdentifier by remember { mutableStateOf("") }
     var showGoogleAccountPicker by remember { mutableStateOf(false) }
     var customGoogleEmail by remember { mutableStateOf("") }
@@ -146,9 +154,10 @@ fun LoginScreenContent(
 
     val selectedRole = uiState.selectedRole
 
-    LaunchedEffect(uiState.errorMessage) {
-        uiState.errorMessage?.let {
-            snackbarHostState.showSnackbar(it)
+    LaunchedEffect(uiState.errorMessage, uiState.successMessage) {
+        val msg = uiState.errorMessage ?: uiState.successMessage
+        if (msg != null) {
+            snackbarHostState.showSnackbar(msg)
             onClearMessages()
         }
     }
@@ -246,6 +255,14 @@ fun LoginScreenContent(
                     )
                 }
             }
+
+            BackendStatusBar(
+                authExecutionMode = uiState.authExecutionMode,
+                backendBaseUrl = uiState.backendBaseUrl,
+                isBackendConfigured = uiState.isBackendConfigured,
+                onConfigureClick = { showBackendConfigDialog = true },
+                modifier = Modifier.padding(bottom = 8.dp)
+            )
 
             // Hero Header Section with 3D Pill Illustration (Matching reference image)
             Row(
@@ -409,8 +426,8 @@ fun LoginScreenContent(
                         .fillMaxWidth()
                         .padding(20.dp)
                 ) {
-                    // Quick Testing Instance Autofill Banner for Manufacturer
-                    if (selectedRole == UserRole.MANUFACTURER) {
+                    // Quick Testing Instance Autofill Banner for Manufacturer (Development Local Mode only)
+                    if (selectedRole == UserRole.MANUFACTURER && uiState.authExecutionMode == AuthExecutionMode.DEVELOPMENT_LOCAL_MODE) {
                         Surface(
                             shape = RoundedCornerShape(12.dp),
                             color = Color(0xFFF0FDF4),
@@ -790,11 +807,11 @@ fun LoginScreenContent(
                 }
             }
 
-            // Quick Device Account Switcher (Convenient for multi-role testing on single device)
+            // Quick Device Account Switcher (Development Local Mode only)
             val matchingUsers = uiState.allRegisteredUsers.filter { it.role == selectedRole.name }
             val otherUsers = uiState.allRegisteredUsers.filter { it.role != selectedRole.name }
 
-            if (uiState.allRegisteredUsers.isNotEmpty()) {
+            if (uiState.authExecutionMode == AuthExecutionMode.DEVELOPMENT_LOCAL_MODE && uiState.allRegisteredUsers.isNotEmpty()) {
                 Spacer(modifier = Modifier.height(20.dp))
                 Card(
                     modifier = Modifier.fillMaxWidth(),
@@ -1038,6 +1055,16 @@ fun LoginScreenContent(
                     Text("Cancel")
                 }
             }
+        )
+    }
+
+    if (showBackendConfigDialog) {
+        BackendConfigDialog(
+            currentMode = uiState.authExecutionMode,
+            currentBaseUrl = uiState.backendBaseUrl,
+            onDismiss = { showBackendConfigDialog = false },
+            onSelectMode = onSelectAuthMode,
+            onSaveBaseUrl = onConfigureBackendUrl
         )
     }
 

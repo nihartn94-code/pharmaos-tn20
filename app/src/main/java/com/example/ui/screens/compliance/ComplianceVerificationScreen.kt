@@ -1,6 +1,7 @@
 package com.example.ui.screens.compliance
 
 import android.net.Uri
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
@@ -141,6 +142,14 @@ fun ComplianceVerificationScreen(
         uiState.errorMessage?.let {
             snackbarHostState.showSnackbar(it)
             viewModel.clearError()
+        }
+    }
+
+    BackHandler {
+        if (uiState.currentStep > 1) {
+            viewModel.previousStep()
+        } else {
+            onNavigateBack()
         }
     }
 

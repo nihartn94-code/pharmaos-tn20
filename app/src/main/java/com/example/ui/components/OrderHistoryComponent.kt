@@ -516,7 +516,7 @@ fun OrderTransactionCard(
                 Column(modifier = Modifier.weight(1f)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(
-                            text = transaction.supplierName,
+                            text = "Supplier: ${transaction.supplierName}",
                             style = MaterialTheme.typography.bodyMedium,
                             fontWeight = FontWeight.SemiBold,
                             color = MaterialTheme.colorScheme.onSurface,
@@ -526,7 +526,7 @@ fun OrderTransactionCard(
                         Spacer(modifier = Modifier.width(4.dp))
                         Icon(
                             imageVector = Icons.Default.Verified,
-                            contentDescription = "Verified Stockist",
+                            contentDescription = "Verified Supplier",
                             tint = MaterialTheme.colorScheme.primary,
                             modifier = Modifier.size(14.dp)
                         )

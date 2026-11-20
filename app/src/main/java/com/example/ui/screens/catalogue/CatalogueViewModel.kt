@@ -3,12 +3,16 @@ package com.example.ui.screens.catalogue
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.data.local.entity.ProductEntity
+import com.example.domain.model.AlternativeBrandQuotation
 import com.example.domain.model.AuthUser
 import com.example.domain.model.DosageForm
 import com.example.domain.model.OfferWithSupplier
 import com.example.domain.model.ProductDetail
 import com.example.domain.model.StorageCondition
+import com.example.domain.model.SupplierQuotationItem
+import com.example.domain.model.SupplierQuotationSummary
 import com.example.domain.repository.PharmaRepository
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -17,6 +21,8 @@ import kotlinx.coroutines.launch
 
 data class CatalogueUiState(
     val isLoading: Boolean = true,
+    val isDetailsLoading: Boolean = false,
+    val detailsErrorMessage: String? = null,
     val currentUser: AuthUser? = null,
     val allProducts: List<ProductDetail> = emptyList(),
     val filteredProducts: List<ProductDetail> = emptyList(),
@@ -30,11 +36,15 @@ data class CatalogueUiState(
     val sortBy: SortOption = SortOption.NAME_ASC,
     val selectedProduct: ProductDetail? = null,
     val selectedProductOffers: List<OfferWithSupplier> = emptyList(),
+    val supplierQuotations: List<SupplierQuotationItem> = emptyList(),
+    val quotationSummary: SupplierQuotationSummary? = null,
     val alternativeBrands: List<ProductEntity> = emptyList(),
+    val alternativeBrandQuotations: List<AlternativeBrandQuotation> = emptyList(),
     val cartItemsCount: Int = 0,
     val cartTotalPrice: Double = 0.0,
     val cartProductQuantities: Map<Long, Int> = emptyMap(),
     val cartProductItemIds: Map<Long, Long> = emptyMap(),
+    val cartOfferQuantities: Map<Long, Int> = emptyMap(),
     val pendingQuantities: Map<Long, Int> = emptyMap(),
     val errorMessage: String? = null,
     val successMessage: String? = null
@@ -52,6 +62,8 @@ class CatalogueViewModel(
 
     private val _uiState = MutableStateFlow(CatalogueUiState())
     val uiState: StateFlow<CatalogueUiState> = _uiState.asStateFlow()
+
+    private var productDetailsJob: Job? = null
 
     init {
         loadCurrentUser()
@@ -89,14 +101,20 @@ class CatalogueViewModel(
             repository.getApiBasketFlow().collect { basket ->
                 val count = basket.items.sumOf { it.quantity }
                 val total = basket.grandTotal
-                val quantities = basket.items.associate { it.productId to it.quantity }
+                val quantities = basket.items.groupBy { it.productId }.mapValues { (_, lines) ->
+                    lines.sumOf { it.quantity }
+                }
                 val itemIds = basket.items.associate { it.productId to it.itemId }
+                val offerQuantities = basket.items.groupBy { it.offerId }.mapValues { (_, lines) ->
+                    lines.sumOf { it.quantity }
+                }
                 _uiState.update {
                     it.copy(
                         cartItemsCount = count,
                         cartTotalPrice = total,
                         cartProductQuantities = quantities,
-                        cartProductItemIds = itemIds
+                        cartProductItemIds = itemIds,
+                        cartOfferQuantities = offerQuantities
                     )
                 }
             }
@@ -155,18 +173,75 @@ class CatalogueViewModel(
     }
 
     fun selectProduct(productId: Long) {
-        viewModelScope.launch {
-            val prod = repository.getApiProductById(productId)
-            _uiState.update { it.copy(selectedProduct = prod) }
-
-            // Observe offers for this product
-            repository.getApiProductOffersFlow(productId).collect { offers ->
-                _uiState.update { it.copy(selectedProductOffers = offers) }
-            }
+        productDetailsJob?.cancel()
+        val isSwitchingProduct = _uiState.value.selectedProduct?.id != productId
+        _uiState.update {
+            it.copy(
+                isDetailsLoading = true,
+                detailsErrorMessage = null,
+                selectedProduct = if (isSwitchingProduct) null else it.selectedProduct,
+                selectedProductOffers = if (isSwitchingProduct) emptyList() else it.selectedProductOffers,
+                supplierQuotations = if (isSwitchingProduct) emptyList() else it.supplierQuotations,
+                quotationSummary = if (isSwitchingProduct) null else it.quotationSummary,
+                alternativeBrands = if (isSwitchingProduct) emptyList() else it.alternativeBrands,
+                alternativeBrandQuotations = if (isSwitchingProduct) emptyList() else it.alternativeBrandQuotations
+            )
         }
-        viewModelScope.launch {
-            repository.getApiProductAlternativeBrandsFlow(productId).collect { alts ->
-                _uiState.update { it.copy(alternativeBrands = alts) }
+
+        productDetailsJob = viewModelScope.launch {
+            // Observe local Room product, quotations, and alternative brands reactively
+            launch {
+                repository.getApiProductByIdFlow(productId).collect { prod ->
+                    _uiState.update { state ->
+                        state.copy(
+                            selectedProduct = prod,
+                            isDetailsLoading = if (prod != null) false else state.isDetailsLoading
+                        )
+                    }
+                }
+            }
+            launch {
+                repository.getApiProductQuotationsFlow(productId).collect { (summary, quotations) ->
+                    _uiState.update {
+                        it.copy(
+                            quotationSummary = summary,
+                            supplierQuotations = quotations,
+                            selectedProductOffers = quotations.map { q -> q.offer }
+                        )
+                    }
+                }
+            }
+            launch {
+                repository.getApiAlternativeBrandQuotationsFlow(productId).collect { alts ->
+                    _uiState.update {
+                        it.copy(
+                            alternativeBrandQuotations = alts,
+                            alternativeBrands = alts.map { alt -> alt.product }
+                        )
+                    }
+                }
+            }
+
+            // Refresh from backend APIs when PRODUCTION_BACKEND_HTTP is active
+            val syncRes = repository.refreshProductDetailsFromBackend(productId)
+            if (syncRes.isFailure) {
+                val errMsg = syncRes.exceptionOrNull()?.message
+                    ?: "Failed to fetch live supplier quotations from server."
+                _uiState.update {
+                    it.copy(
+                        isDetailsLoading = false,
+                        detailsErrorMessage = errMsg
+                    )
+                }
+            } else {
+                // Ensure loading clears even if product ID does not exist
+                val resolved = repository.getApiProductById(productId)
+                _uiState.update {
+                    it.copy(
+                        selectedProduct = it.selectedProduct ?: resolved,
+                        isDetailsLoading = false
+                    )
+                }
             }
         }
     }
@@ -180,50 +255,49 @@ class CatalogueViewModel(
     }
 
     fun addToCart(product: ProductDetail, quantity: Int = 10) {
-        val safeQty = if (quantity <= 0) 10 else quantity
-        // Instant optimistic UI update
-        _uiState.update { current ->
-            val updatedMap = current.cartProductQuantities.toMutableMap()
-            updatedMap[product.id] = (updatedMap[product.id] ?: 0) + safeQty
-            val newCount = current.cartItemsCount + safeQty
-            val newTotal = current.cartTotalPrice + ((product.minOfferPrice ?: 68.50) * safeQty)
-            current.copy(
-                cartProductQuantities = updatedMap,
-                cartItemsCount = newCount,
-                cartTotalPrice = newTotal,
-                successMessage = "Added ${product.name} to basket!"
-            )
+        if (quantity <= 0) {
+            _uiState.update { it.copy(errorMessage = "Quantity must be greater than 0.") }
+            return
         }
-
         viewModelScope.launch {
-            val offerId = product.bestOfferId ?: repository.getApiProductOffers(product.id).firstOrNull()?.offerId ?: 0L
-            val result = repository.postApiBasketItems(product.id, offerId, safeQty)
-            result.onFailure { err ->
-                _uiState.update { it.copy(errorMessage = err.message ?: "Failed to add to basket") }
+            val offers = repository.getApiProductOffers(product.id)
+            val eligibleOffer = offers.firstOrNull { offer ->
+                val notExpired = offer.validTillEpochMillis <= 0L ||
+                    offer.validTillEpochMillis > System.currentTimeMillis()
+                offer.isActive && notExpired && offer.availableQuantity >= offer.moq && offer.unitPricePtr > 0.0
             }
+            val offerId = product.bestOfferId ?: eligibleOffer?.offerId ?: 0L
+            if (offerId <= 0L) {
+                _uiState.update { it.copy(errorMessage = "No eligible supplier quotation available for ${product.name}.") }
+                return@launch
+            }
+            val result = repository.postApiBasketItems(product.id, offerId, quantity)
+            result.fold(
+                onSuccess = {
+                    _uiState.update { it.copy(successMessage = "Added ${product.name} ($quantity) to basket!") }
+                },
+                onFailure = { err ->
+                    _uiState.update { it.copy(errorMessage = err.message ?: "Failed to add to basket") }
+                }
+            )
         }
     }
 
     fun incrementQuantity(product: ProductDetail) {
         val currentQty = _uiState.value.cartProductQuantities[product.id] ?: 0
         val newQty = currentQty + 1
-        _uiState.update { current ->
-            val updatedMap = current.cartProductQuantities.toMutableMap()
-            updatedMap[product.id] = newQty
-            current.copy(
-                cartProductQuantities = updatedMap,
-                cartItemsCount = current.cartItemsCount + 1,
-                cartTotalPrice = current.cartTotalPrice + (product.minOfferPrice ?: 68.50)
-            )
-        }
-
         viewModelScope.launch {
             val existingItemId = _uiState.value.cartProductItemIds[product.id]
-            if (existingItemId != null && currentQty > 0) {
+            val result = if (existingItemId != null && currentQty > 0) {
                 repository.putApiBasketItemQuantity(existingItemId, newQty)
             } else {
-                val offerId = product.bestOfferId ?: repository.getApiProductOffers(product.id).firstOrNull()?.offerId ?: 0L
+                val offerId = product.bestOfferId
+                    ?: repository.getApiProductOffers(product.id).firstOrNull()?.offerId
+                    ?: 0L
                 repository.postApiBasketItems(product.id, offerId, 1)
+            }
+            result.onFailure { err ->
+                _uiState.update { it.copy(errorMessage = err.message ?: "Could not update basket quantity") }
             }
         }
     }
@@ -231,27 +305,16 @@ class CatalogueViewModel(
     fun decrementQuantity(product: ProductDetail) {
         val currentQty = _uiState.value.cartProductQuantities[product.id] ?: 0
         val newQty = currentQty - 1
-        _uiState.update { current ->
-            val updatedMap = current.cartProductQuantities.toMutableMap()
-            if (newQty <= 0) {
-                updatedMap.remove(product.id)
-            } else {
-                updatedMap[product.id] = newQty
-            }
-            current.copy(
-                cartProductQuantities = updatedMap,
-                cartItemsCount = (current.cartItemsCount - 1).coerceAtLeast(0),
-                cartTotalPrice = (current.cartTotalPrice - (product.minOfferPrice ?: 68.50)).coerceAtLeast(0.0)
-            )
-        }
-
         viewModelScope.launch {
             val existingItemId = _uiState.value.cartProductItemIds[product.id]
             if (existingItemId != null) {
-                if (newQty <= 0) {
+                val result = if (newQty <= 0) {
                     repository.deleteApiBasketItem(existingItemId)
                 } else {
                     repository.putApiBasketItemQuantity(existingItemId, newQty)
+                }
+                result.onFailure { err ->
+                    _uiState.update { it.copy(errorMessage = err.message ?: "Could not update basket quantity") }
                 }
             }
         }
@@ -282,12 +345,73 @@ class CatalogueViewModel(
         }
     }
 
-    fun addOfferToBasket(offer: OfferWithSupplier, quantity: Int, onSuccess: () -> Unit) {
+    fun addOfferToBasket(offer: OfferWithSupplier, quantity: Int, onSuccess: () -> Unit = {}) {
+        val now = System.currentTimeMillis()
+        when {
+            !offer.isActive -> {
+                _uiState.update { it.copy(errorMessage = "Selected supplier quotation is inactive.") }
+                return
+            }
+            offer.validTillEpochMillis in 1..now -> {
+                _uiState.update { it.copy(errorMessage = "Selected supplier quotation has expired.") }
+                return
+            }
+            offer.unitPricePtr <= 0.0 -> {
+                _uiState.update { it.copy(errorMessage = "Selected supplier quotation is missing a valid PTR.") }
+                return
+            }
+            offer.availableQuantity <= 0 -> {
+                _uiState.update { it.copy(errorMessage = "${offer.supplierBusinessName} is currently out of stock.") }
+                return
+            }
+            offer.availableQuantity < offer.moq -> {
+                _uiState.update {
+                    it.copy(
+                        errorMessage = "Offer unavailable: quoted stock (${offer.availableQuantity}) is less than MOQ (${offer.moq})."
+                    )
+                }
+                return
+            }
+            quantity <= 0 -> {
+                _uiState.update { it.copy(errorMessage = "Quantity must be greater than 0.") }
+                return
+            }
+            quantity < offer.moq -> {
+                _uiState.update {
+                    it.copy(errorMessage = "Minimum order quantity (MOQ) is ${offer.moq} units.")
+                }
+                return
+            }
+            quantity > offer.availableQuantity -> {
+                _uiState.update {
+                    it.copy(
+                        errorMessage = "Requested quantity ($quantity) exceeds available stock (${offer.availableQuantity})."
+                    )
+                }
+                return
+            }
+        }
+
+        val inBasketForOffer = _uiState.value.cartOfferQuantities[offer.offerId] ?: 0
+        if (inBasketForOffer + quantity > offer.availableQuantity) {
+            _uiState.update {
+                it.copy(
+                    errorMessage = "Cannot add $quantity more units: basket already has $inBasketForOffer units and only ${offer.availableQuantity} are available."
+                )
+            }
+            return
+        }
+
         viewModelScope.launch {
             val result = repository.postApiBasketItems(offer.productId, offer.offerId, quantity)
             result.fold(
                 onSuccess = {
-                    _uiState.update { it.copy(successMessage = "Added to basket!") }
+                    val actionVerb = if (inBasketForOffer > 0) "Updated" else "Added"
+                    _uiState.update {
+                        it.copy(
+                            successMessage = "$actionVerb $quantity units from ${offer.supplierBusinessName} in basket!"
+                        )
+                    }
                     onSuccess()
                 },
                 onFailure = { err ->

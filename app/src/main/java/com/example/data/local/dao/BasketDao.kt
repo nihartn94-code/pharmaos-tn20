@@ -17,17 +17,32 @@ interface BasketDao {
     @Update
     suspend fun updateBasket(basket: BasketEntity)
 
+    @Query("SELECT * FROM baskets ORDER BY updatedAtEpochMillis DESC")
+    fun getAllBasketsFlow(): Flow<List<BasketEntity>>
+
     @Query("SELECT * FROM baskets WHERE buyerId = :buyerId AND isSaved = 0 LIMIT 1")
     suspend fun getActiveBasketForBuyer(buyerId: Long): BasketEntity?
 
     @Query("SELECT * FROM baskets WHERE buyerId = :buyerId AND isSaved = 1 ORDER BY updatedAtEpochMillis DESC")
     fun getSavedBasketsFlow(buyerId: Long): Flow<List<BasketEntity>>
 
+    @Query("SELECT * FROM baskets WHERE buyerId = :buyerId AND isSaved = 1 ORDER BY updatedAtEpochMillis DESC")
+    suspend fun getSavedBaskets(buyerId: Long): List<BasketEntity>
+
+    @Query("SELECT * FROM baskets WHERE buyerId = :buyerId AND isSaved = 1 AND LOWER(TRIM(name)) = LOWER(TRIM(:name)) LIMIT 1")
+    suspend fun getSavedBasketByName(buyerId: Long, name: String): BasketEntity?
+
+    @Query("UPDATE baskets SET updatedAtEpochMillis = :updatedAt WHERE id = :basketId")
+    suspend fun updateBasketTimestamp(basketId: Long, updatedAt: Long = System.currentTimeMillis())
+
     @Query("SELECT * FROM baskets WHERE id = :basketId LIMIT 1")
     suspend fun getBasketById(basketId: Long): BasketEntity?
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertBasketItem(item: BasketItemEntity): Long
+
+    @Query("SELECT * FROM basket_items ORDER BY id ASC")
+    fun getAllBasketItemsFlow(): Flow<List<BasketItemEntity>>
 
     @Query("SELECT * FROM basket_items WHERE basketId = :basketId ORDER BY id ASC")
     fun getBasketItemsFlow(basketId: Long): Flow<List<BasketItemEntity>>
@@ -37,6 +52,12 @@ interface BasketDao {
 
     @Query("SELECT * FROM basket_items WHERE basketId = :basketId AND productId = :productId LIMIT 1")
     suspend fun getBasketItemByProduct(basketId: Long, productId: Long): BasketItemEntity?
+
+    @Query("SELECT * FROM basket_items WHERE basketId = :basketId AND productId = :productId ORDER BY id ASC")
+    suspend fun getBasketItemsByProduct(basketId: Long, productId: Long): List<BasketItemEntity>
+
+    @Query("SELECT * FROM basket_items WHERE basketId = :basketId AND productId = :productId AND offerId = :offerId LIMIT 1")
+    suspend fun getBasketItemByProductAndOffer(basketId: Long, productId: Long, offerId: Long): BasketItemEntity?
 
     @Query("UPDATE basket_items SET quantity = :quantity, offerId = :offerId, supplierId = :supplierId WHERE id = :itemId")
     suspend fun updateBasketItem(itemId: Long, quantity: Int, offerId: Long, supplierId: Long)
