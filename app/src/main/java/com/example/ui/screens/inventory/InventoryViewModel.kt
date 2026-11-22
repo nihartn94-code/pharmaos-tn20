@@ -19,6 +19,7 @@ import com.example.service.InventoryMonitorState
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
@@ -42,6 +43,11 @@ enum class InventorySort(val label: String) {
 
 data class InventoryUiState(
     val isLoading: Boolean = true,
+    val isAuthResolved: Boolean = false,
+    val isInventoryAuthorized: Boolean = false,
+    val isRefreshing: Boolean = false,
+    val isBackendConnected: Boolean = false,
+    val loadError: String? = null,
     val currentUser: AuthUser? = null,
     val allBatches: List<BatchWithProduct> = emptyList(),
     val filteredBatches: List<BatchWithProduct> = emptyList(),
@@ -78,6 +84,8 @@ class InventoryViewModel(
     private val _uiState = MutableStateFlow(InventoryUiState())
     val uiState: StateFlow<InventoryUiState> = _uiState.asStateFlow()
 
+    private var lastSyncedUserId: Long? = null
+
     init {
         loadData()
         observeMonitor()
@@ -87,7 +95,13 @@ class InventoryViewModel(
         if (monitorManager != null) {
             viewModelScope.launch {
                 monitorManager.monitorState.collect { mState ->
-                    _uiState.update { it.copy(monitorState = mState) }
+                    _uiState.update { current ->
+                        if (current.isInventoryAuthorized) {
+                            current.copy(monitorState = mState)
+                        } else {
+                            current.copy(monitorState = InventoryMonitorState(isMonitoringActive = false))
+                        }
+                    }
                 }
             }
         }
@@ -96,38 +110,114 @@ class InventoryViewModel(
     private fun loadData() {
         viewModelScope.launch {
             repository.getApiUsersMeFlow().collect { user ->
-                _uiState.update { it.copy(currentUser = user) }
-            }
-        }
-        viewModelScope.launch {
-            repository.getApiBatchesFlow().collect { list ->
-                _uiState.update {
-                    it.copy(
-                        isLoading = false,
-                        allBatches = list,
-                        filteredBatches = applyFilter(list, it.searchQuery, it.selectedFilter)
-                    )
+                val authorized = user?.role?.canAccessRealTimeInventory == true
+                val backendConnected = if (authorized) {
+                    try {
+                        repository.isProductionBackendConnected()
+                    } catch (_: Exception) {
+                        false
+                    }
+                } else {
+                    false
                 }
-            }
-        }
-        viewModelScope.launch {
-            repository.getRealTimeInventoryFlow().collect { items ->
-                _uiState.update { current ->
-                    current.copy(
-                        isLoading = false,
-                        inventoryItems = items,
-                        filteredInventoryItems = applyInventoryFilterAndSort(
-                            items = items,
-                            query = current.searchQuery,
-                            tab = current.selectedTab,
-                            sort = current.selectedSort
+
+                if (!authorized) {
+                    lastSyncedUserId = null
+                    _uiState.update {
+                        it.copy(
+                            isAuthResolved = true,
+                            isInventoryAuthorized = false,
+                            isLoading = false,
+                            isRefreshing = false,
+                            isBackendConnected = false,
+                            loadError = null,
+                            currentUser = user,
+                            allBatches = emptyList(),
+                            filteredBatches = emptyList(),
+                            inventoryItems = emptyList(),
+                            filteredInventoryItems = emptyList(),
+                            inventorySummary = InventoryDashboardSummary(),
+                            monitorState = InventoryMonitorState(isMonitoringActive = false)
                         )
-                    )
+                    }
+                } else {
+                    val shouldRefresh = user != null && lastSyncedUserId != user.id
+                    _uiState.update {
+                        it.copy(
+                            isAuthResolved = true,
+                            isInventoryAuthorized = true,
+                            isBackendConnected = backendConnected,
+                            currentUser = user
+                        )
+                    }
+                    if (shouldRefresh) {
+                        lastSyncedUserId = user?.id
+                        refreshInventory()
+                    }
                 }
             }
         }
         viewModelScope.launch {
-            repository.getInventorySummaryFlow().collect { summary ->
+            combine(
+                repository.getApiUsersMeFlow(),
+                repository.getApiBatchesFlow()
+            ) { user, list ->
+                val authorized = user?.role?.canAccessRealTimeInventory == true
+                authorized to if (authorized) list else emptyList()
+            }.collect { (authorized, list) ->
+                _uiState.update { current ->
+                    if (!authorized) {
+                        current.copy(
+                            allBatches = emptyList(),
+                            filteredBatches = emptyList()
+                        )
+                    } else {
+                        current.copy(
+                            isLoading = current.isRefreshing && list.isEmpty() && current.inventoryItems.isEmpty(),
+                            allBatches = list,
+                            filteredBatches = applyFilter(list, current.searchQuery, current.selectedFilter)
+                        )
+                    }
+                }
+            }
+        }
+        viewModelScope.launch {
+            combine(
+                repository.getApiUsersMeFlow(),
+                repository.getRealTimeInventoryFlow()
+            ) { user, items ->
+                val authorized = user?.role?.canAccessRealTimeInventory == true
+                authorized to if (authorized) items else emptyList()
+            }.collect { (authorized, items) ->
+                _uiState.update { current ->
+                    if (!authorized) {
+                        current.copy(
+                            inventoryItems = emptyList(),
+                            filteredInventoryItems = emptyList()
+                        )
+                    } else {
+                        current.copy(
+                            isLoading = current.isRefreshing && items.isEmpty(),
+                            inventoryItems = items,
+                            filteredInventoryItems = applyInventoryFilterAndSort(
+                                items = items,
+                                query = current.searchQuery,
+                                tab = current.selectedTab,
+                                sort = current.selectedSort
+                            )
+                        )
+                    }
+                }
+            }
+        }
+        viewModelScope.launch {
+            combine(
+                repository.getApiUsersMeFlow(),
+                repository.getInventorySummaryFlow()
+            ) { user, summary ->
+                val authorized = user?.role?.canAccessRealTimeInventory == true
+                if (authorized) summary else InventoryDashboardSummary()
+            }.collect { summary ->
                 _uiState.update { it.copy(inventorySummary = summary) }
             }
         }
@@ -140,6 +230,60 @@ class InventoryViewModel(
             repository.getApiProductsFlow().collect { prods ->
                 _uiState.update { it.copy(catalogueProducts = prods) }
             }
+        }
+    }
+
+    fun refreshInventory() {
+        val current = _uiState.value
+        if (current.isAuthResolved && !current.isInventoryAuthorized) {
+            _uiState.update {
+                it.copy(
+                    isLoading = false,
+                    isRefreshing = false,
+                    errorMessage = "Access denied (403): Real-Time Inventory is restricted to Brand and Manufacturer accounts."
+                )
+            }
+            return
+        }
+
+        viewModelScope.launch {
+            val backendConnected = try {
+                repository.isProductionBackendConnected()
+            } catch (_: Exception) {
+                false
+            }
+            _uiState.update {
+                it.copy(
+                    isRefreshing = true,
+                    isBackendConnected = backendConnected,
+                    isLoading = it.inventoryItems.isEmpty(),
+                    loadError = null
+                )
+            }
+
+            val result = repository.refreshRealTimeInventory()
+            result.fold(
+                onSuccess = {
+                    _uiState.update {
+                        it.copy(
+                            isRefreshing = false,
+                            isLoading = false,
+                            loadError = null
+                        )
+                    }
+                },
+                onFailure = { err ->
+                    val msg = err.message ?: "Failed to refresh real-time inventory"
+                    _uiState.update {
+                        it.copy(
+                            isRefreshing = false,
+                            isLoading = false,
+                            loadError = msg,
+                            errorMessage = msg
+                        )
+                    }
+                }
+            )
         }
     }
 
@@ -196,11 +340,22 @@ class InventoryViewModel(
     }
 
     fun adjustBatchStock(batchId: Long, newQuantity: Int, reason: String, onDone: () -> Unit = {}) {
+        if (!_uiState.value.isInventoryAuthorized) {
+            _uiState.update {
+                it.copy(errorMessage = "Access denied (403): Real-Time Inventory is restricted to Brand and Manufacturer accounts.")
+            }
+            return
+        }
         viewModelScope.launch {
             val result = repository.adjustBatchStock(batchId, newQuantity, reason)
             result.fold(
                 onSuccess = {
-                    _uiState.update { it.copy(successMessage = "Stock updated in Room database ($newQuantity units)") }
+                    _uiState.update {
+                        it.copy(
+                            loadError = null,
+                            successMessage = "Stock updated ($newQuantity units)"
+                        )
+                    }
                     onDone()
                 },
                 onFailure = { err ->
@@ -211,6 +366,12 @@ class InventoryViewModel(
     }
 
     fun quickRestock(item: InventoryStockItem, quantity: Int = 50, onDone: () -> Unit = {}) {
+        if (!_uiState.value.isInventoryAuthorized) {
+            _uiState.update {
+                it.copy(errorMessage = "Access denied (403): Real-Time Inventory is restricted to Brand and Manufacturer accounts.")
+            }
+            return
+        }
         viewModelScope.launch {
             _uiState.update { it.copy(isRestocking = true) }
             val result = repository.quickRestockToBasket(item.productId, quantity)
@@ -228,6 +389,12 @@ class InventoryViewModel(
     }
 
     fun triggerManualScan() {
+        if (!_uiState.value.isInventoryAuthorized) {
+            _uiState.update {
+                it.copy(errorMessage = "Access denied (403): Real-Time Inventory is restricted to Brand and Manufacturer accounts.")
+            }
+            return
+        }
         viewModelScope.launch {
             _uiState.update { it.copy(isScanning = true) }
             val count = monitorManager?.runManualDepletionCheck() ?: 0
@@ -241,6 +408,12 @@ class InventoryViewModel(
     }
 
     fun updateCriticalThreshold(threshold: Int) {
+        if (!_uiState.value.isInventoryAuthorized) {
+            _uiState.update {
+                it.copy(errorMessage = "Access denied (403): Real-Time Inventory is restricted to Brand and Manufacturer accounts.")
+            }
+            return
+        }
         monitorManager?.setCriticalThreshold(threshold)
         _uiState.update {
             it.copy(successMessage = "Critical stock depletion threshold updated to $threshold units")
@@ -248,6 +421,12 @@ class InventoryViewModel(
     }
 
     fun toggleAutoNotifications(enabled: Boolean) {
+        if (!_uiState.value.isInventoryAuthorized) {
+            _uiState.update {
+                it.copy(errorMessage = "Access denied (403): Real-Time Inventory is restricted to Brand and Manufacturer accounts.")
+            }
+            return
+        }
         monitorManager?.setNotificationsEnabled(enabled)
         _uiState.update {
             it.copy(successMessage = if (enabled) "Automated stock depletion push alerts enabled" else "Automated push alerts paused")
@@ -255,6 +434,12 @@ class InventoryViewModel(
     }
 
     fun toggleMonitoring(active: Boolean) {
+        if (!_uiState.value.isInventoryAuthorized) {
+            _uiState.update {
+                it.copy(errorMessage = "Access denied (403): Real-Time Inventory is restricted to Brand and Manufacturer accounts.")
+            }
+            return
+        }
         if (active) {
             monitorManager?.startMonitoring()
             _uiState.update { it.copy(successMessage = "Inventory depletion monitoring activated") }
@@ -265,11 +450,22 @@ class InventoryViewModel(
     }
 
     fun createBatch(batch: BatchEntity, onComplete: () -> Unit) {
+        if (!_uiState.value.isInventoryAuthorized) {
+            _uiState.update {
+                it.copy(errorMessage = "Access denied (403): Real-Time Inventory is restricted to Brand and Manufacturer accounts.")
+            }
+            return
+        }
         viewModelScope.launch {
             val result = repository.postApiBatches(batch)
             result.fold(
                 onSuccess = {
-                    _uiState.update { it.copy(successMessage = "Batch added successfully to warehouse inventory!") }
+                    _uiState.update {
+                        it.copy(
+                            loadError = null,
+                            successMessage = "Batch added successfully to warehouse inventory!"
+                        )
+                    }
                     onComplete()
                 },
                 onFailure = { err ->

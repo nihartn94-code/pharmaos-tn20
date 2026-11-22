@@ -94,7 +94,7 @@ fun OrderConfirmationScreen(
             Spacer(modifier = Modifier.height(8.dp))
 
             Text(
-                text = "Generated ${orderIds.size} purchase orders across designated suppliers. Live status tracking and credit ledger debit entries have been updated.",
+                text = "Generated ${orderIds.size} purchase order${if (orderIds.size == 1) "" else "s"} across designated suppliers. Live status tracking and credit ledger debit entries have been updated.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 textAlign = TextAlign.Center
@@ -104,7 +104,9 @@ fun OrderConfirmationScreen(
 
             // Payment Receipt Details Card
             Card(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("order_confirmation_receipt_card"),
                 shape = RoundedCornerShape(16.dp),
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
                 elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
@@ -142,25 +144,27 @@ fun OrderConfirmationScreen(
                     ) {
                         Text("Payment Method:", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
                         Text(
-                            text = paymentMethod ?: "Pharma Wholesale Credit Line",
+                            text = paymentMethod?.ifBlank { null } ?: "Pharma Wholesale Credit Line",
                             fontWeight = FontWeight.SemiBold,
                             fontSize = 13.sp,
                             color = Color(0xFF1D64EC)
                         )
                     }
 
-                    Spacer(modifier = Modifier.height(8.dp))
+                    if (!transactionId.isNullOrBlank()) {
+                        Spacer(modifier = Modifier.height(8.dp))
 
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Text("Transaction Ref ID:", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
-                        Text(
-                            text = transactionId ?: "TXN-POS-89412",
-                            fontWeight = FontWeight.Medium,
-                            fontSize = 13.sp
-                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text("Transaction Ref ID:", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
+                            Text(
+                                text = transactionId,
+                                fontWeight = FontWeight.Medium,
+                                fontSize = 13.sp
+                            )
+                        }
                     }
 
                     Spacer(modifier = Modifier.height(8.dp))
@@ -171,9 +175,10 @@ fun OrderConfirmationScreen(
                     ) {
                         Text("Generated POs:", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
                         Text(
-                            text = orderIds.ifEmpty { listOf(101L) }.joinToString(", ") { "PO-#$it" },
+                            text = orderIds.joinToString(", ") { "PO-#$it" }.ifBlank { "Pending Confirmation" },
                             fontWeight = FontWeight.Bold,
-                            fontSize = 13.sp
+                            fontSize = 13.sp,
+                            modifier = Modifier.testTag("confirmation_order_ids_text")
                         )
                     }
 

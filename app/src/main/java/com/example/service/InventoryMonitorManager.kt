@@ -101,7 +101,10 @@ class InventoryMonitorManager(
 
         if (autoNotifyEnabled) {
             val currentUser = repository.getApiUsersMe()
-            val userId = currentUser?.id ?: 1L
+            if (currentUser == null || !currentUser.role.canAccessRealTimeInventory) {
+                return
+            }
+            val userId = currentUser.id
 
             for (item in depletedItems) {
                 val itemId = item.id

@@ -31,6 +31,12 @@ interface BatchDao {
     @Query("SELECT * FROM batches WHERE supplierId = :supplierId ORDER BY expiryDateEpochMillis ASC")
     fun getBatchesForSupplierFlow(supplierId: Long): Flow<List<BatchEntity>>
 
+    @Query("SELECT * FROM batches WHERE supplierId = :supplierId ORDER BY expiryDateEpochMillis ASC")
+    suspend fun getBatchesForSupplier(supplierId: Long): List<BatchEntity>
+
+    @Query("DELETE FROM batches WHERE supplierId = :supplierId")
+    suspend fun deleteBatchesForSupplier(supplierId: Long)
+
     @Query("SELECT * FROM batches WHERE productId = :productId ORDER BY expiryDateEpochMillis ASC")
     fun getBatchesForProductFlow(productId: Long): Flow<List<BatchEntity>>
 

@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -39,6 +40,7 @@ import androidx.compose.material.icons.filled.QrCode
 import androidx.compose.material.icons.filled.ReceiptLong
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Shield
+import androidx.compose.material.icons.filled.ShoppingCartCheckout
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -49,6 +51,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.RadioButton
@@ -59,6 +62,8 @@ import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import com.example.ui.components.LoadingState
+import java.util.concurrent.atomic.AtomicBoolean
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -260,6 +265,7 @@ fun PaymentScreenContent(
     var chequeNumber by remember { mutableStateOf("") }
     var isProcessingPayment by remember { mutableStateOf(false) }
     var hasSubmittedOrder by remember { mutableStateOf(false) }
+    val paymentSubmitGuard = remember { AtomicBoolean(false) }
 
     val basket = uiState.basketForCheckout
     val hasBasketItems = basket != null && basket.items.isNotEmpty()
@@ -276,6 +282,7 @@ fun PaymentScreenContent(
         uiState.errorMessage?.let {
             snackbarHostState.showSnackbar(it)
             onClearMessages()
+            paymentSubmitGuard.set(false)
             isProcessingPayment = false
         }
     }
@@ -314,6 +321,8 @@ fun PaymentScreenContent(
             }
         }
 
+        // Synchronous lock prevents duplicate submission even on same-frame rapid double-taps
+        if (!paymentSubmitGuard.compareAndSet(false, true)) return
         isProcessingPayment = true
 
         coroutineScope.launch {
@@ -328,8 +337,14 @@ fun PaymentScreenContent(
             onAuthorizePayment(
                 selectedMethod,
                 generatedTxnId,
-                { _ ->
+                { failureReason ->
+                    paymentSubmitGuard.set(false)
                     isProcessingPayment = false
+                    if (failureReason.isNotBlank() && uiState.errorMessage == null) {
+                        coroutineScope.launch {
+                            snackbarHostState.showSnackbar(failureReason)
+                        }
+                    }
                 },
                 { orderIds ->
                     if (orderIds.isNotEmpty()) {
@@ -337,7 +352,11 @@ fun PaymentScreenContent(
                         isProcessingPayment = false
                         onPaymentSuccess(orderIds, methodLabel, generatedTxnId)
                     } else {
+                        paymentSubmitGuard.set(false)
                         isProcessingPayment = false
+                        coroutineScope.launch {
+                            snackbarHostState.showSnackbar("Order creation could not be confirmed. Please try again.")
+                        }
                     }
                 }
             )
@@ -349,18 +368,20 @@ fun PaymentScreenContent(
         topBar = {
             AppTopBar(
                 title = "Payment & Settlement",
-                subtitle = "Choose B2B Wholesale Payment Method",
+                subtitle = "Step 2 of 2 • Authorize B2B Payment",
                 onBackClick = onNavigateBack
             )
         },
         bottomBar = {
-            Surface(
-                color = MaterialTheme.colorScheme.surface,
-                shadowElevation = 12.dp,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .navigationBarsPadding()
-            ) {
+            if (hasBasketItems) {
+                Surface(
+                    color = MaterialTheme.colorScheme.surface,
+                    shadowElevation = 12.dp,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .navigationBarsPadding()
+                        .imePadding()
+                ) {
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -445,20 +466,82 @@ fun PaymentScreenContent(
                         )
                     }
                 }
+                }
             }
         }
     ) { padding ->
-        LazyColumn(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(padding)
-                .background(MaterialTheme.colorScheme.background),
-            contentPadding = PaddingValues(16.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp)
-        ) {
-            // 1. Order Summary & Price Breakdown Card
-            item {
+        if (basket == null && (uiState.isCheckoutBasketLoading || uiState.isLoading)) {
+            LoadingState(
+                message = "Loading payment summary...",
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(padding)
+                    .testTag("payment_loading_state")
+            )
+        } else if (!hasBasketItems && !hasSubmittedOrder) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(padding)
+                    .padding(24.dp)
+                    .testTag("payment_empty_state"),
+                contentAlignment = Alignment.Center
+            ) {
                 Card(
+                    shape = RoundedCornerShape(16.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.4f))
+                ) {
+                    Column(
+                        modifier = Modifier.padding(24.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.ShoppingCartCheckout,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(44.dp)
+                        )
+                        Text(
+                            text = "No pending order for payment",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text(
+                            text = "Your basket has no active items awaiting payment. Return to review your basket before checking out.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            textAlign = TextAlign.Center
+                        )
+                        OutlinedButton(
+                            onClick = onNavigateBack,
+                            modifier = Modifier
+                                .padding(top = 6.dp)
+                                .testTag("payment_empty_back_button")
+                        ) {
+                            Text("Back to Order Review")
+                        }
+                    }
+                }
+            }
+        } else {
+            LazyColumn(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(padding)
+                    .background(MaterialTheme.colorScheme.background),
+                contentPadding = PaddingValues(16.dp),
+                verticalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                // Stage Indicator: Step 1 completed -> Step 2 active
+                item {
+                    CheckoutStageIndicator(currentStep = 2)
+                }
+
+                // 1. Order Summary & Price Breakdown Card
+                item {
+                    Card(
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(16.dp),
                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
@@ -505,7 +588,7 @@ fun PaymentScreenContent(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween
                         ) {
-                            Text("Applicable GST (12% Pharma)", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 14.sp)
+                            Text("Applicable GST", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 14.sp)
                             Text(Formatters.formatInr(basket?.totalGst ?: 0.0), fontWeight = FontWeight.Medium, fontSize = 14.sp)
                         }
 
@@ -583,31 +666,40 @@ fun PaymentScreenContent(
                             Spacer(modifier = Modifier.width(12.dp))
                             Column {
                                 Text(
-                                    text = user?.businessName ?: "Apex Pharma Distributors",
+                                    text = user?.businessName?.ifBlank { user.fullName } ?: "Verified Buyer Account",
                                     fontWeight = FontWeight.Bold,
                                     fontSize = 14.sp
                                 )
-                                Text(
-                                    text = "GSTIN: ${user?.gstin ?: "27ABCDE1234F1Z5"} • Drug Lic: DL-20B/21B-89412",
-                                    fontSize = 12.sp,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
+                                val complianceMeta = buildList {
+                                    if (!user?.gstin.isNullOrBlank()) add("GSTIN: ${user?.gstin}")
+                                    if (!user?.phone.isNullOrBlank()) add(user?.phone.orEmpty())
+                                }.joinToString(" • ")
+                                if (complianceMeta.isNotBlank()) {
+                                    Text(
+                                        text = complianceMeta,
+                                        fontSize = 12.sp,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
                             }
                         }
 
-                        Spacer(modifier = Modifier.height(10.dp))
+                        val resolvedDeliveryAddress = deliveryAddress.ifBlank { user?.address.orEmpty() }
+                        if (resolvedDeliveryAddress.isNotBlank()) {
+                            Spacer(modifier = Modifier.height(10.dp))
 
-                        Surface(
-                            shape = RoundedCornerShape(8.dp),
-                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Text(
-                                text = "Delivery to: ${deliveryAddress.ifBlank { "Shop 12, Medical Market, Mumbai, MH" }}",
-                                fontSize = 12.sp,
-                                color = MaterialTheme.colorScheme.onSurface,
-                                modifier = Modifier.padding(10.dp)
-                            )
+                            Surface(
+                                shape = RoundedCornerShape(8.dp),
+                                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Text(
+                                    text = "Delivery to: $resolvedDeliveryAddress",
+                                    fontSize = 12.sp,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                    modifier = Modifier.padding(10.dp)
+                                )
+                            }
                         }
                     }
                 }
@@ -1009,6 +1101,7 @@ fun PaymentScreenContent(
                             lineHeight = 16.sp
                         )
                     }
+                }
                 }
             }
         }

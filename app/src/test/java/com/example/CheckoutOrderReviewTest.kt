@@ -34,7 +34,14 @@ import com.example.domain.model.DosageForm
 import com.example.domain.model.SchemeType
 import com.example.domain.model.StorageCondition
 import com.example.domain.model.UserRole
+import androidx.navigation.NavType
+import androidx.navigation.compose.NavHost
+import androidx.navigation.compose.composable
+import androidx.navigation.compose.rememberNavController
+import androidx.navigation.navArgument
+import com.example.ui.navigation.NavRoutes
 import com.example.ui.screens.orders.CheckoutScreen
+import com.example.ui.screens.orders.OrderConfirmationScreen
 import com.example.ui.screens.orders.OrdersViewModel
 import com.example.ui.screens.orders.PaymentScreen
 import com.example.ui.theme.PharmaOSTheme
@@ -597,5 +604,220 @@ class CheckoutOrderReviewTest {
         assertEquals("PO-SRV-777", cachedOrder?.orderNumber)
         assertTrue("Basket must be cleared after backend confirmation", remoteRepo.getApiBasket().items.isEmpty())
         assertFalse("Backend endpoint must have been called for all 3 attempts", postOrderHits.get() < 3)
+    }
+
+    @Test
+    fun checkoutBlankAddress_showsValidationErrorAndBlocksProceedingToPayment() {
+        runBlocking { seedMultiSupplierBasket() }
+        val viewModel = OrdersViewModel(repository)
+        val proceedCalls = AtomicInteger(0)
+
+        composeTestRule.setContent {
+            PharmaOSTheme {
+                CheckoutScreen(
+                    viewModel = viewModel,
+                    onNavigateBack = {},
+                    onProceedToPayment = { _, _ -> proceedCalls.incrementAndGet() }
+                )
+            }
+        }
+
+        waitForUiCondition {
+            viewModel.uiState.value.basketForCheckout?.items?.size == 2
+        }
+
+        // Verify stage indicator is shown on Checkout
+        composeTestRule.onNodeWithTag("checkout_stage_indicator").assertIsDisplayed()
+
+        // Clear delivery address and attempt to continue
+        composeTestRule.onNodeWithTag("checkout_address_input").performScrollTo()
+        composeTestRule.onNodeWithTag("checkout_address_input").performTextClearance()
+
+        composeTestRule.onNodeWithTag("confirm_order_placement_button").performClick()
+        composeTestRule.waitForIdle()
+
+        assertEquals("Should not proceed to Payment with blank delivery address", 0, proceedCalls.get())
+        composeTestRule.onNodeWithText("Please enter a delivery address to continue.", substring = true)
+            .assertIsDisplayed()
+    }
+
+    @Test
+    fun fullCheckoutPaymentConfirmationNavFlow_onlyConfirmsAfterBackendApproval() {
+        val fixture = runBlocking { seedMultiSupplierBasket() }
+
+        var shouldSucceedBackend = false
+        val testInterceptor = Interceptor { chain ->
+            val req = chain.request()
+            if (req.method == "POST" && req.url.encodedPath.endsWith("/api/v1/orders")) {
+                val (code, bodyJson) = if (!shouldSucceedBackend) {
+                    503 to """{"success":false,"error":"Backend gateway temporarily down"}"""
+                } else {
+                    200 to """
+                        {
+                          "success": true,
+                          "data": [
+                            {
+                              "id": 912,
+                              "orderNumber": "PO-CONFIRMED-912",
+                              "buyerId": ${fixture.buyerId},
+                              "supplierId": ${fixture.supplier1Id},
+                              "status": "PLACED",
+                              "subtotal": 720.0,
+                              "gstAmount": 86.4,
+                              "deliveryCharge": 0.0,
+                              "totalAmount": 806.4,
+                              "deliveryAddress": "Plot 44, Andheri Pharma Hub, Mumbai 400053",
+                              "notes": "Verified",
+                              "createdAtEpochMillis": ${System.currentTimeMillis()}
+                            }
+                          ]
+                        }
+                    """.trimIndent()
+                }
+                Response.Builder()
+                    .request(req)
+                    .protocol(Protocol.HTTP_1_1)
+                    .code(code)
+                    .message(if (code == 200) "OK" else "Unavailable")
+                    .body(bodyJson.toResponseBody("application/json".toMediaType()))
+                    .build()
+            } else {
+                Response.Builder()
+                    .request(req)
+                    .protocol(Protocol.HTTP_1_1)
+                    .code(200)
+                    .message("OK")
+                    .body("""{"success":true,"data":[]}""".toResponseBody("application/json".toMediaType()))
+                    .build()
+            }
+        }
+
+        val networkModule = NetworkModule(
+            tokenProvider = dataStoreManager,
+            initialBaseUrl = "https://api.pharmaos.test/",
+            extraInterceptors = listOf(testInterceptor)
+        )
+        runBlocking {
+            dataStoreManager.setAuthExecutionMode(AuthExecutionMode.PRODUCTION_BACKEND_HTTP)
+        }
+        val remoteRepo = PharmaRepositoryImpl(
+            db = db,
+            dataStoreManager = dataStoreManager,
+            authRemoteDataSource = AuthRemoteDataSource(networkModule),
+            pharmaRemoteDataSource = PharmaRemoteDataSource(networkModule),
+            networkModule = networkModule
+        )
+        val sharedViewModel = OrdersViewModel(remoteRepo)
+
+        composeTestRule.setContent {
+            PharmaOSTheme {
+                val navController = rememberNavController()
+                NavHost(
+                    navController = navController,
+                    startDestination = NavRoutes.CHECKOUT
+                ) {
+                    composable(NavRoutes.CHECKOUT) {
+                        CheckoutScreen(
+                            viewModel = sharedViewModel,
+                            onNavigateBack = {},
+                            onProceedToPayment = { addr, notes ->
+                                navController.navigate(NavRoutes.payment(addr, notes)) {
+                                    launchSingleTop = true
+                                }
+                            }
+                        )
+                    }
+                    composable(
+                        route = NavRoutes.PAYMENT,
+                        arguments = listOf(
+                            navArgument("address") { type = NavType.StringType; nullable = true; defaultValue = "" },
+                            navArgument("notes") { type = NavType.StringType; nullable = true; defaultValue = "" }
+                        )
+                    ) { entry ->
+                        val addr = java.net.URLDecoder.decode(entry.arguments?.getString("address") ?: "", "UTF-8")
+                        val notes = java.net.URLDecoder.decode(entry.arguments?.getString("notes") ?: "", "UTF-8")
+                        PaymentScreen(
+                            viewModel = sharedViewModel,
+                            deliveryAddress = addr,
+                            orderNotes = notes,
+                            onNavigateBack = { navController.popBackStack() },
+                            onPaymentSuccess = { ids, method, txn ->
+                                if (ids.isNotEmpty()) {
+                                    navController.navigate(NavRoutes.orderConfirmation(ids, method, txn))
+                                }
+                            }
+                        )
+                    }
+                    composable(
+                        route = NavRoutes.ORDER_CONFIRMATION,
+                        arguments = listOf(
+                            navArgument("orderIds") { type = NavType.StringType },
+                            navArgument("paymentMethod") { type = NavType.StringType; nullable = true; defaultValue = "" },
+                            navArgument("txnId") { type = NavType.StringType; nullable = true; defaultValue = "" }
+                        )
+                    ) { entry ->
+                        val idsStr = entry.arguments?.getString("orderIds") ?: ""
+                        val ids = idsStr.split(",").mapNotNull { it.toLongOrNull() }
+                        val method = entry.arguments?.getString("paymentMethod")?.let {
+                            if (it.isNotBlank()) java.net.URLDecoder.decode(it, "UTF-8") else null
+                        }
+                        val txn = entry.arguments?.getString("txnId")?.let {
+                            if (it.isNotBlank()) java.net.URLDecoder.decode(it, "UTF-8") else null
+                        }
+                        OrderConfirmationScreen(
+                            orderIds = ids,
+                            paymentMethod = method,
+                            transactionId = txn,
+                            onNavigateToOrders = {},
+                            onNavigateToDashboard = {}
+                        )
+                    }
+                }
+            }
+        }
+
+        waitForUiCondition {
+            sharedViewModel.uiState.value.basketForCheckout?.items?.size == 2
+        }
+
+        // Step 1: Checkout -> Continue to Payment
+        composeTestRule.onNodeWithTag("confirm_order_placement_button").performClick()
+        waitForUiCondition {
+            composeTestRule.onAllNodesWithTag("pay_and_place_order_button").fetchSemanticsNodes().isNotEmpty()
+        }
+
+        // Step 2a: First attempt fails on backend -> MUST NOT show OrderConfirmationScreen and basket remains intact
+        shouldSucceedBackend = false
+        composeTestRule.onNodeWithTag("pay_and_place_order_button").performClick()
+
+        // Wait until processing finishes and button becomes enabled again on PaymentScreen
+        waitForUiCondition(timeoutMs = 8000, advanceClockMs = 200L) {
+            !sharedViewModel.uiState.value.isPlacingOrder &&
+                composeTestRule.onAllNodesWithTag("order_confirmation_receipt_card").fetchSemanticsNodes().isEmpty() &&
+                runCatching {
+                    composeTestRule.onNodeWithTag("pay_and_place_order_button").assertIsEnabled()
+                    true
+                }.getOrDefault(false)
+        }
+        assertEquals(
+            "Confirmation screen must NOT appear when backend rejects order creation",
+            0,
+            composeTestRule.onAllNodesWithTag("order_confirmation_receipt_card").fetchSemanticsNodes().size
+        )
+        runBlocking {
+            assertEquals("Basket must remain intact on backend failure", 2, remoteRepo.getApiBasket().items.size)
+        }
+
+        // Step 2b: Backend recovers -> retry succeeds and navigates to OrderConfirmationScreen with confirmed ID 912
+        shouldSucceedBackend = true
+        composeTestRule.onNodeWithTag("pay_and_place_order_button").performClick()
+
+        waitForUiCondition(timeoutMs = 8000, advanceClockMs = 200L) {
+            composeTestRule.onAllNodesWithTag("order_confirmation_receipt_card").fetchSemanticsNodes().isNotEmpty()
+        }
+
+        composeTestRule.onNodeWithTag("confirmation_order_ids_text")
+            .assertIsDisplayed()
+            .assertTextContains("PO-#912", substring = true)
     }
 }

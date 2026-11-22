@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
@@ -26,6 +27,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.automirrored.filled.Notes
 import androidx.compose.material.icons.automirrored.filled.ReceiptLong
 import androidx.compose.material.icons.filled.Business
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Inventory2
 import androidx.compose.material.icons.filled.LocalShipping
 import androidx.compose.material.icons.filled.Place
@@ -76,6 +78,7 @@ import com.example.domain.repository.BasketItemDetail
 import com.example.domain.repository.BasketWithDetails
 import com.example.domain.repository.SupplierSubtotal
 import com.example.ui.components.AppTopBar
+import com.example.ui.components.LoadingState
 import com.example.ui.components.PriceText
 import com.example.ui.theme.PharmaOSTheme
 import com.example.util.Formatters
@@ -85,8 +88,7 @@ import kotlinx.coroutines.delay
 fun CheckoutScreen(
     viewModel: OrdersViewModel,
     onNavigateBack: () -> Unit,
-    onProceedToPayment: (String, String) -> Unit,
-    onOrderPlaced: ((List<Long>) -> Unit)? = null
+    onProceedToPayment: (String, String) -> Unit
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     LaunchedEffect(Unit) {
@@ -96,17 +98,6 @@ fun CheckoutScreen(
         uiState = uiState,
         onNavigateBack = onNavigateBack,
         onProceedToPayment = onProceedToPayment,
-        onPlaceOrders = { addr, notes ->
-            if (onOrderPlaced != null) {
-                viewModel.placeOrders(
-                    deliveryAddress = addr,
-                    notes = notes,
-                    onSuccess = onOrderPlaced
-                )
-            } else {
-                onProceedToPayment(addr, notes)
-            }
-        },
         onClearMessages = { viewModel.clearMessages() }
     )
 }
@@ -117,7 +108,6 @@ fun CheckoutScreenContent(
     uiState: OrdersUiState,
     onNavigateBack: () -> Unit,
     onProceedToPayment: (String, String) -> Unit,
-    onPlaceOrders: (String, String) -> Unit = onProceedToPayment,
     onClearMessages: () -> Unit
 ) {
     val snackbarHostState = remember { SnackbarHostState() }
@@ -284,7 +274,15 @@ fun CheckoutScreenContent(
             }
         }
     ) { padding ->
-        if (basket == null || !hasItems) {
+        if (basket == null && (uiState.isCheckoutBasketLoading || uiState.isLoading)) {
+            LoadingState(
+                message = "Loading your order review...",
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(padding)
+                    .testTag("checkout_loading_state")
+            )
+        } else if (basket == null || !hasItems) {
             Box(
                 modifier = Modifier
                     .fillMaxSize()
@@ -342,6 +340,9 @@ fun CheckoutScreenContent(
                     .padding(16.dp),
                 verticalArrangement = Arrangement.spacedBy(16.dp)
             ) {
+                // Stage Indicator: Step 1 (Order Review) -> Step 2 (Payment)
+                CheckoutStageIndicator(currentStep = 1)
+
                 // 1. Final Review Banner & Supplier Split Notice
                 Surface(
                     shape = RoundedCornerShape(12.dp),
@@ -974,6 +975,108 @@ private fun SummaryChargeRow(
     }
 }
 
+@Composable
+internal fun CheckoutStageIndicator(
+    currentStep: Int,
+    modifier: Modifier = Modifier
+) {
+    Surface(
+        shape = RoundedCornerShape(12.dp),
+        color = MaterialTheme.colorScheme.surface,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.35f)),
+        modifier = modifier
+            .fillMaxWidth()
+            .testTag("checkout_stage_indicator")
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 14.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            CheckoutStageStepBadge(
+                stepNumber = 1,
+                label = "Order Review",
+                isActive = currentStep == 1,
+                isCompleted = currentStep > 1
+            )
+            HorizontalDivider(
+                modifier = Modifier.weight(1f),
+                thickness = 1.5.dp,
+                color = if (currentStep > 1) {
+                    MaterialTheme.colorScheme.primary
+                } else {
+                    MaterialTheme.colorScheme.outline.copy(alpha = 0.35f)
+                }
+            )
+            CheckoutStageStepBadge(
+                stepNumber = 2,
+                label = "Payment & Place Order",
+                isActive = currentStep == 2,
+                isCompleted = currentStep > 2
+            )
+        }
+    }
+}
+
+@Composable
+private fun CheckoutStageStepBadge(
+    stepNumber: Int,
+    label: String,
+    isActive: Boolean,
+    isCompleted: Boolean
+) {
+    val badgeBg = when {
+        isCompleted -> Color(0xFF10B981)
+        isActive -> MaterialTheme.colorScheme.primary
+        else -> MaterialTheme.colorScheme.surfaceVariant
+    }
+    val badgeFg = when {
+        isCompleted -> Color.White
+        isActive -> MaterialTheme.colorScheme.onPrimary
+        else -> MaterialTheme.colorScheme.onSurfaceVariant
+    }
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        Surface(
+            shape = CircleShape,
+            color = badgeBg,
+            modifier = Modifier.size(22.dp)
+        ) {
+            Box(contentAlignment = Alignment.Center) {
+                if (isCompleted) {
+                    Icon(
+                        imageVector = Icons.Default.Check,
+                        contentDescription = null,
+                        tint = badgeFg,
+                        modifier = Modifier.size(14.dp)
+                    )
+                } else {
+                    Text(
+                        text = stepNumber.toString(),
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = badgeFg
+                    )
+                }
+            }
+        }
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = if (isActive || isCompleted) FontWeight.Bold else FontWeight.Medium,
+            color = if (isActive || isCompleted) {
+                MaterialTheme.colorScheme.onSurface
+            } else {
+                MaterialTheme.colorScheme.onSurfaceVariant
+            }
+        )
+    }
+}
+
 @Preview(name = "Checkout - Light Mode", showBackground = true)
 @Preview(name = "Checkout - Dark Mode", uiMode = Configuration.UI_MODE_NIGHT_YES, showBackground = true)
 @Composable
@@ -1052,7 +1155,6 @@ fun CheckoutScreenPreview() {
             ),
             onNavigateBack = {},
             onProceedToPayment = { _, _ -> },
-            onPlaceOrders = { _, _ -> },
             onClearMessages = {}
         )
     }

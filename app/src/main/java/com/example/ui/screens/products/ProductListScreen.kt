@@ -140,30 +140,32 @@ fun ProductListScreen(
                     }
                 },
                 actions = {
-                    // Quick count badge
-                    Surface(
-                        shape = RoundedCornerShape(12.dp),
-                        color = Color(0xFFEFF6FF),
-                        border = BorderStroke(1.dp, Color(0xFFBFDBFE)),
-                        modifier = Modifier.padding(end = 12.dp)
-                    ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                    if (uiState.isAuthResolved && uiState.isInventoryAuthorized) {
+                        // Quick count badge
+                        Surface(
+                            shape = RoundedCornerShape(12.dp),
+                            color = Color(0xFFEFF6FF),
+                            border = BorderStroke(1.dp, Color(0xFFBFDBFE)),
+                            modifier = Modifier.padding(end = 12.dp)
                         ) {
-                            Icon(
-                                imageVector = Icons.Default.Inventory,
-                                contentDescription = null,
-                                tint = Color(0xFF2563EB),
-                                modifier = Modifier.size(14.dp)
-                            )
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text(
-                                text = "${uiState.totalProductsCount} SKUs",
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = Color(0xFF1D4ED8)
-                            )
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Inventory,
+                                    contentDescription = null,
+                                    tint = Color(0xFF2563EB),
+                                    modifier = Modifier.size(14.dp)
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text(
+                                    text = "${uiState.totalProductsCount} SKUs",
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color(0xFF1D4ED8)
+                                )
+                            }
                         }
                     }
                 },
@@ -171,32 +173,58 @@ fun ProductListScreen(
             )
         },
         floatingActionButton = {
-            ExtendedFloatingActionButton(
-                onClick = { viewModel.openAddProductDialog() },
-                icon = {
-                    Icon(
-                        imageVector = Icons.Default.Add,
-                        contentDescription = "Add Product"
-                    )
-                },
-                text = {
-                    Text(
-                        text = "Add Product",
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 14.sp
-                    )
-                },
-                containerColor = Color(0xFF2563EB),
-                contentColor = Color.White,
-                shape = RoundedCornerShape(16.dp),
-                modifier = Modifier
-                    .shadow(8.dp, RoundedCornerShape(16.dp), spotColor = Color(0x662563EB))
-                    .testTag("add_product_button")
-            )
+            if (uiState.isAuthResolved && uiState.isInventoryAuthorized) {
+                ExtendedFloatingActionButton(
+                    onClick = { viewModel.openAddProductDialog() },
+                    icon = {
+                        Icon(
+                            imageVector = Icons.Default.Add,
+                            contentDescription = "Add Product"
+                        )
+                    },
+                    text = {
+                        Text(
+                            text = "Add Product",
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 14.sp
+                        )
+                    },
+                    containerColor = Color(0xFF2563EB),
+                    contentColor = Color.White,
+                    shape = RoundedCornerShape(16.dp),
+                    modifier = Modifier
+                        .shadow(8.dp, RoundedCornerShape(16.dp), spotColor = Color(0x662563EB))
+                        .testTag("add_product_button")
+                )
+            }
         },
         snackbarHost = { SnackbarHost(snackbarHostState) },
         containerColor = Color(0xFFF8FAFC)
     ) { innerPadding ->
+        if (!uiState.isAuthResolved) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(innerPadding),
+                contentAlignment = Alignment.Center
+            ) {
+                CircularProgressIndicator(color = Color(0xFF2563EB))
+            }
+            return@Scaffold
+        }
+
+        if (!uiState.isInventoryAuthorized) {
+            com.example.ui.screens.inventory.InventoryAccessRestrictedView(
+                roleLabel = "Stockist",
+                onNavigateBack = onNavigateBack,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(innerPadding),
+                testTagName = "product_inventory_access_restricted_view"
+            )
+            return@Scaffold
+        }
+
         Column(
             modifier = Modifier
                 .fillMaxSize()

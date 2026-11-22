@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.data.local.entity.ProductInventoryEntity
 import com.example.data.repository.ProductRepository
+import com.example.domain.repository.PharmaRepository
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -23,6 +24,8 @@ enum class ProductInventoryFilter(val displayName: String) {
  * UI State for the Product Inventory List screen.
  */
 data class ProductListUiState(
+    val isAuthResolved: Boolean = true,
+    val isInventoryAuthorized: Boolean = true,
     val products: List<ProductInventoryEntity> = emptyList(),
     val filteredProducts: List<ProductInventoryEntity> = emptyList(),
     val searchQuery: String = "",
@@ -43,13 +46,20 @@ data class ProductListUiState(
  */
 class ProductListViewModel(
     private val productRepository: ProductRepository,
-    private val externalScope: kotlinx.coroutines.CoroutineScope? = null
+    private val externalScope: kotlinx.coroutines.CoroutineScope? = null,
+    private val pharmaRepository: PharmaRepository? = null
 ) : ViewModel() {
 
     private val scope: kotlinx.coroutines.CoroutineScope
         get() = externalScope ?: viewModelScope
 
-    private val _uiState = MutableStateFlow(ProductListUiState(isLoading = true))
+    private val _uiState = MutableStateFlow(
+        ProductListUiState(
+            isAuthResolved = pharmaRepository == null,
+            isInventoryAuthorized = pharmaRepository == null,
+            isLoading = true
+        )
+    )
     val uiState: StateFlow<ProductListUiState> = _uiState.asStateFlow()
 
     private val _searchQuery = MutableStateFlow("")
@@ -58,14 +68,52 @@ class ProductListViewModel(
     private var allItemsCache: List<ProductInventoryEntity> = emptyList()
 
     init {
+        if (pharmaRepository != null) {
+            observeUserAuthorization()
+        }
         observeProducts()
+    }
+
+    private fun observeUserAuthorization() {
+        val repo = pharmaRepository ?: return
+        scope.launch {
+            repo.getApiUsersMeFlow().collect { user ->
+                val authorized = user?.role?.canAccessRealTimeInventory == true
+                if (!authorized) {
+                    _uiState.update {
+                        it.copy(
+                            isAuthResolved = true,
+                            isInventoryAuthorized = false,
+                            isLoading = false,
+                            isAddDialogOpen = false,
+                            products = emptyList(),
+                            filteredProducts = emptyList(),
+                            totalProductsCount = 0,
+                            totalStockUnits = 0,
+                            lowStockCount = 0,
+                            outOfStockCount = 0
+                        )
+                    }
+                } else {
+                    _uiState.update {
+                        it.copy(
+                            isAuthResolved = true,
+                            isInventoryAuthorized = true
+                        )
+                    }
+                    applyFiltersAndEmit(allItemsCache, _searchQuery.value, _selectedFilter.value)
+                }
+            }
+        }
     }
 
     private fun observeProducts() {
         scope.launch {
             productRepository.getProductInventoryFlow().collect { allItems ->
                 allItemsCache = allItems
-                applyFiltersAndEmit(allItems, _searchQuery.value, _selectedFilter.value)
+                if (_uiState.value.isInventoryAuthorized) {
+                    applyFiltersAndEmit(allItems, _searchQuery.value, _selectedFilter.value)
+                }
             }
         }
     }
@@ -75,6 +123,9 @@ class ProductListViewModel(
         query: String,
         filter: ProductInventoryFilter
     ) {
+        if (!_uiState.value.isInventoryAuthorized) {
+            return
+        }
         val trimmedQuery = query.trim()
         val searched = if (trimmedQuery.isBlank()) {
             allItems
@@ -122,6 +173,15 @@ class ProductListViewModel(
     }
 
     fun openAddProductDialog() {
+        if (!_uiState.value.isInventoryAuthorized) {
+            _uiState.update {
+                it.copy(
+                    userMessage = "Access denied (403): Real-Time Inventory is restricted to Brand and Manufacturer accounts.",
+                    isError = true
+                )
+            }
+            return
+        }
         _uiState.update { it.copy(isAddDialogOpen = true, userMessage = null) }
     }
 
@@ -140,6 +200,15 @@ class ProductListViewModel(
         unitPricePtr: Double = 0.0,
         mrp: Double = 0.0
     ) {
+        if (!_uiState.value.isInventoryAuthorized) {
+            _uiState.update {
+                it.copy(
+                    userMessage = "Access denied (403): Real-Time Inventory is restricted to Brand and Manufacturer accounts.",
+                    isError = true
+                )
+            }
+            return
+        }
         val trimmedName = productName.trim()
         val trimmedSku = sku.trim().uppercase()
 
@@ -203,6 +272,15 @@ class ProductListViewModel(
     }
 
     fun adjustStock(sku: String, delta: Int) {
+        if (!_uiState.value.isInventoryAuthorized) {
+            _uiState.update {
+                it.copy(
+                    userMessage = "Access denied (403): Real-Time Inventory is restricted to Brand and Manufacturer accounts.",
+                    isError = true
+                )
+            }
+            return
+        }
         scope.launch {
             try {
                 productRepository.adjustStockBySku(sku, delta)
@@ -219,6 +297,15 @@ class ProductListViewModel(
     }
 
     fun deleteProduct(sku: String) {
+        if (!_uiState.value.isInventoryAuthorized) {
+            _uiState.update {
+                it.copy(
+                    userMessage = "Access denied (403): Real-Time Inventory is restricted to Brand and Manufacturer accounts.",
+                    isError = true
+                )
+            }
+            return
+        }
         scope.launch {
             try {
                 productRepository.deleteInventoryBySku(sku)

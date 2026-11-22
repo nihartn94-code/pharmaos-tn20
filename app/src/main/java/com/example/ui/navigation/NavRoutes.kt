@@ -8,6 +8,7 @@ object NavRoutes {
     const val COMPLIANCE_VERIFICATION = "compliance_verification"
     const val DASHBOARD = "dashboard"
     const val MEDICINE_CATALOGUE = "medicine_catalogue"
+    const val MEDICINE_CATALOGUE_ROUTE = "medicine_catalogue?focus={focus}&manufacturer={manufacturer}&query={query}"
     const val SEARCH_MOLECULES = "search_molecules"
     const val ADD_EDIT_PRODUCT = "add_edit_product"
     const val MEDICINE_DETAILS = "medicine_details/{productId}"
@@ -38,6 +39,16 @@ object NavRoutes {
     const val PROFILE_SETTINGS = "profile_settings"
     const val NOTIFICATIONS = "notifications"
 
+    fun medicineCatalogue(
+        focus: String = "products",
+        manufacturer: String = "",
+        query: String = ""
+    ): String {
+        val encFocus = java.net.URLEncoder.encode(focus, "UTF-8")
+        val encMfg = java.net.URLEncoder.encode(manufacturer, "UTF-8")
+        val encQuery = java.net.URLEncoder.encode(query, "UTF-8")
+        return "medicine_catalogue?focus=$encFocus&manufacturer=$encMfg&query=$encQuery"
+    }
     fun medicineDetails(productId: Long) = "medicine_details/$productId"
     fun addEditOffer(productId: Long? = null) = if (productId != null) "add_edit_offer?productId=$productId" else "add_edit_offer"
     fun payment(address: String = "", notes: String = ""): String {

@@ -15,6 +15,7 @@ import com.example.data.local.dao.ProductDao
 import com.example.data.local.dao.ProductInventoryDao
 import com.example.data.local.dao.RecallDao
 import com.example.data.local.dao.ReturnDao
+import com.example.data.local.dao.UserAddressDao
 import com.example.data.local.dao.UserDao
 import com.example.data.local.entity.BasketEntity
 import com.example.data.local.entity.BasketItemEntity
@@ -35,11 +36,13 @@ import com.example.data.local.entity.StockRecordEntity
 import com.example.data.local.entity.SupplierOfferEntity
 import com.example.data.local.entity.SupplierPerformanceEntity
 import com.example.data.local.entity.SupplierSettingsEntity
+import com.example.data.local.entity.UserAddressEntity
 import com.example.data.local.entity.UserEntity
 
 @Database(
     entities = [
         UserEntity::class,
+        UserAddressEntity::class,
         ProductEntity::class,
         ProductInventoryEntity::class,
         SupplierOfferEntity::class,
@@ -61,11 +64,12 @@ import com.example.data.local.entity.UserEntity
         SupplierSettingsEntity::class,
         com.example.data.local.entity.ComplianceVerificationEntity::class
     ],
-    version = 4,
+    version = 5,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
     abstract fun userDao(): UserDao
+    abstract fun userAddressDao(): UserAddressDao
     abstract fun productDao(): ProductDao
     abstract fun productInventoryDao(): ProductInventoryDao
     fun inventoryDao(): ProductInventoryDao = productInventoryDao()

@@ -21,7 +21,10 @@ data class UserEntity(
     val passwordSalt: String,
     val role: String,
     val status: String,
-    val createdAtEpochMillis: Long = System.currentTimeMillis()
+    val createdAtEpochMillis: Long = System.currentTimeMillis(),
+    val emailVerified: Boolean = false,
+    val phoneVerified: Boolean = false,
+    val profileBio: String? = null
 )
 
 @Entity(
@@ -388,4 +391,24 @@ data class ComplianceVerificationEntity(
     val isWhoGmpApplicable: Boolean = true,
     val status: String = "VERIFIED",
     val verifiedAtEpochMillis: Long = System.currentTimeMillis()
+)
+
+@Entity(
+    tableName = "user_addresses",
+    indices = [Index(value = ["userId"])]
+)
+data class UserAddressEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val userId: Long,
+    val addressName: String,
+    val contactPerson: String,
+    val phone: String,
+    val addressLine1: String,
+    val addressLine2: String = "",
+    val city: String,
+    val state: String,
+    val postalCode: String,
+    val country: String = "India",
+    val isDefault: Boolean = false,
+    val updatedAtEpochMillis: Long = System.currentTimeMillis()
 )

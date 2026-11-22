@@ -20,12 +20,17 @@ import retrofit2.http.Path
 import retrofit2.http.Query
 
 /**
- * [PROPOSED — AWAITING BACKEND CONFIRMATION]
  * Inventory SKU stock tracking, batch expiry management, shortage risk alerts, and recalls.
+ *
+ * Role-Based Access Control (Backend Enforcement Contract):
+ * Real-Time Inventory & Batch endpoints (`/api/v1/inventory` and `/api/v1/batches`) are restricted
+ * exclusively to authenticated Brand (`PHARMA_COMPANY`) and Manufacturer (`MANUFACTURER`) accounts:
+ *   `@PreAuthorize("hasAnyRole('MANUFACTURER', 'PHARMA_COMPANY')")`
+ * Requests authenticated with `STOCKIST` tokens MUST be rejected with HTTP 403 Forbidden.
  */
 interface InventoryApiService {
 
-    // SKU Inventory
+    // SKU Inventory (MANUFACTURER / PHARMA_COMPANY only)
     @GET("api/v1/inventory")
     suspend fun getInventory(
         @Query("lowStockOnly") lowStockOnly: Boolean = false

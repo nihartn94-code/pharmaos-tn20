@@ -19,18 +19,45 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
+enum class ExploreMode {
+    PRODUCTS,
+    MANUFACTURERS
+}
+
+data class ManufacturerSummary(
+    val name: String,
+    val productCount: Int,
+    val activeOfferProductCount: Int,
+    val dosageForms: List<DosageForm>,
+    val therapeuticCategories: List<String>,
+    val strengths: List<String>,
+    val saltCompositions: List<String>,
+    val minOfferPrice: Double?,
+    val maxMarginPercent: Int?
+)
+
 data class CatalogueUiState(
     val isLoading: Boolean = true,
     val isDetailsLoading: Boolean = false,
     val detailsErrorMessage: String? = null,
     val currentUser: AuthUser? = null,
+    val canManageCatalogue: Boolean = false,
+    val exploreMode: ExploreMode = ExploreMode.PRODUCTS,
     val allProducts: List<ProductDetail> = emptyList(),
     val filteredProducts: List<ProductDetail> = emptyList(),
+    val manufacturers: List<ManufacturerSummary> = emptyList(),
+    val filteredManufacturers: List<ManufacturerSummary> = emptyList(),
     val searchQuery: String = "",
-    val selectedCategoryChip: String = "Capsules", // Default to Capsules as in reference image
+    val selectedCategoryChip: String = "All",
+    val selectedManufacturer: String? = null,
+    val selectedStrength: String? = null,
+    val selectedSaltFilter: String = "",
     val selectedDosageForm: DosageForm? = null,
     val selectedCategory: String? = null,
     val selectedStorageCondition: StorageCondition? = null,
+    val availableManufacturers: List<String> = emptyList(),
+    val availableStrengths: List<String> = emptyList(),
+    val availableSalts: List<String> = emptyList(),
     val isRxOnly: Boolean? = null,
     val inStockOnly: Boolean = false,
     val sortBy: SortOption = SortOption.NAME_ASC,
@@ -48,7 +75,28 @@ data class CatalogueUiState(
     val pendingQuantities: Map<Long, Int> = emptyMap(),
     val errorMessage: String? = null,
     val successMessage: String? = null
-)
+) {
+    val activeFilterCount: Int
+        get() {
+            var count = 0
+            if (!selectedManufacturer.isNullOrBlank()) count++
+            if (!selectedStrength.isNullOrBlank()) count++
+            if (selectedSaltFilter.isNotBlank()) count++
+            if (selectedDosageForm != null) count++
+            if (!selectedCategory.isNullOrBlank()) count++
+            if (selectedStorageCondition != null) count++
+            if (isRxOnly != null) count++
+            if (inStockOnly) count++
+            if (sortBy != SortOption.NAME_ASC) count++
+            return count
+        }
+
+    val selectedManufacturerSummary: ManufacturerSummary?
+        get() {
+            val target = selectedManufacturer?.trim() ?: return null
+            return manufacturers.firstOrNull { it.name.equals(target, ignoreCase = true) }
+        }
+}
 
 enum class SortOption(val label: String) {
     NAME_ASC("Name: A to Z"),
@@ -64,6 +112,7 @@ class CatalogueViewModel(
     val uiState: StateFlow<CatalogueUiState> = _uiState.asStateFlow()
 
     private var productDetailsJob: Job? = null
+    private var appliedInitialRouteKey: String? = null
 
     init {
         loadCurrentUser()
@@ -74,10 +123,48 @@ class CatalogueViewModel(
         observeBasket()
     }
 
+    /**
+     * Applies route-level navigation arguments once per unique navigation target,
+     * preserving user exploration state when returning from Product Details.
+     */
+    fun applyInitialNavigation(
+        focus: String? = null,
+        manufacturer: String? = null,
+        query: String? = null
+    ) {
+        val normalizedFocus = focus?.trim()?.lowercase().orEmpty()
+        val normalizedMfg = manufacturer?.trim().orEmpty()
+        val normalizedQuery = query?.trim().orEmpty()
+        val routeKey = "$normalizedFocus|$normalizedMfg|$normalizedQuery"
+        if (appliedInitialRouteKey == routeKey) return
+        appliedInitialRouteKey = routeKey
+
+        val targetMode = if (normalizedFocus == "manufacturers") {
+            ExploreMode.MANUFACTURERS
+        } else {
+            ExploreMode.PRODUCTS
+        }
+
+        _uiState.update { state ->
+            val updated = state.copy(
+                exploreMode = targetMode,
+                selectedManufacturer = normalizedMfg.takeIf { it.isNotEmpty() },
+                searchQuery = normalizedQuery,
+                selectedCategoryChip = "All"
+            )
+            recomputeDerivedState(updated)
+        }
+    }
+
     private fun loadCurrentUser() {
         viewModelScope.launch {
             repository.getApiUsersMeFlow().collect { user ->
-                _uiState.update { it.copy(currentUser = user) }
+                _uiState.update {
+                    it.copy(
+                        currentUser = user,
+                        canManageCatalogue = user?.role?.canAccessRealTimeInventory == true
+                    )
+                }
             }
         }
     }
@@ -85,11 +172,12 @@ class CatalogueViewModel(
     private fun observeProducts() {
         viewModelScope.launch {
             repository.getApiProductsFlow().collect { list ->
-                _uiState.update {
-                    it.copy(
-                        isLoading = false,
-                        allProducts = list,
-                        filteredProducts = applyFiltersAndSort(list, it)
+                _uiState.update { state ->
+                    recomputeDerivedState(
+                        state.copy(
+                            isLoading = false,
+                            allProducts = list
+                        )
                     )
                 }
             }
@@ -121,17 +209,56 @@ class CatalogueViewModel(
         }
     }
 
+    fun setExploreMode(mode: ExploreMode) {
+        _uiState.update { state ->
+            val updated = if (mode == ExploreMode.MANUFACTURERS) {
+                state.copy(
+                    exploreMode = ExploreMode.MANUFACTURERS,
+                    selectedManufacturer = null,
+                    selectedCategoryChip = "All"
+                )
+            } else {
+                state.copy(exploreMode = ExploreMode.PRODUCTS)
+            }
+            recomputeDerivedState(updated)
+        }
+    }
+
+    fun selectManufacturer(manufacturerName: String?) {
+        val cleaned = manufacturerName?.trim()?.takeIf { it.isNotEmpty() }
+        _uiState.update { state ->
+            val updated = state.copy(
+                selectedManufacturer = cleaned,
+                selectedCategoryChip = if (cleaned != null) "All" else state.selectedCategoryChip,
+                selectedStrength = if (cleaned != state.selectedManufacturer) null else state.selectedStrength
+            )
+            recomputeDerivedState(updated)
+        }
+    }
+
+    fun selectStrength(strength: String?) {
+        val cleaned = strength?.trim()?.takeIf { it.isNotEmpty() }
+        _uiState.update { state ->
+            val next = if (state.selectedStrength.equals(cleaned, ignoreCase = true)) null else cleaned
+            recomputeDerivedState(state.copy(selectedStrength = next))
+        }
+    }
+
+    fun onSaltFilterChanged(salt: String) {
+        _uiState.update { state ->
+            recomputeDerivedState(state.copy(selectedSaltFilter = salt))
+        }
+    }
+
     fun onSearchQueryChanged(query: String) {
-        _uiState.update {
-            val updated = it.copy(searchQuery = query)
-            updated.copy(filteredProducts = applyFiltersAndSort(it.allProducts, updated))
+        _uiState.update { state ->
+            recomputeDerivedState(state.copy(searchQuery = query))
         }
     }
 
     fun selectCategoryChip(chip: String) {
-        _uiState.update {
-            val updated = it.copy(selectedCategoryChip = chip)
-            updated.copy(filteredProducts = applyFiltersAndSort(it.allProducts, updated))
+        _uiState.update { state ->
+            recomputeDerivedState(state.copy(selectedCategoryChip = chip))
         }
     }
 
@@ -141,10 +268,16 @@ class CatalogueViewModel(
         storage: StorageCondition?,
         rxOnly: Boolean?,
         inStockOnly: Boolean,
-        sortOption: SortOption
+        sortOption: SortOption,
+        manufacturer: String? = _uiState.value.selectedManufacturer,
+        strength: String? = _uiState.value.selectedStrength,
+        saltFilter: String = _uiState.value.selectedSaltFilter
     ) {
-        _uiState.update {
-            val updated = it.copy(
+        _uiState.update { state ->
+            val updated = state.copy(
+                selectedManufacturer = manufacturer?.trim()?.takeIf { it.isNotEmpty() },
+                selectedStrength = strength?.trim()?.takeIf { it.isNotEmpty() },
+                selectedSaltFilter = saltFilter.trim(),
                 selectedDosageForm = dosageForm,
                 selectedCategory = category,
                 selectedStorageCondition = storage,
@@ -152,15 +285,18 @@ class CatalogueViewModel(
                 inStockOnly = inStockOnly,
                 sortBy = sortOption
             )
-            updated.copy(filteredProducts = applyFiltersAndSort(it.allProducts, updated))
+            recomputeDerivedState(updated)
         }
     }
 
     fun clearFilters() {
-        _uiState.update {
-            val updated = it.copy(
+        _uiState.update { state ->
+            val updated = state.copy(
                 searchQuery = "",
                 selectedCategoryChip = "All",
+                selectedManufacturer = null,
+                selectedStrength = null,
+                selectedSaltFilter = "",
                 selectedDosageForm = null,
                 selectedCategory = null,
                 selectedStorageCondition = null,
@@ -168,7 +304,7 @@ class CatalogueViewModel(
                 inStockOnly = false,
                 sortBy = SortOption.NAME_ASC
             )
-            updated.copy(filteredProducts = applyFiltersAndSort(it.allProducts, updated))
+            recomputeDerivedState(updated)
         }
     }
 
@@ -421,18 +557,120 @@ class CatalogueViewModel(
         }
     }
 
+    private fun recomputeDerivedState(state: CatalogueUiState): CatalogueUiState {
+        val allProducts = state.allProducts
+        val allManufacturers = buildManufacturerSummaries(allProducts)
+        val filteredProducts = applyFiltersAndSort(allProducts, state)
+        val filteredManufacturers = filterManufacturers(allProducts, state)
+
+        val scopeProductsForFacets = if (!state.selectedManufacturer.isNullOrBlank()) {
+            allProducts.filter {
+                it.manufacturerName.trim().equals(state.selectedManufacturer.trim(), ignoreCase = true)
+            }
+        } else {
+            allProducts
+        }
+
+        val availableManufacturers = allManufacturers.map { it.name }
+        val availableStrengths = scopeProductsForFacets
+            .map { it.strength.trim() }
+            .filter { it.isNotEmpty() }
+            .distinctBy { it.lowercase() }
+            .sorted()
+        val availableSalts = scopeProductsForFacets
+            .map { it.saltComposition.trim() }
+            .filter { it.isNotEmpty() }
+            .distinctBy { it.lowercase() }
+            .sorted()
+
+        return state.copy(
+            manufacturers = allManufacturers,
+            filteredManufacturers = filteredManufacturers,
+            filteredProducts = filteredProducts,
+            availableManufacturers = availableManufacturers,
+            availableStrengths = availableStrengths,
+            availableSalts = availableSalts
+        )
+    }
+
+    private fun buildManufacturerSummaries(list: List<ProductDetail>): List<ManufacturerSummary> {
+        val grouped = linkedMapOf<String, MutableList<ProductDetail>>()
+        for (product in list) {
+            val displayName = product.manufacturerName.trim().ifBlank { "Independent Manufacturer" }
+            val key = displayName.lowercase()
+            grouped.getOrPut(key) { mutableListOf() }.add(product)
+        }
+
+        return grouped.values.map { products ->
+            val canonicalName = products.first().manufacturerName.trim().ifBlank { "Independent Manufacturer" }
+            val dosageForms = products.map { it.dosageForm }.distinct().sortedBy { it.displayName }
+            val categories = products
+                .map { it.therapeuticCategory.trim() }
+                .filter { it.isNotEmpty() }
+                .distinctBy { it.lowercase() }
+            val strengths = products
+                .map { it.strength.trim() }
+                .filter { it.isNotEmpty() }
+                .distinctBy { it.lowercase() }
+            val salts = products
+                .map { it.saltComposition.trim() }
+                .filter { it.isNotEmpty() }
+                .distinctBy { it.lowercase() }
+            val activeOfferProductCount = products.count { it.activeOfferCount > 0 || it.bestOfferId != null }
+            val minPrice = products.mapNotNull { it.minOfferPrice }.minOrNull()
+            val maxMargin = products.mapNotNull { it.marginPercent }.maxOrNull()
+
+            ManufacturerSummary(
+                name = canonicalName,
+                productCount = products.size,
+                activeOfferProductCount = activeOfferProductCount,
+                dosageForms = dosageForms,
+                therapeuticCategories = categories,
+                strengths = strengths,
+                saltCompositions = salts,
+                minOfferPrice = minPrice,
+                maxMarginPercent = maxMargin
+            )
+        }.sortedBy { it.name.lowercase() }
+    }
+
+    private fun filterManufacturers(
+        list: List<ProductDetail>,
+        state: CatalogueUiState
+    ): List<ManufacturerSummary> {
+        val stateWithoutSelectedMfg = state.copy(selectedManufacturer = null)
+        val matchingProducts = applyFiltersAndSort(list, stateWithoutSelectedMfg)
+        return buildManufacturerSummaries(matchingProducts)
+    }
+
     private fun applyFiltersAndSort(
         list: List<ProductDetail>,
         state: CatalogueUiState
     ): List<ProductDetail> {
         val q = state.searchQuery.trim().lowercase()
+        val mfgFilter = state.selectedManufacturer?.trim()
+        val strengthFilter = state.selectedStrength?.trim()
+        val saltFilter = state.selectedSaltFilter.trim().lowercase()
+
         var filtered = list.filter { p ->
             val matchesQuery = q.isEmpty() ||
                 p.name.lowercase().contains(q) ||
                 p.brand.lowercase().contains(q) ||
                 p.saltComposition.lowercase().contains(q) ||
+                p.strength.lowercase().contains(q) ||
+                p.dosageForm.displayName.lowercase().contains(q) ||
                 p.therapeuticCategory.lowercase().contains(q) ||
                 p.manufacturerName.lowercase().contains(q)
+
+            val matchesManufacturer = mfgFilter.isNullOrBlank() ||
+                p.manufacturerName.trim().equals(mfgFilter, ignoreCase = true)
+
+            val matchesStrength = strengthFilter.isNullOrBlank() ||
+                p.strength.trim().equals(strengthFilter, ignoreCase = true) ||
+                p.strength.contains(strengthFilter, ignoreCase = true)
+
+            val matchesSalt = saltFilter.isEmpty() ||
+                p.saltComposition.lowercase().contains(saltFilter)
 
             val matchesChip = when (state.selectedCategoryChip) {
                 "All" -> true
@@ -452,7 +690,16 @@ class CatalogueViewModel(
             val matchesRx = state.isRxOnly == null || p.isRx == state.isRxOnly
             val matchesStock = !state.inStockOnly || p.activeOfferCount > 0
 
-            matchesQuery && matchesChip && matchesDosage && matchesCategory && matchesStorage && matchesRx && matchesStock
+            matchesQuery &&
+                matchesManufacturer &&
+                matchesStrength &&
+                matchesSalt &&
+                matchesChip &&
+                matchesDosage &&
+                matchesCategory &&
+                matchesStorage &&
+                matchesRx &&
+                matchesStock
         }
 
         filtered = when (state.sortBy) {

@@ -10,12 +10,14 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import com.example.data.local.entity.ProductInventoryEntity
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
 data class DashboardUiState(
     val isLoading: Boolean = true,
     val currentUser: AuthUser? = null,
+    val isRealTimeInventoryAuthorized: Boolean = false,
     val kpis: DashboardKpis? = null,
     val unreadNotificationsCount: Int = 0,
     val cartItemCount: Int = 0,
@@ -33,10 +35,27 @@ class DashboardViewModel(
     val uiState: StateFlow<DashboardUiState> = _uiState.asStateFlow()
 
     init {
+        observeCurrentUser()
         loadDashboardData()
         observeNotifications()
         observeBasket()
         observeInventory()
+    }
+
+    private fun observeCurrentUser() {
+        viewModelScope.launch {
+            repository.getApiUsersMeFlow().collect { user ->
+                val authorized = user?.role?.canAccessRealTimeInventory == true
+                _uiState.update { current ->
+                    current.copy(
+                        currentUser = user,
+                        isRealTimeInventoryAuthorized = authorized,
+                        inventoryItems = if (authorized) current.inventoryItems else emptyList(),
+                        shortageAlertsCount = if (authorized) current.shortageAlertsCount else 0
+                    )
+                }
+            }
+        }
     }
 
     fun loadDashboardData() {
@@ -44,11 +63,15 @@ class DashboardViewModel(
             _uiState.update { it.copy(isLoading = true, errorMessage = null) }
             try {
                 val user = repository.getApiUsersMe()
+                val authorized = user?.role?.canAccessRealTimeInventory == true
                 val kpis = repository.getDashboardStats()
                 _uiState.update {
                     it.copy(
                         isLoading = false,
                         currentUser = user,
+                        isRealTimeInventoryAuthorized = authorized,
+                        inventoryItems = if (authorized) it.inventoryItems else emptyList(),
+                        shortageAlertsCount = if (authorized) it.shortageAlertsCount else 0,
                         kpis = kpis,
                         errorMessage = null
                     )
@@ -78,10 +101,16 @@ class DashboardViewModel(
 
     private fun observeInventory() {
         viewModelScope.launch {
-            repository.getProductInventoryFlow().collect { items ->
+            combine(
+                repository.getApiUsersMeFlow(),
+                repository.getProductInventoryFlow()
+            ) { user, items ->
+                val authorized = user?.role?.canAccessRealTimeInventory == true
+                if (authorized) items else emptyList()
+            }.collect { items ->
                 val critical = items.count { it.currentStock <= it.reorderThreshold }
-                _uiState.update {
-                    it.copy(
+                _uiState.update { current ->
+                    current.copy(
                         inventoryItems = items,
                         shortageAlertsCount = critical
                     )
@@ -91,6 +120,12 @@ class DashboardViewModel(
     }
 
     fun adjustInventoryStock(sku: String, delta: Int) {
+        if (!_uiState.value.isRealTimeInventoryAuthorized) {
+            _uiState.update {
+                it.copy(errorMessage = "Access denied (403): Real-Time Inventory is restricted to Brand and Manufacturer accounts.")
+            }
+            return
+        }
         viewModelScope.launch {
             val item = repository.getProductInventoryBySku(sku) ?: return@launch
             val newStock = (item.currentStock + delta).coerceAtLeast(0)

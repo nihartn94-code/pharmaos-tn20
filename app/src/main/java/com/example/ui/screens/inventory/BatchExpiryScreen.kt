@@ -91,31 +91,58 @@ fun BatchExpiryContent(
         topBar = {
             AppTopBar(
                 title = "Batch & Expiry Management",
-                subtitle = "${uiState.filteredBatches.size} batches in warehouse",
+                subtitle = if (uiState.isAuthResolved && uiState.isInventoryAuthorized) {
+                    "${uiState.filteredBatches.size} batches in warehouse"
+                } else if (!uiState.isAuthResolved) {
+                    "Checking permissions..."
+                } else {
+                    "Brand & Manufacturer Access Only"
+                },
                 onBackClick = onNavigateBack,
                 actions = {
-                    TextButton(
-                        onClick = onNavigateToRecalls,
-                        modifier = Modifier.testTag("recalls_button")
-                    ) {
-                        Icon(Icons.Default.Warning, contentDescription = null, tint = MaterialTheme.colorScheme.error)
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text("Recalls (${uiState.recalls.size})", color = MaterialTheme.colorScheme.error, fontWeight = FontWeight.Bold)
+                    if (uiState.isAuthResolved && uiState.isInventoryAuthorized) {
+                        TextButton(
+                            onClick = onNavigateToRecalls,
+                            modifier = Modifier.testTag("recalls_button")
+                        ) {
+                            Icon(Icons.Default.Warning, contentDescription = null, tint = MaterialTheme.colorScheme.error)
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Recalls (${uiState.recalls.size})", color = MaterialTheme.colorScheme.error, fontWeight = FontWeight.Bold)
+                        }
                     }
                 }
             )
         },
         floatingActionButton = {
-            FloatingActionButton(
-                onClick = onAddBatchClick,
-                containerColor = MaterialTheme.colorScheme.primary,
-                contentColor = MaterialTheme.colorScheme.onPrimary,
-                modifier = Modifier.testTag("add_batch_fab")
-            ) {
-                Icon(Icons.Default.Add, contentDescription = "Add Batch")
+            if (uiState.isAuthResolved && uiState.isInventoryAuthorized) {
+                FloatingActionButton(
+                    onClick = onAddBatchClick,
+                    containerColor = MaterialTheme.colorScheme.primary,
+                    contentColor = MaterialTheme.colorScheme.onPrimary,
+                    modifier = Modifier.testTag("add_batch_fab")
+                ) {
+                    Icon(Icons.Default.Add, contentDescription = "Add Batch")
+                }
             }
         }
     ) { padding ->
+        if (!uiState.isAuthResolved) {
+            LoadingState(message = "Verifying account permissions...")
+            return@Scaffold
+        }
+
+        if (!uiState.isInventoryAuthorized) {
+            InventoryAccessRestrictedView(
+                roleLabel = uiState.currentUser?.role?.displayName ?: "Stockist",
+                onNavigateBack = onNavigateBack,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(padding),
+                testTagName = "batch_expiry_access_restricted_view"
+            )
+            return@Scaffold
+        }
+
         Column(
             modifier = Modifier
                 .fillMaxSize()
@@ -241,6 +268,15 @@ fun BatchExpiryContent(
                                     Text("Expiry: ${Formatters.formatDate(b.expiryDateEpochMillis)}", style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Bold)
                                 }
 
+                                b.mfgDateEpochMillis?.let { mfgDate ->
+                                    Spacer(modifier = Modifier.height(4.dp))
+                                    Text(
+                                        text = "Mfg: ${Formatters.formatDate(mfgDate)}",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+
                                 Spacer(modifier = Modifier.height(6.dp))
 
                                 Row(
@@ -268,6 +304,8 @@ fun BatchExpiryScreenPreview() {
         BatchExpiryContent(
             uiState = InventoryUiState(
                 isLoading = false,
+                isAuthResolved = true,
+                isInventoryAuthorized = true,
                 filteredBatches = listOf(
                     com.example.domain.repository.BatchWithProduct(
                         batch = com.example.data.local.entity.BatchEntity(

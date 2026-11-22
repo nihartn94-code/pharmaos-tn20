@@ -186,7 +186,16 @@ fun AppNavigation() {
             val dashboardViewModel: DashboardViewModel = viewModel(factory = factory)
             DashboardScreen(
                 viewModel = dashboardViewModel,
-                onNavigateToCatalogue = { navController.navigate(NavRoutes.MEDICINE_CATALOGUE) },
+                onNavigateToCatalogue = {
+                    navController.navigate(NavRoutes.medicineCatalogue(focus = "products")) {
+                        launchSingleTop = true
+                    }
+                },
+                onNavigateToManufacturerCatalogue = {
+                    navController.navigate(NavRoutes.medicineCatalogue(focus = "manufacturers")) {
+                        launchSingleTop = true
+                    }
+                },
                 onNavigateToBasket = { navController.navigate(NavRoutes.BASKET) },
                 onNavigateToOrders = { navController.navigate(NavRoutes.MY_ORDERS) },
                 onNavigateToBatches = { navController.navigate(NavRoutes.INVENTORY_DASHBOARD) },
@@ -209,14 +218,44 @@ fun AppNavigation() {
             )
         }
 
-        // Catalogue
-        composable(NavRoutes.MEDICINE_CATALOGUE) {
+        // Unified Product & Manufacturer Exploration Catalogue
+        composable(
+            route = NavRoutes.MEDICINE_CATALOGUE_ROUTE,
+            arguments = listOf(
+                navArgument("focus") {
+                    type = NavType.StringType
+                    defaultValue = "products"
+                },
+                navArgument("manufacturer") {
+                    type = NavType.StringType
+                    defaultValue = ""
+                },
+                navArgument("query") {
+                    type = NavType.StringType
+                    defaultValue = ""
+                }
+            )
+        ) { backStackEntry ->
+            val rawFocus = backStackEntry.arguments?.getString("focus").orEmpty()
+            val rawManufacturer = backStackEntry.arguments?.getString("manufacturer").orEmpty()
+            val rawQuery = backStackEntry.arguments?.getString("query").orEmpty()
+            val decodedFocus = runCatching { java.net.URLDecoder.decode(rawFocus, "UTF-8") }.getOrDefault(rawFocus)
+            val decodedManufacturer = runCatching { java.net.URLDecoder.decode(rawManufacturer, "UTF-8") }.getOrDefault(rawManufacturer)
+            val decodedQuery = runCatching { java.net.URLDecoder.decode(rawQuery, "UTF-8") }.getOrDefault(rawQuery)
+
             val catalogueViewModel: CatalogueViewModel = viewModel(factory = factory)
             MedicineCatalogueScreen(
                 viewModel = catalogueViewModel,
+                initialFocus = decodedFocus.ifBlank { "products" },
+                initialManufacturer = decodedManufacturer,
+                initialQuery = decodedQuery,
                 onNavigateBack = { navController.popBackStack() },
                 onProductClick = { id -> navController.navigate(NavRoutes.medicineDetails(id)) },
-                onAddProductClick = { navController.navigate(NavRoutes.PRODUCT_INVENTORY_LIST) },
+                onAddProductClick = {
+                    if (catalogueViewModel.uiState.value.canManageCatalogue) {
+                        navController.navigate(NavRoutes.PRODUCT_INVENTORY_LIST)
+                    }
+                },
                 onNavigateToBasket = { navController.navigate(NavRoutes.BASKET) },
                 onNavigateToDashboard = {
                     navController.navigate(NavRoutes.DASHBOARD) {
@@ -240,7 +279,9 @@ fun AppNavigation() {
                     navController.navigate(NavRoutes.medicineDetails(productId))
                 },
                 onSearchQuerySubmitted = { query ->
-                    navController.navigate(NavRoutes.MEDICINE_CATALOGUE)
+                    navController.navigate(NavRoutes.medicineCatalogue(focus = "products", query = query)) {
+                        launchSingleTop = true
+                    }
                 }
             )
         }
@@ -372,11 +413,6 @@ fun AppNavigation() {
                     navController.navigate(NavRoutes.payment(addr, notes)) {
                         launchSingleTop = true
                     }
-                },
-                onOrderPlaced = { ids ->
-                    navController.navigate(NavRoutes.orderConfirmation(ids)) {
-                        popUpTo(NavRoutes.BASKET) { inclusive = true }
-                    }
                 }
             )
         }
@@ -398,15 +434,27 @@ fun AppNavigation() {
         ) { backStackEntry ->
             val address = java.net.URLDecoder.decode(backStackEntry.arguments?.getString("address") ?: "", "UTF-8")
             val notes = java.net.URLDecoder.decode(backStackEntry.arguments?.getString("notes") ?: "", "UTF-8")
-            val ordersViewModel: OrdersViewModel = viewModel(factory = factory)
+            val checkoutEntry = remember(backStackEntry) {
+                try {
+                    navController.getBackStackEntry(NavRoutes.CHECKOUT)
+                } catch (_: IllegalArgumentException) {
+                    backStackEntry
+                }
+            }
+            val ordersViewModel: OrdersViewModel = viewModel(
+                viewModelStoreOwner = checkoutEntry,
+                factory = factory
+            )
             PaymentScreen(
                 viewModel = ordersViewModel,
                 deliveryAddress = address,
                 orderNotes = notes,
                 onNavigateBack = { navController.popBackStack() },
                 onPaymentSuccess = { orderIds, paymentMethod, txnId ->
-                    navController.navigate(NavRoutes.orderConfirmation(orderIds, paymentMethod, txnId)) {
-                        popUpTo(NavRoutes.BASKET) { inclusive = true }
+                    if (orderIds.isNotEmpty()) {
+                        navController.navigate(NavRoutes.orderConfirmation(orderIds, paymentMethod, txnId)) {
+                            popUpTo(NavRoutes.BASKET) { inclusive = true }
+                        }
                     }
                 }
             )

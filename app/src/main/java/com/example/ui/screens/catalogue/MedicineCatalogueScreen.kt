@@ -1,5 +1,6 @@
 package com.example.ui.screens.catalogue
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -21,8 +22,10 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
@@ -102,9 +105,21 @@ fun MedicineCatalogueScreen(
     onNavigateToOrders: () -> Unit = {},
     onNavigateToProfile: () -> Unit = {},
     onNavigateToOcr: () -> Unit = {},
-    onNavigateToSearch: () -> Unit = {}
+    onNavigateToSearch: () -> Unit = {},
+    initialFocus: String = "products",
+    initialManufacturer: String = "",
+    initialQuery: String = ""
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+
+    LaunchedEffect(initialFocus, initialManufacturer, initialQuery) {
+        viewModel.applyInitialNavigation(
+            focus = initialFocus,
+            manufacturer = initialManufacturer,
+            query = initialQuery
+        )
+    }
+
     MedicineCatalogueContent(
         uiState = uiState,
         onNavigateBack = onNavigateBack,
@@ -112,12 +127,31 @@ fun MedicineCatalogueScreen(
         onAddProductClick = onAddProductClick,
         onSearchQueryChanged = { viewModel.onSearchQueryChanged(it) },
         onSelectCategoryChip = { viewModel.selectCategoryChip(it) },
+        onExploreModeChanged = { viewModel.setExploreMode(it) },
+        onSelectManufacturer = { viewModel.selectManufacturer(it) },
+        onSelectStrength = { viewModel.selectStrength(it) },
+        onSaltFilterChanged = { viewModel.onSaltFilterChanged(it) },
         onClearFilters = { viewModel.clearFilters() },
         onAddToCart = { product, qty -> viewModel.addToCart(product, quantity = qty) },
         onIncrementQuantity = { product -> viewModel.incrementQuantity(product) },
         onDecrementQuantity = { product -> viewModel.decrementQuantity(product) },
         onSetPendingQuantity = { productId, qty -> viewModel.setPendingQuantity(productId, qty) },
-        onSetFilters = { dosage, cat, storage, rx, inStock, sort -> viewModel.setFilters(dosage, cat, storage, rx, inStock, sort) },
+        onSetFilters = { dosage, cat, storage, rx, inStock, sort ->
+            viewModel.setFilters(dosage, cat, storage, rx, inStock, sort)
+        },
+        onSetExtendedFilters = { manufacturer, strength, salt, dosage, cat, storage, rx, inStock, sort ->
+            viewModel.setFilters(
+                dosageForm = dosage,
+                category = cat,
+                storage = storage,
+                rxOnly = rx,
+                inStockOnly = inStock,
+                sortOption = sort,
+                manufacturer = manufacturer,
+                strength = strength,
+                saltFilter = salt
+            )
+        },
         onClearMessages = { viewModel.clearMessages() },
         onNavigateToBasket = onNavigateToBasket,
         onNavigateToDashboard = onNavigateToDashboard,
@@ -144,6 +178,23 @@ fun MedicineCatalogueContent(
     onSetPendingQuantity: (Long, Int) -> Unit,
     onSetFilters: (DosageForm?, String?, StorageCondition?, Boolean?, Boolean, SortOption) -> Unit,
     onClearMessages: () -> Unit,
+    onExploreModeChanged: (ExploreMode) -> Unit = {},
+    onSelectManufacturer: (String?) -> Unit = {},
+    onSelectStrength: (String?) -> Unit = {},
+    onSaltFilterChanged: (String) -> Unit = {},
+    onSetExtendedFilters: (
+        manufacturer: String?,
+        strength: String?,
+        salt: String,
+        dosage: DosageForm?,
+        category: String?,
+        storage: StorageCondition?,
+        rxOnly: Boolean?,
+        inStockOnly: Boolean,
+        sort: SortOption
+    ) -> Unit = { _, _, _, dosage, cat, storage, rx, inStock, sort ->
+        onSetFilters(dosage, cat, storage, rx, inStock, sort)
+    },
     onNavigateToBasket: () -> Unit = {},
     onNavigateToDashboard: () -> Unit = {},
     onNavigateToOrders: () -> Unit = {},
@@ -153,6 +204,21 @@ fun MedicineCatalogueContent(
 ) {
     var showFilterSheet by remember { mutableStateOf(false) }
     val snackbarHostState = remember { SnackbarHostState() }
+
+    val isInManufacturerDrilldown =
+        uiState.exploreMode == ExploreMode.MANUFACTURERS && !uiState.selectedManufacturer.isNullOrBlank()
+
+    BackHandler(enabled = isInManufacturerDrilldown) {
+        onSelectManufacturer(null)
+    }
+
+    val handleBackNavigation: () -> Unit = {
+        if (isInManufacturerDrilldown) {
+            onSelectManufacturer(null)
+        } else {
+            onNavigateBack()
+        }
+    }
 
     LaunchedEffect(uiState.errorMessage) {
         uiState.errorMessage?.let { msg ->
@@ -179,22 +245,30 @@ fun MedicineCatalogueContent(
         "Dermatology"
     )
 
-    // Compute title based on selected chip
-    val screenTitle = when (uiState.selectedCategoryChip) {
-        "Capsules" -> "Capsules & Softgels"
-        "Tablets" -> "Tablets & Lozenges"
-        "Injectables" -> "Injectables & Vials"
-        "Syrups" -> "Syrups & Suspensions"
-        "OTC" -> "Over-The-Counter (OTC)"
-        "Diabetics" -> "Diabetic Care"
-        "Dermatology" -> "Dermatology"
-        else -> "All Medicines"
+    val isShowingManufacturerDirectory =
+        uiState.exploreMode == ExploreMode.MANUFACTURERS && uiState.selectedManufacturer.isNullOrBlank()
+
+    // Compute title based on mode, manufacturer drilldown, or selected chip
+    val screenTitle = when {
+        !uiState.selectedManufacturer.isNullOrBlank() -> uiState.selectedManufacturer
+        isShowingManufacturerDirectory -> "Manufacturer Catalog"
+        uiState.selectedCategoryChip == "Capsules" -> "Capsules & Softgels"
+        uiState.selectedCategoryChip == "Tablets" -> "Tablets & Lozenges"
+        uiState.selectedCategoryChip == "Injectables" -> "Injectables & Vials"
+        uiState.selectedCategoryChip == "Syrups" -> "Syrups & Suspensions"
+        uiState.selectedCategoryChip == "OTC" -> "Over-The-Counter (OTC)"
+        uiState.selectedCategoryChip == "Diabetics" -> "Diabetic Care"
+        uiState.selectedCategoryChip == "Dermatology" -> "Dermatology"
+        else -> "Explore Medicines"
     }
 
-    val subtitleCount = if (uiState.filteredProducts.isNotEmpty()) {
-        "${uiState.filteredProducts.size} products"
-    } else {
-        "0 products"
+    val subtitleCount = when {
+        isShowingManufacturerDirectory -> {
+            val mfgLabel = if (uiState.filteredManufacturers.size == 1) "manufacturer" else "manufacturers"
+            "${uiState.filteredManufacturers.size} $mfgLabel • ${uiState.allProducts.size} products"
+        }
+        uiState.filteredProducts.size == 1 -> "1 product"
+        else -> "${uiState.filteredProducts.size} products"
     }
 
     Scaffold(
@@ -205,7 +279,10 @@ fun MedicineCatalogueContent(
                 title = screenTitle,
                 subtitle = subtitleCount,
                 cartItemsCount = uiState.cartItemsCount,
-                onBackClick = onNavigateBack,
+                activeFilterCount = uiState.activeFilterCount,
+                canManageCatalogue = uiState.canManageCatalogue,
+                onBackClick = handleBackNavigation,
+                onManageInventoryClick = onAddProductClick,
                 onFilterClick = { showFilterSheet = true },
                 onBasketClick = onNavigateToBasket
             )
@@ -236,30 +313,89 @@ fun MedicineCatalogueContent(
                     onNavigateToSearch = onNavigateToSearch
                 )
 
-                // Category Chips Carousel
+                // Explore Mode Switcher (Products vs Manufacturers)
+                ExploreModeSegmentedBar(
+                    exploreMode = uiState.exploreMode,
+                    productsCount = uiState.filteredProducts.size,
+                    manufacturersCount = uiState.filteredManufacturers.size,
+                    onModeSelected = onExploreModeChanged
+                )
+
+                // Active Manufacturer Banner when exploring a specific manufacturer's products
+                if (!uiState.selectedManufacturer.isNullOrBlank()) {
+                    SelectedManufacturerHeaderCard(
+                        manufacturerName = uiState.selectedManufacturer,
+                        summary = uiState.selectedManufacturerSummary,
+                        matchingCount = uiState.filteredProducts.size,
+                        onClearManufacturer = { onSelectManufacturer(null) }
+                    )
+                }
+
+                // Category / Dosage Chips Carousel
                 CategoryChipsRow(
                     categories = categories,
                     selectedCategory = uiState.selectedCategoryChip,
                     onCategorySelect = { onSelectCategoryChip(it) }
                 )
 
-                Spacer(modifier = Modifier.height(10.dp))
+                // Quick Strength & Active Salt/Dosage Filter Chips
+                if (!isShowingManufacturerDirectory) {
+                    ActiveFiltersSummaryRow(
+                        selectedStrength = uiState.selectedStrength,
+                        selectedSaltFilter = uiState.selectedSaltFilter,
+                        selectedDosageFormName = uiState.selectedDosageForm?.displayName,
+                        availableStrengths = uiState.availableStrengths,
+                        onSelectStrength = onSelectStrength,
+                        onClearSaltFilter = { onSaltFilterChanged("") },
+                        onClearDosageForm = {
+                            onSetExtendedFilters(
+                                uiState.selectedManufacturer,
+                                uiState.selectedStrength,
+                                uiState.selectedSaltFilter,
+                                null,
+                                uiState.selectedCategory,
+                                uiState.selectedStorageCondition,
+                                uiState.isRxOnly,
+                                uiState.inStockOnly,
+                                uiState.sortBy
+                            )
+                        }
+                    )
+                }
 
-                // Medicines List
+                Spacer(modifier = Modifier.height(6.dp))
+
+                // Main Directory or Product Listing
                 if (uiState.isLoading) {
                     LoadingState(message = "Loading medicine stock...")
+                } else if (isShowingManufacturerDirectory) {
+                    if (uiState.filteredManufacturers.isEmpty()) {
+                        EmptyState(
+                            title = "No Manufacturers Found",
+                            message = "No manufacturers match your current search or filters. Clear filters to browse all manufacturers.",
+                            actionLabel = "Clear Filters",
+                            onActionClick = onClearFilters
+                        )
+                    } else {
+                        ManufacturerDirectoryList(
+                            manufacturers = uiState.filteredManufacturers,
+                            onManufacturerClick = { manufacturer ->
+                                onSelectManufacturer(manufacturer.name)
+                            }
+                        )
+                    }
                 } else if (uiState.filteredProducts.isEmpty()) {
                     EmptyState(
                         title = "No Medicines Found",
                         message = if (uiState.allProducts.isEmpty()) {
-                            "No products in catalog. Tap below to initialize the standard reference catalog."
+                            "No products in catalog. Tap below to refresh the reference catalog."
                         } else {
-                            "No medicines match '${uiState.searchQuery}'. Try selecting 'All' or clearing filters."
+                            "No medicines match your current search or filters. Try selecting 'All' or clearing filters."
                         },
-                        actionLabel = if (uiState.allProducts.isEmpty()) "Seed Reference Stock" else "Clear Search",
+                        actionLabel = if (uiState.allProducts.isEmpty()) "Show All" else "Clear Filters",
                         onActionClick = {
                             if (uiState.allProducts.isEmpty()) {
-                                onSelectCategoryChip("Capsules")
+                                onSelectCategoryChip("All")
                             } else {
                                 onClearFilters()
                             }
@@ -322,8 +458,8 @@ fun MedicineCatalogueContent(
             FilterBottomSheet(
                 uiState = uiState,
                 onDismiss = { showFilterSheet = false },
-                onApply = { dosage, cat, storage, rx, inStock, sort ->
-                    onSetFilters(dosage, cat, storage, rx, inStock, sort)
+                onApply = { manufacturer, strength, salt, dosage, cat, storage, rx, inStock, sort ->
+                    onSetExtendedFilters(manufacturer, strength, salt, dosage, cat, storage, rx, inStock, sort)
                     showFilterSheet = false
                 },
                 onClear = {
@@ -340,7 +476,10 @@ private fun CatalogueTopBar(
     title: String,
     subtitle: String,
     cartItemsCount: Int = 0,
+    activeFilterCount: Int = 0,
+    canManageCatalogue: Boolean = false,
     onBackClick: () -> Unit,
+    onManageInventoryClick: () -> Unit = {},
     onFilterClick: () -> Unit,
     onBasketClick: () -> Unit = {}
 ) {
@@ -378,26 +517,63 @@ private fun CatalogueTopBar(
                     color = Color(0xFF0F172A),
                     fontSize = 17.sp,
                     maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.testTag("catalogue_topbar_title")
                 )
                 Text(
                     text = subtitle,
                     style = MaterialTheme.typography.bodySmall,
                     color = Color(0xFF64748B),
-                    fontSize = 12.sp
+                    fontSize = 12.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
                 )
             }
 
-            IconButton(
-                onClick = onFilterClick,
-                modifier = Modifier.testTag("catalogue_filter_button")
+            if (canManageCatalogue) {
+                IconButton(
+                    onClick = onManageInventoryClick,
+                    modifier = Modifier.testTag("catalogue_manage_inventory_button")
+                ) {
+                    Icon(
+                        imageVector = Icons.Outlined.Inventory2,
+                        contentDescription = "Manage Manufacturer Inventory",
+                        tint = Color(0xFF0284C7),
+                        modifier = Modifier.size(21.dp)
+                    )
+                }
+            }
+
+            Box(
+                modifier = Modifier.size(48.dp),
+                contentAlignment = Alignment.Center
             ) {
-                Icon(
-                    imageVector = Icons.Default.Tune,
-                    contentDescription = "Filter & Sort",
-                    tint = Color(0xFF0F172A),
-                    modifier = Modifier.size(22.dp)
-                )
+                IconButton(
+                    onClick = onFilterClick,
+                    modifier = Modifier.testTag("catalogue_filter_button")
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Tune,
+                        contentDescription = "Filter & Sort",
+                        tint = Color(0xFF0F172A),
+                        modifier = Modifier.size(22.dp)
+                    )
+                }
+                if (activeFilterCount > 0) {
+                    Badge(
+                        containerColor = Color(0xFF0284C7),
+                        contentColor = Color.White,
+                        modifier = Modifier
+                            .align(Alignment.TopEnd)
+                            .padding(top = 4.dp, end = 4.dp)
+                    ) {
+                        Text(
+                            text = "$activeFilterCount",
+                            fontSize = 10.sp,
+                            modifier = Modifier.testTag("catalogue_filter_badge")
+                        )
+                    }
+                }
             }
 
             Box(
@@ -453,9 +629,11 @@ private fun CatalogueSearchBar(
             onValueChange = onQueryChange,
             placeholder = {
                 Text(
-                    text = "Search capsules, salts, or molecules...",
-                    fontSize = 14.sp,
-                    color = Color(0xFF94A3B8)
+                    text = "Search manufacturer, salt, strength, dosage...",
+                    fontSize = 13.5.sp,
+                    color = Color(0xFF94A3B8),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
                 )
             },
             leadingIcon = {
@@ -622,6 +800,17 @@ fun CatalogueProductCard(
                     style = MaterialTheme.typography.bodySmall,
                     color = Color(0xFF475569),
                     fontSize = 11.5.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+
+                // Strength & Dosage Form
+                Text(
+                    text = "${product.strength} • ${product.dosageForm.displayName}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Color(0xFF0284C7),
+                    fontWeight = FontWeight.Medium,
+                    fontSize = 11.sp,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
@@ -1167,11 +1356,24 @@ private fun BottomNavItem(
 fun FilterBottomSheet(
     uiState: CatalogueUiState,
     onDismiss: () -> Unit,
-    onApply: (DosageForm?, String?, StorageCondition?, Boolean?, Boolean, SortOption) -> Unit,
+    onApply: (
+        manufacturer: String?,
+        strength: String?,
+        salt: String,
+        dosage: DosageForm?,
+        category: String?,
+        storage: StorageCondition?,
+        rxOnly: Boolean?,
+        inStockOnly: Boolean,
+        sort: SortOption
+    ) -> Unit,
     onClear: () -> Unit
 ) {
-    val sheetState = rememberModalBottomSheetState()
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
+    var tempManufacturer by remember { mutableStateOf(uiState.selectedManufacturer) }
+    var tempStrength by remember { mutableStateOf(uiState.selectedStrength) }
+    var tempSalt by remember { mutableStateOf(uiState.selectedSaltFilter) }
     var tempDosage by remember { mutableStateOf(uiState.selectedDosageForm) }
     var tempStorage by remember { mutableStateOf(uiState.selectedStorageCondition) }
     var tempInStock by remember { mutableStateOf(uiState.inStockOnly) }
@@ -1184,8 +1386,9 @@ fun FilterBottomSheet(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(20.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp)
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 20.dp, vertical = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -1197,19 +1400,53 @@ fun FilterBottomSheet(
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.Bold
                 )
-                TextButton(onClick = onClear) {
+                TextButton(
+                    onClick = onClear,
+                    modifier = Modifier.testTag("clear_filter_button")
+                ) {
                     Text("Clear All")
                 }
             }
 
-            Text("Sort Order", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.labelLarge)
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                SortOption.values().forEach { opt ->
-                    FilterChip(
-                        selected = tempSort == opt,
-                        onClick = { tempSort = opt },
-                        label = { Text(opt.label) }
-                    )
+            if (uiState.availableManufacturers.isNotEmpty()) {
+                Text("Manufacturer", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.labelLarge)
+                LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    items(uiState.availableManufacturers) { mfg ->
+                        val isSelected = tempManufacturer.equals(mfg, ignoreCase = true)
+                        FilterChip(
+                            selected = isSelected,
+                            onClick = { tempManufacturer = if (isSelected) null else mfg },
+                            label = { Text(mfg) },
+                            modifier = Modifier.testTag("filter_manufacturer_${manufacturerTestTagSuffix(mfg)}")
+                        )
+                    }
+                }
+            }
+
+            Text("Salt Composition", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.labelLarge)
+            OutlinedTextField(
+                value = tempSalt,
+                onValueChange = { tempSalt = it },
+                placeholder = { Text("e.g. Omeprazole, Paracetamol, Amox...") },
+                singleLine = true,
+                shape = RoundedCornerShape(12.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("filter_salt_input")
+            )
+
+            if (uiState.availableStrengths.isNotEmpty()) {
+                Text("Strength", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.labelLarge)
+                LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    items(uiState.availableStrengths) { strength ->
+                        val isSelected = tempStrength.equals(strength, ignoreCase = true)
+                        FilterChip(
+                            selected = isSelected,
+                            onClick = { tempStrength = if (isSelected) null else strength },
+                            label = { Text(strength) },
+                            modifier = Modifier.testTag("filter_strength_${manufacturerTestTagSuffix(strength)}")
+                        )
+                    }
                 }
             }
 
@@ -1219,7 +1456,8 @@ fun FilterBottomSheet(
                     FilterChip(
                         selected = tempDosage == form,
                         onClick = { tempDosage = if (tempDosage == form) null else form },
-                        label = { Text(form.displayName) }
+                        label = { Text(form.displayName) },
+                        modifier = Modifier.testTag("filter_dosage_${form.name.lowercase()}")
                     )
                 }
             }
@@ -1235,12 +1473,34 @@ fun FilterBottomSheet(
                 }
             }
 
+            Text("Sort Order", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.labelLarge)
+            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                items(SortOption.values()) { opt ->
+                    FilterChip(
+                        selected = tempSort == opt,
+                        onClick = { tempSort = opt },
+                        label = { Text(opt.label) }
+                    )
+                }
+            }
+
             Button(
                 onClick = {
-                    onApply(tempDosage, uiState.selectedCategory, tempStorage, uiState.isRxOnly, tempInStock, tempSort)
+                    onApply(
+                        tempManufacturer,
+                        tempStrength,
+                        tempSalt,
+                        tempDosage,
+                        uiState.selectedCategory,
+                        tempStorage,
+                        uiState.isRxOnly,
+                        tempInStock,
+                        tempSort
+                    )
                 },
                 modifier = Modifier
                     .fillMaxWidth()
+                    .padding(bottom = 16.dp)
                     .testTag("apply_filter_button")
             ) {
                 Text("Apply Filters")

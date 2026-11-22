@@ -75,7 +75,10 @@ class PharmaViewModelFactory(
                 com.example.ui.screens.search.SearchViewModel(repo) as T
             }
             modelClass.isAssignableFrom(com.example.ui.screens.products.ProductListViewModel::class.java) -> {
-                com.example.ui.screens.products.ProductListViewModel(app.productRepository) as T
+                com.example.ui.screens.products.ProductListViewModel(
+                    productRepository = app.productRepository,
+                    pharmaRepository = repo
+                ) as T
             }
             else -> throw IllegalArgumentException("Unknown ViewModel class: ${modelClass.name}")
         }

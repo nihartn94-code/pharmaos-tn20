@@ -82,6 +82,7 @@ data class OrdersUiState(
     val selectedSort: String = "Sort by ETA",
     val selectedOrderDetails: OrderDetailsWithHistory? = null,
     val basketForCheckout: BasketWithDetails? = null,
+    val isCheckoutBasketLoading: Boolean = false,
     val placedOrderIds: List<Long> = emptyList(),
     val isPlacingOrder: Boolean = false,
     val errorMessage: String? = null,
@@ -123,6 +124,7 @@ class OrdersViewModel(
                 _uiState.update {
                     it.copy(
                         basketForCheckout = basket,
+                        isCheckoutBasketLoading = false,
                         cartItemCount = basket.items.sumOf { item -> item.quantity },
                         basketItemsCount = basket.items.size
                     )
@@ -316,8 +318,18 @@ class OrdersViewModel(
 
     fun loadBasketForCheckout() {
         viewModelScope.launch {
+            if (_uiState.value.basketForCheckout == null) {
+                _uiState.update { it.copy(isCheckoutBasketLoading = true) }
+            }
             val b = repository.getApiBasket()
-            _uiState.update { it.copy(basketForCheckout = b) }
+            _uiState.update {
+                it.copy(
+                    basketForCheckout = b,
+                    isCheckoutBasketLoading = false,
+                    cartItemCount = b.items.sumOf { item -> item.quantity },
+                    basketItemsCount = b.items.size
+                )
+            }
         }
     }
 
@@ -328,6 +340,7 @@ class OrdersViewModel(
         onSuccess: (List<Long>) -> Unit
     ) {
         if (!isOrderSubmissionInFlight.compareAndSet(false, true)) {
+            onFailure("Order submission is already in progress.")
             return
         }
         viewModelScope.launch {

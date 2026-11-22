@@ -153,21 +153,23 @@ The Android app centralizes backend routing in `ApiConfig` (`app/src/main/java/c
 
 ### D. Inventory, Batches, Shortage Alerts & Recalls (`InventoryApiService`)
 
-| Method | Path | Auth | Request / Query | Response `data` |
+> **RBAC Enforcement:** All `/api/v1/inventory/**` and `/api/v1/batches/**` endpoints are **exclusively restricted** to `MANUFACTURER` and `PHARMA_COMPANY` (Brand) roles (`@PreAuthorize("hasAnyRole('MANUFACTURER', 'PHARMA_COMPANY')")`). Requests authenticated with a `STOCKIST` token **MUST** return `403 Forbidden` with an `ApiErrorDto` payload and must never return manufacturer batch or warehouse stock data.
+
+| Method | Path | Auth / Role | Request / Query | Response `data` |
 |---|---|---|---|---|
-| `GET` | `/api/v1/inventory` | Bearer | `?lowStockOnly=false` | `List<ProductInventoryDto>` |
-| `GET` | `/api/v1/inventory/{sku}` | Bearer | — | `ProductInventoryDto` |
-| `POST` | `/api/v1/inventory` | Bearer | `ProductInventoryDto` | `ProductInventoryDto` |
-| `PATCH` | `/api/v1/inventory/{sku}/stock` | Bearer | `AdjustInventoryStockRequestDto` | `ProductInventoryDto` |
-| `PATCH` | `/api/v1/inventory/{sku}/threshold` | Bearer | `UpdateReorderThresholdRequestDto` | `ProductInventoryDto` |
-| `DELETE` | `/api/v1/inventory/{sku}` | Bearer | — | `Unit` |
-| `GET` | `/api/v1/batches` | Bearer | — | `List<BatchDto>` |
-| `POST` | `/api/v1/batches` | Bearer | `BatchDto` | `BatchDto` |
-| `PATCH` | `/api/v1/batches/{batchId}/stock` | Bearer | `AdjustBatchStockRequestDto` | `BatchDto` |
+| `GET` | `/api/v1/inventory` | Bearer (`MANUFACTURER`, `PHARMA_COMPANY`) | `?lowStockOnly=false` | `List<ProductInventoryDto>` |
+| `GET` | `/api/v1/inventory/{sku}` | Bearer (`MANUFACTURER`, `PHARMA_COMPANY`) | — | `ProductInventoryDto` |
+| `POST` | `/api/v1/inventory` | Bearer (`MANUFACTURER`, `PHARMA_COMPANY`) | `ProductInventoryDto` | `ProductInventoryDto` |
+| `PATCH` | `/api/v1/inventory/{sku}/stock` | Bearer (`MANUFACTURER`, `PHARMA_COMPANY`) | `AdjustInventoryStockRequestDto` | `ProductInventoryDto` |
+| `PATCH` | `/api/v1/inventory/{sku}/threshold` | Bearer (`MANUFACTURER`, `PHARMA_COMPANY`) | `UpdateReorderThresholdRequestDto` | `ProductInventoryDto` |
+| `DELETE` | `/api/v1/inventory/{sku}` | Bearer (`MANUFACTURER`, `PHARMA_COMPANY`) | — | `Unit` |
+| `GET` | `/api/v1/batches` | Bearer (`MANUFACTURER`, `PHARMA_COMPANY`) | — | `List<BatchDto>` |
+| `POST` | `/api/v1/batches` | Bearer (`MANUFACTURER`, `PHARMA_COMPANY`) | `BatchDto` | `BatchDto` |
+| `PATCH` | `/api/v1/batches/{batchId}/stock` | Bearer (`MANUFACTURER`, `PHARMA_COMPANY`) | `AdjustBatchStockRequestDto` | `BatchDto` |
 | `GET` | `/api/v1/shortage-alerts` | Bearer | — | `List<ShortageAlertDto>` |
 | `POST` | `/api/v1/shortage-alerts/evaluate` | Bearer | — | `List<ShortageAlertDto>` |
 | `GET` | `/api/v1/recalls` | Bearer | — | `List<RecallDto>` |
-| `POST` | `/api/v1/recalls` | Bearer | `CreateRecallRequestDto` | `RecallDto` |
+| `POST` | `/api/v1/recalls` | Bearer (`MANUFACTURER`, `PHARMA_COMPANY`) | `CreateRecallRequestDto` | `RecallDto` |
 
 ---
 

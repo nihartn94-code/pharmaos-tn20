@@ -17,9 +17,11 @@ import com.example.data.local.entity.SupplierSettingsEntity
 import com.example.data.local.entity.UserEntity
 import com.example.domain.model.AlternativeBrandQuotation
 import com.example.domain.model.AuthUser
+import com.example.domain.model.ContactVerificationChannel
 import com.example.domain.model.EffectivePriceCalculation
 import com.example.domain.model.InventoryDashboardSummary
 import com.example.domain.model.InventoryStockItem
+import com.example.domain.model.LegalDocument
 import com.example.domain.model.OfferWithSupplier
 import com.example.domain.model.OptimizationResult
 import com.example.domain.model.ParsedOcrItem
@@ -29,6 +31,7 @@ import com.example.domain.model.ShortageEvaluationResult
 import com.example.domain.model.SupplierQuotationItem
 import com.example.domain.model.SupplierQuotationSummary
 import com.example.domain.model.TrustScoreBreakdown
+import com.example.domain.model.UserAddress
 import com.example.domain.model.UserRole
 import kotlinx.coroutines.flow.Flow
 
@@ -48,6 +51,32 @@ interface PharmaRepository {
     ): Result<AuthUser>
     fun getApiUsersMeFlow(): Flow<AuthUser?>
     suspend fun getApiUsersMe(): AuthUser?
+    suspend fun refreshCurrentUserProfile(): Result<AuthUser>
+    suspend fun putApiUserProfile(
+        fullName: String,
+        businessName: String,
+        email: String,
+        phone: String,
+        gstin: String?,
+        address: String,
+        profileBio: String?
+    ): Result<AuthUser>
+    suspend fun requestContactVerification(
+        channel: ContactVerificationChannel,
+        value: String
+    ): Result<String>
+    suspend fun confirmContactVerification(
+        channel: ContactVerificationChannel,
+        value: String,
+        code: String
+    ): Result<AuthUser>
+    fun getApiUserAddressesFlow(): Flow<List<UserAddress>>
+    suspend fun refreshUserAddresses(): Result<List<UserAddress>>
+    suspend fun postApiUserAddress(address: UserAddress): Result<UserAddress>
+    suspend fun putApiUserAddress(address: UserAddress): Result<UserAddress>
+    suspend fun deleteApiUserAddress(addressId: Long): Result<Unit>
+    suspend fun patchApiDefaultUserAddress(addressId: Long): Result<UserAddress>
+    suspend fun getApiLegalDocuments(): Result<List<LegalDocument>>
     suspend fun logout()
     fun getApiUsersFlow(): Flow<List<UserEntity>>
     suspend fun patchApiUserStatus(userId: Long, status: String): Result<Unit>
@@ -179,6 +208,8 @@ interface PharmaRepository {
     suspend fun postApiBatches(batch: BatchEntity): Result<Long>
     fun getRealTimeInventoryFlow(): Flow<List<InventoryStockItem>>
     fun getInventorySummaryFlow(): Flow<InventoryDashboardSummary>
+    suspend fun refreshRealTimeInventory(): Result<Unit>
+    suspend fun isProductionBackendConnected(): Boolean
     suspend fun adjustBatchStock(batchId: Long, newQuantity: Int, reason: String): Result<Unit>
     suspend fun quickRestockToBasket(productId: Long, quantity: Int = 50): Result<Unit>
 

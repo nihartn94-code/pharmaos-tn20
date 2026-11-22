@@ -16,6 +16,64 @@ data class UpdateUserStatusRequestDto(
 )
 
 @JsonClass(generateAdapter = true)
+data class UpdateUserProfileRequestDto(
+    @param:Json(name = "fullName") val fullName: String,
+    @param:Json(name = "businessName") val businessName: String,
+    @param:Json(name = "email") val email: String,
+    @param:Json(name = "phone") val phone: String,
+    @param:Json(name = "gstin") val gstin: String? = null,
+    @param:Json(name = "address") val address: String,
+    @param:Json(name = "profileBio") val profileBio: String? = null
+)
+
+@JsonClass(generateAdapter = true)
+data class ContactVerificationRequestDto(
+    @param:Json(name = "channel") val channel: String,
+    @param:Json(name = "value") val value: String
+)
+
+@JsonClass(generateAdapter = true)
+data class ConfirmContactVerificationRequestDto(
+    @param:Json(name = "channel") val channel: String,
+    @param:Json(name = "value") val value: String,
+    @param:Json(name = "code") val code: String
+)
+
+@JsonClass(generateAdapter = true)
+data class ContactVerificationStatusDto(
+    @param:Json(name = "channel") val channel: String,
+    @param:Json(name = "verified") val verified: Boolean = false,
+    @param:Json(name = "message") val message: String? = null
+)
+
+@JsonClass(generateAdapter = true)
+data class UserAddressDto(
+    @param:Json(name = "id") val id: Long = 0,
+    @param:Json(name = "userId") val userId: Long = 0,
+    @param:Json(name = "addressName") val addressName: String,
+    @param:Json(name = "contactPerson") val contactPerson: String,
+    @param:Json(name = "phone") val phone: String,
+    @param:Json(name = "addressLine1") val addressLine1: String,
+    @param:Json(name = "addressLine2") val addressLine2: String = "",
+    @param:Json(name = "city") val city: String,
+    @param:Json(name = "state") val state: String,
+    @param:Json(name = "postalCode") val postalCode: String,
+    @param:Json(name = "country") val country: String = "India",
+    @param:Json(name = "isDefault") val isDefault: Boolean = false,
+    @param:Json(name = "updatedAtEpochMillis") val updatedAtEpochMillis: Long = System.currentTimeMillis()
+)
+
+@JsonClass(generateAdapter = true)
+data class LegalDocumentDto(
+    @param:Json(name = "id") val id: String,
+    @param:Json(name = "title") val title: String,
+    @param:Json(name = "subtitle") val subtitle: String? = null,
+    @param:Json(name = "slug") val slug: String? = null,
+    @param:Json(name = "url") val url: String? = null,
+    @param:Json(name = "version") val version: String? = null
+)
+
+@JsonClass(generateAdapter = true)
 data class ComplianceVerificationDto(
     @param:Json(name = "id") val id: Long? = null,
     @param:Json(name = "userId") val userId: Long,

@@ -22,6 +22,7 @@ import com.example.data.local.entity.StockRecordEntity
 import com.example.data.local.entity.SupplierOfferEntity
 import com.example.data.local.entity.SupplierPerformanceEntity
 import com.example.data.local.entity.SupplierSettingsEntity
+import com.example.data.local.entity.UserAddressEntity
 import com.example.data.local.entity.UserEntity
 import com.example.data.remote.config.ApiConfig
 import com.example.data.remote.config.AuthExecutionMode
@@ -33,6 +34,8 @@ import com.example.data.remote.dto.OrderDto
 import com.example.data.remote.dto.RegisterRequestDto
 import com.example.data.remote.dto.SubmitPodRequestDto
 import com.example.data.remote.dto.UpdateOrderStatusRequestDto
+import com.example.data.remote.dto.UpdateUserProfileRequestDto
+import com.example.data.remote.dto.UserAddressDto
 import com.example.data.remote.mapper.toDomain
 import com.example.data.remote.mapper.toDto
 import com.example.data.remote.mapper.toEntity
@@ -43,10 +46,13 @@ import com.example.di.NetworkModule
 import com.example.domain.model.AccountStatus
 import com.example.domain.model.AlternativeBrandQuotation
 import com.example.domain.model.AuthUser
+import com.example.domain.model.ContactVerificationChannel
 import com.example.domain.model.DosageForm
 import com.example.domain.model.ExpiryRiskStatus
 import com.example.domain.model.InventoryDashboardSummary
 import com.example.domain.model.InventoryStockItem
+import com.example.domain.model.LegalDocument
+import com.example.domain.model.LegalDocumentsCatalog
 import com.example.domain.model.NotificationType
 import com.example.domain.model.OfferWithSupplier
 import com.example.domain.model.OptimizationResult
@@ -62,6 +68,7 @@ import com.example.domain.model.SupplierQuotationItem
 import com.example.domain.model.SupplierQuotationSummary
 import com.example.domain.model.TaxInvoiceData
 import com.example.domain.model.TrustScoreBreakdown
+import com.example.domain.model.UserAddress
 import com.example.domain.model.UserRole
 import com.example.domain.model.VerifiedStockInfo
 import com.example.domain.repository.BasketItemDetail
@@ -116,6 +123,7 @@ class PharmaRepositoryImpl(
 ) : PharmaRepository {
 
     private val userDao = db.userDao()
+    private val userAddressDao = db.userAddressDao()
     private val productDao = db.productDao()
     private val productInventoryDao = db.productInventoryDao()
     private val offerDao = db.offerDao()
@@ -187,18 +195,22 @@ class PharmaRepositoryImpl(
     }
 
     private suspend fun upsertCachedUser(remoteUser: UserEntity): Long {
-        val existing = userDao.getUserByEmail(remoteUser.email.lowercase())
-            ?: userDao.getUserById(remoteUser.id)
+        val existing = userDao.getUserById(remoteUser.id)
+            ?: userDao.getUserByEmail(remoteUser.email.lowercase())
         return if (existing != null) {
             userDao.updateUser(
                 existing.copy(
                     fullName = remoteUser.fullName,
                     businessName = remoteUser.businessName,
+                    email = remoteUser.email,
                     phone = remoteUser.phone,
                     gstin = remoteUser.gstin,
                     address = remoteUser.address,
                     role = remoteUser.role,
-                    status = remoteUser.status
+                    status = remoteUser.status,
+                    emailVerified = remoteUser.emailVerified,
+                    phoneVerified = remoteUser.phoneVerified,
+                    profileBio = remoteUser.profileBio
                 )
             )
             existing.id
@@ -522,24 +534,145 @@ class PharmaRepositoryImpl(
         )
     }
 
+    private fun UserEntity.toDomainAuthUser(): AuthUser {
+        val parsedRole = try { UserRole.valueOf(role) } catch (_: Exception) { UserRole.STOCKIST }
+        val parsedStatus = try { AccountStatus.valueOf(status) } catch (_: Exception) { AccountStatus.ACTIVE }
+        return AuthUser(
+            id = id,
+            fullName = fullName,
+            businessName = businessName,
+            email = email,
+            phone = phone,
+            gstin = gstin,
+            address = address,
+            role = parsedRole,
+            status = parsedStatus,
+            emailVerified = emailVerified,
+            phoneVerified = phoneVerified,
+            profileBio = profileBio
+        )
+    }
+
+    private fun UserAddressEntity.toDomainAddress(): UserAddress = UserAddress(
+        id = id,
+        userId = userId,
+        addressName = addressName,
+        contactPerson = contactPerson,
+        phone = phone,
+        addressLine1 = addressLine1,
+        addressLine2 = addressLine2,
+        city = city,
+        state = state,
+        postalCode = postalCode,
+        country = country,
+        isDefault = isDefault,
+        updatedAtEpochMillis = updatedAtEpochMillis
+    )
+
+    private fun UserAddress.toEntity(ownerId: Long): UserAddressEntity = UserAddressEntity(
+        id = id,
+        userId = ownerId,
+        addressName = addressName.trim(),
+        contactPerson = contactPerson.trim(),
+        phone = phone.trim(),
+        addressLine1 = addressLine1.trim(),
+        addressLine2 = addressLine2.trim(),
+        city = city.trim(),
+        state = state.trim(),
+        postalCode = postalCode.trim(),
+        country = country.trim().ifBlank { "India" },
+        isDefault = isDefault,
+        updatedAtEpochMillis = System.currentTimeMillis()
+    )
+
+    private fun UserAddress.toRemoteDto(ownerId: Long): UserAddressDto = UserAddressDto(
+        id = id,
+        userId = ownerId,
+        addressName = addressName.trim(),
+        contactPerson = contactPerson.trim(),
+        phone = phone.trim(),
+        addressLine1 = addressLine1.trim(),
+        addressLine2 = addressLine2.trim(),
+        city = city.trim(),
+        state = state.trim(),
+        postalCode = postalCode.trim(),
+        country = country.trim().ifBlank { "India" },
+        isDefault = isDefault,
+        updatedAtEpochMillis = System.currentTimeMillis()
+    )
+
+    private fun UserAddressDto.toLocalEntity(ownerId: Long): UserAddressEntity = UserAddressEntity(
+        id = id,
+        userId = if (userId > 0L) userId else ownerId,
+        addressName = addressName.trim(),
+        contactPerson = contactPerson.trim(),
+        phone = phone.trim(),
+        addressLine1 = addressLine1.trim(),
+        addressLine2 = addressLine2.trim(),
+        city = city.trim(),
+        state = state.trim(),
+        postalCode = postalCode.trim(),
+        country = country.trim().ifBlank { "India" },
+        isDefault = isDefault,
+        updatedAtEpochMillis = updatedAtEpochMillis
+    )
+
+    private fun validateProfileInput(
+        fullName: String,
+        businessName: String,
+        email: String,
+        phone: String,
+        gstin: String?
+    ): String? {
+        if (fullName.trim().length < 2) return "Full name must be at least 2 characters."
+        if (businessName.trim().isEmpty()) return "Business or pharmacy name is required."
+        val trimmedEmail = email.trim()
+        val emailRegex = Regex("^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$")
+        if (!emailRegex.matches(trimmedEmail)) return "Please enter a valid email address."
+        val digitsOnly = phone.filter { it.isDigit() }
+        if (digitsOnly.length !in 10..15) return "Please enter a valid 10 to 15 digit phone number."
+        val trimmedGstin = gstin?.trim().orEmpty()
+        if (trimmedGstin.isNotEmpty() && !Regex("^[0-9A-Za-z]{15}$").matches(trimmedGstin)) {
+            return "GSTIN must be exactly 15 alphanumeric characters."
+        }
+        return null
+    }
+
+    private fun validateAddressInput(address: UserAddress): String? {
+        if (address.addressName.trim().isEmpty()) return "Address name/type is required."
+        if (address.contactPerson.trim().isEmpty()) return "Contact person is required."
+        val phoneDigits = address.phone.filter { it.isDigit() }
+        if (phoneDigits.length !in 10..15) return "Please enter a valid 10 to 15 digit contact phone number."
+        if (address.addressLine1.trim().isEmpty()) return "Address line 1 is required."
+        if (address.city.trim().isEmpty()) return "City is required."
+        if (address.state.trim().isEmpty()) return "State is required."
+        val postal = address.postalCode.trim()
+        if (postal.length < 4 || postal.length > 12) return "Please enter a valid postal code."
+        if (address.country.trim().isEmpty()) return "Country is required."
+        return null
+    }
+
+    private suspend fun syncPrimaryAddressSummaryOnUser(userId: Long) {
+        val addresses = userAddressDao.getAddressesForUser(userId)
+        val defaultAddr = addresses.firstOrNull { it.isDefault } ?: addresses.firstOrNull()
+        val user = userDao.getUserById(userId) ?: return
+        if (defaultAddr != null) {
+            val formatted = defaultAddr.toDomainAddress().formattedSingleLine()
+            if (formatted.isNotBlank() && user.address != formatted) {
+                userDao.updateUser(user.copy(address = formatted))
+            }
+        }
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
     override fun getApiUsersMeFlow(): Flow<AuthUser?> {
-        return dataStoreManager.loggedInUserIdFlow.map { userId ->
-            if (userId == null) null
-            else {
-                val user = userDao.getUserById(userId) ?: return@map null
-                val role = try { UserRole.valueOf(user.role) } catch (_: Exception) { UserRole.STOCKIST }
-                val status = try { AccountStatus.valueOf(user.status) } catch (_: Exception) { AccountStatus.ACTIVE }
-                AuthUser(
-                    id = user.id,
-                    fullName = user.fullName,
-                    businessName = user.businessName,
-                    email = user.email,
-                    phone = user.phone,
-                    gstin = user.gstin,
-                    address = user.address,
-                    role = role,
-                    status = status
-                )
+        return dataStoreManager.loggedInUserIdFlow.flatMapLatest { userId ->
+            if (userId == null) {
+                flowOf(null)
+            } else {
+                userDao.getUserByIdFlow(userId).map { entity ->
+                    entity?.toDomainAuthUser()
+                }
             }
         }
     }
@@ -550,19 +683,7 @@ class PharmaRepositoryImpl(
 
         if (isProductionHttpMode()) {
             if (cachedUser != null) {
-                val role = try { UserRole.valueOf(cachedUser.role) } catch (_: Exception) { UserRole.STOCKIST }
-                val status = try { AccountStatus.valueOf(cachedUser.status) } catch (_: Exception) { AccountStatus.ACTIVE }
-                return AuthUser(
-                    id = cachedUser.id,
-                    fullName = cachedUser.fullName,
-                    businessName = cachedUser.businessName,
-                    email = cachedUser.email,
-                    phone = cachedUser.phone,
-                    gstin = cachedUser.gstin,
-                    address = cachedUser.address,
-                    role = role,
-                    status = status
-                )
+                return cachedUser.toDomainAuthUser()
             }
             if (!dataStoreManager.getAccessToken().isNullOrBlank() && isBackendConfigured()) {
                 val remoteRes = pharmaRemoteDataSource?.fetchCurrentUser()
@@ -575,19 +696,415 @@ class PharmaRepositoryImpl(
             return null
         }
 
-        val effectiveUser = cachedUser ?: return null
-        val role = try { UserRole.valueOf(effectiveUser.role) } catch (_: Exception) { UserRole.STOCKIST }
-        val status = try { AccountStatus.valueOf(effectiveUser.status) } catch (_: Exception) { AccountStatus.ACTIVE }
-        return AuthUser(
-            id = effectiveUser.id,
-            fullName = effectiveUser.fullName,
-            businessName = effectiveUser.businessName,
-            email = effectiveUser.email,
-            phone = effectiveUser.phone,
-            gstin = effectiveUser.gstin,
-            address = effectiveUser.address,
-            role = role,
-            status = status
+        return cachedUser?.toDomainAuthUser()
+    }
+
+    override suspend fun refreshCurrentUserProfile(): Result<AuthUser> {
+        val currentUserId = dataStoreManager.loggedInUserIdFlow.firstOrNull()
+        if (isProductionHttpMode()) {
+            val remote = pharmaRemoteDataSource
+                ?: return Result.failure(IllegalStateException("Remote API is not initialized."))
+            return when (val res = remote.fetchCurrentUser()) {
+                is NetworkResult.Success -> {
+                    val savedId = upsertCachedUser(res.data.toUserEntityCache())
+                    dataStoreManager.setLoggedInUserId(savedId)
+                    val fresh = userDao.getUserById(savedId)?.toDomainAuthUser()
+                        ?: res.data.toAuthUser().copy(id = savedId)
+                    Result.success(fresh)
+                }
+                else -> Result.failure(res.toException())
+            }
+        }
+        val local = currentUserId?.let { userDao.getUserById(it) }
+            ?: return Result.failure(IllegalStateException("No active user session found."))
+        return Result.success(local.toDomainAuthUser())
+    }
+
+    override suspend fun putApiUserProfile(
+        fullName: String,
+        businessName: String,
+        email: String,
+        phone: String,
+        gstin: String?,
+        address: String,
+        profileBio: String?
+    ): Result<AuthUser> {
+        val validationError = validateProfileInput(fullName, businessName, email, phone, gstin)
+        if (validationError != null) {
+            return Result.failure(IllegalArgumentException(validationError))
+        }
+        val currentUserId = dataStoreManager.loggedInUserIdFlow.firstOrNull()
+            ?: return Result.failure(IllegalStateException("Please login to update your profile."))
+        val existing = userDao.getUserById(currentUserId)
+            ?: return Result.failure(IllegalStateException("User profile not found."))
+
+        val cleanName = fullName.trim()
+        val cleanBusiness = businessName.trim()
+        val cleanEmail = email.trim().lowercase()
+        val cleanPhone = phone.trim()
+        val cleanGstin = gstin?.trim()?.uppercase()?.takeIf { it.isNotEmpty() }
+        val cleanAddress = address.trim().ifBlank { existing.address }
+        val cleanBio = profileBio?.trim()?.takeIf { it.isNotEmpty() }
+
+        if (isProductionHttpMode()) {
+            val remote = pharmaRemoteDataSource
+                ?: return Result.failure(IllegalStateException("Remote API is not initialized."))
+            val req = UpdateUserProfileRequestDto(
+                fullName = cleanName,
+                businessName = cleanBusiness,
+                email = cleanEmail,
+                phone = cleanPhone,
+                gstin = cleanGstin,
+                address = cleanAddress,
+                profileBio = cleanBio
+            )
+            return when (val res = remote.updateCurrentUserProfile(req)) {
+                is NetworkResult.Success -> {
+                    val savedId = upsertCachedUser(res.data.toUserEntityCache())
+                    dataStoreManager.setLoggedInUserId(savedId)
+                    // Refresh profile from backend after successful update to guarantee parity
+                    val refreshed = remote.fetchCurrentUser()
+                    if (refreshed is NetworkResult.Success) {
+                        upsertCachedUser(refreshed.data.toUserEntityCache())
+                    }
+                    val latest = userDao.getUserById(savedId)?.toDomainAuthUser()
+                        ?: res.data.toAuthUser().copy(id = savedId)
+                    Result.success(latest)
+                }
+                else -> Result.failure(res.toException())
+            }
+        }
+
+        // Local development mode persistence with duplicate email guard & honest verification reset
+        val emailOwner = userDao.getUserByEmail(cleanEmail)
+        if (emailOwner != null && emailOwner.id != existing.id) {
+            return Result.failure(IllegalArgumentException("This email address is already registered to another account."))
+        }
+        val emailChanged = !existing.email.equals(cleanEmail, ignoreCase = true)
+        val phoneChanged = existing.phone.trim() != cleanPhone
+        val updated = existing.copy(
+            fullName = cleanName,
+            businessName = cleanBusiness,
+            email = cleanEmail,
+            phone = cleanPhone,
+            gstin = cleanGstin,
+            address = cleanAddress,
+            emailVerified = if (emailChanged) false else existing.emailVerified,
+            phoneVerified = if (phoneChanged) false else existing.phoneVerified,
+            profileBio = cleanBio
+        )
+        userDao.updateUser(updated)
+        val refreshed = userDao.getUserById(existing.id)?.toDomainAuthUser() ?: updated.toDomainAuthUser()
+        return Result.success(refreshed)
+    }
+
+    override suspend fun requestContactVerification(
+        channel: ContactVerificationChannel,
+        value: String
+    ): Result<String> {
+        val trimmed = value.trim()
+        if (trimmed.isEmpty()) {
+            return Result.failure(IllegalArgumentException("${channel.label} cannot be empty."))
+        }
+        if (!isProductionHttpMode()) {
+            return Result.failure(
+                IllegalStateException(
+                    "${channel.label} verification requires an active backend server. Connect a configured backend in Backend API & Sync to verify."
+                )
+            )
+        }
+        val remote = pharmaRemoteDataSource
+            ?: return Result.failure(IllegalStateException("Remote API is not initialized."))
+        return when (val res = remote.requestContactVerification(channel.apiValue, trimmed)) {
+            is NetworkResult.Success -> Result.success(
+                res.data.message?.takeIf { it.isNotBlank() }
+                    ?: "Verification code sent to $trimmed."
+            )
+            else -> Result.failure(res.toException())
+        }
+    }
+
+    override suspend fun confirmContactVerification(
+        channel: ContactVerificationChannel,
+        value: String,
+        code: String
+    ): Result<AuthUser> {
+        val trimmedCode = code.trim()
+        if (trimmedCode.length < 4) {
+            return Result.failure(IllegalArgumentException("Please enter the verification code received from the server."))
+        }
+        if (!isProductionHttpMode()) {
+            return Result.failure(
+                IllegalStateException(
+                    "${channel.label} verification cannot be completed offline without backend confirmation."
+                )
+            )
+        }
+        val remote = pharmaRemoteDataSource
+            ?: return Result.failure(IllegalStateException("Remote API is not initialized."))
+        val currentUserId = dataStoreManager.loggedInUserIdFlow.firstOrNull()
+            ?: return Result.failure(IllegalStateException("Please login to verify your account."))
+
+        return when (val res = remote.confirmContactVerification(channel.apiValue, value.trim(), trimmedCode)) {
+            is NetworkResult.Success -> {
+                if (!res.data.verified) {
+                    return Result.failure(
+                        IllegalStateException(
+                            res.data.message?.takeIf { it.isNotBlank() }
+                                ?: "${channel.label} verification was not confirmed by the server."
+                        )
+                    )
+                }
+                val existing = userDao.getUserById(currentUserId)
+                if (existing != null) {
+                    userDao.updateUser(
+                        when (channel) {
+                            ContactVerificationChannel.EMAIL -> existing.copy(emailVerified = true)
+                            ContactVerificationChannel.PHONE -> existing.copy(phoneVerified = true)
+                        }
+                    )
+                }
+                val refreshed = remote.fetchCurrentUser()
+                if (refreshed is NetworkResult.Success) {
+                    upsertCachedUser(refreshed.data.toUserEntityCache())
+                }
+                val updatedUser = userDao.getUserById(currentUserId)?.toDomainAuthUser()
+                    ?: return Result.failure(IllegalStateException("Unable to load refreshed profile."))
+                Result.success(updatedUser)
+            }
+            else -> Result.failure(res.toException())
+        }
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    override fun getApiUserAddressesFlow(): Flow<List<UserAddress>> {
+        return dataStoreManager.loggedInUserIdFlow.flatMapLatest { userId ->
+            if (userId == null) {
+                flowOf(emptyList())
+            } else {
+                userAddressDao.getAddressesForUserFlow(userId).map { entities ->
+                    entities.map { it.toDomainAddress() }
+                }
+            }
+        }
+    }
+
+    override suspend fun refreshUserAddresses(): Result<List<UserAddress>> {
+        val userId = dataStoreManager.loggedInUserIdFlow.firstOrNull()
+            ?: return Result.failure(IllegalStateException("Please login to view addresses."))
+        if (isProductionHttpMode()) {
+            val remote = pharmaRemoteDataSource
+                ?: return Result.failure(IllegalStateException("Remote API is not initialized."))
+            return when (val res = remote.fetchUserAddresses()) {
+                is NetworkResult.Success -> {
+                    val entities = res.data.map { it.toLocalEntity(userId) }
+                    db.withTransaction {
+                        userAddressDao.deleteAllForUser(userId)
+                        if (entities.isNotEmpty()) {
+                            userAddressDao.insertAll(entities)
+                        }
+                    }
+                    syncPrimaryAddressSummaryOnUser(userId)
+                    Result.success(userAddressDao.getAddressesForUser(userId).map { it.toDomainAddress() })
+                }
+                else -> Result.failure(res.toException())
+            }
+        }
+        return Result.success(userAddressDao.getAddressesForUser(userId).map { it.toDomainAddress() })
+    }
+
+    override suspend fun postApiUserAddress(address: UserAddress): Result<UserAddress> {
+        val validationError = validateAddressInput(address)
+        if (validationError != null) {
+            return Result.failure(IllegalArgumentException(validationError))
+        }
+        val userId = dataStoreManager.loggedInUserIdFlow.firstOrNull()
+            ?: return Result.failure(IllegalStateException("Please login to add an address."))
+
+        if (isProductionHttpMode()) {
+            val remote = pharmaRemoteDataSource
+                ?: return Result.failure(IllegalStateException("Remote API is not initialized."))
+            return when (val res = remote.createUserAddress(address.toRemoteDto(userId))) {
+                is NetworkResult.Success -> {
+                    val savedEntity = res.data.toLocalEntity(userId)
+                    db.withTransaction {
+                        if (savedEntity.isDefault) {
+                            userAddressDao.clearDefaultForUser(userId)
+                        }
+                        userAddressDao.insertAddress(savedEntity)
+                    }
+                    syncPrimaryAddressSummaryOnUser(userId)
+                    Result.success(savedEntity.toDomainAddress())
+                }
+                else -> Result.failure(res.toException())
+            }
+        }
+
+        val saved = db.withTransaction {
+            val existingList = userAddressDao.getAddressesForUser(userId)
+            val shouldBeDefault = address.isDefault || existingList.isEmpty()
+            if (shouldBeDefault) {
+                userAddressDao.clearDefaultForUser(userId)
+            }
+            val entity = address.copy(id = 0L, isDefault = shouldBeDefault).toEntity(userId)
+            val insertedId = userAddressDao.insertAddress(entity)
+            entity.copy(id = insertedId)
+        }
+        syncPrimaryAddressSummaryOnUser(userId)
+        return Result.success(saved.toDomainAddress())
+    }
+
+    override suspend fun putApiUserAddress(address: UserAddress): Result<UserAddress> {
+        if (address.id <= 0L) {
+            return Result.failure(IllegalArgumentException("Invalid address ID."))
+        }
+        val validationError = validateAddressInput(address)
+        if (validationError != null) {
+            return Result.failure(IllegalArgumentException(validationError))
+        }
+        val userId = dataStoreManager.loggedInUserIdFlow.firstOrNull()
+            ?: return Result.failure(IllegalStateException("Please login to update this address."))
+
+        if (isProductionHttpMode()) {
+            val remote = pharmaRemoteDataSource
+                ?: return Result.failure(IllegalStateException("Remote API is not initialized."))
+            return when (val res = remote.updateUserAddress(address.id, address.toRemoteDto(userId))) {
+                is NetworkResult.Success -> {
+                    val updatedEntity = res.data.toLocalEntity(userId)
+                    db.withTransaction {
+                        if (updatedEntity.isDefault) {
+                            userAddressDao.clearDefaultForUser(userId)
+                        }
+                        userAddressDao.insertAddress(updatedEntity)
+                    }
+                    syncPrimaryAddressSummaryOnUser(userId)
+                    Result.success(updatedEntity.toDomainAddress())
+                }
+                else -> Result.failure(res.toException())
+            }
+        }
+
+        val existing = userAddressDao.getAddressById(address.id)
+            ?: return Result.failure(IllegalArgumentException("Address not found."))
+        if (existing.userId != userId) {
+            return Result.failure(SecurityException("You do not have permission to edit this address."))
+        }
+
+        val updated = db.withTransaction {
+            val allForUser = userAddressDao.getAddressesForUser(userId)
+            val forceDefault = address.isDefault || (existing.isDefault && allForUser.size == 1)
+            if (forceDefault) {
+                userAddressDao.clearDefaultForUser(userId)
+            }
+            val entity = address.copy(isDefault = forceDefault).toEntity(userId)
+            userAddressDao.updateAddress(entity)
+            // Ensure at least one default exists if this was previously default and unchecked
+            if (existing.isDefault && !forceDefault) {
+                val nextDefault = userAddressDao.getAddressesForUser(userId).firstOrNull { it.id != entity.id }
+                if (nextDefault != null) {
+                    userAddressDao.markAsDefault(nextDefault.id)
+                }
+            }
+            entity
+        }
+        syncPrimaryAddressSummaryOnUser(userId)
+        return Result.success(updated.toDomainAddress())
+    }
+
+    override suspend fun deleteApiUserAddress(addressId: Long): Result<Unit> {
+        val userId = dataStoreManager.loggedInUserIdFlow.firstOrNull()
+            ?: return Result.failure(IllegalStateException("Please login to delete an address."))
+
+        if (isProductionHttpMode()) {
+            val remote = pharmaRemoteDataSource
+                ?: return Result.failure(IllegalStateException("Remote API is not initialized."))
+            return when (val res = remote.deleteUserAddress(addressId)) {
+                is NetworkResult.Success -> {
+                    db.withTransaction {
+                        val existing = userAddressDao.getAddressById(addressId)
+                        userAddressDao.deleteAddressById(addressId)
+                        if (existing?.isDefault == true) {
+                            val remaining = userAddressDao.getAddressesForUser(userId)
+                            remaining.firstOrNull()?.let { userAddressDao.markAsDefault(it.id) }
+                        }
+                    }
+                    syncPrimaryAddressSummaryOnUser(userId)
+                    Result.success(Unit)
+                }
+                else -> Result.failure(res.toException())
+            }
+        }
+
+        val existing = userAddressDao.getAddressById(addressId)
+            ?: return Result.failure(IllegalArgumentException("Address not found."))
+        if (existing.userId != userId) {
+            return Result.failure(SecurityException("You do not have permission to delete this address."))
+        }
+
+        db.withTransaction {
+            userAddressDao.deleteAddressById(addressId)
+            if (existing.isDefault) {
+                val remaining = userAddressDao.getAddressesForUser(userId)
+                remaining.firstOrNull()?.let { userAddressDao.markAsDefault(it.id) }
+            }
+        }
+        syncPrimaryAddressSummaryOnUser(userId)
+        return Result.success(Unit)
+    }
+
+    override suspend fun patchApiDefaultUserAddress(addressId: Long): Result<UserAddress> {
+        val userId = dataStoreManager.loggedInUserIdFlow.firstOrNull()
+            ?: return Result.failure(IllegalStateException("Please login to set a default address."))
+
+        if (isProductionHttpMode()) {
+            val remote = pharmaRemoteDataSource
+                ?: return Result.failure(IllegalStateException("Remote API is not initialized."))
+            return when (val res = remote.setDefaultUserAddress(addressId)) {
+                is NetworkResult.Success -> {
+                    val entity = res.data.toLocalEntity(userId).copy(isDefault = true)
+                    db.withTransaction {
+                        userAddressDao.clearDefaultForUser(userId)
+                        userAddressDao.insertAddress(entity)
+                    }
+                    syncPrimaryAddressSummaryOnUser(userId)
+                    Result.success(entity.toDomainAddress())
+                }
+                else -> Result.failure(res.toException())
+            }
+        }
+
+        val target = userAddressDao.getAddressById(addressId)
+            ?: return Result.failure(IllegalArgumentException("Address not found."))
+        if (target.userId != userId) {
+            return Result.failure(SecurityException("You do not have permission to update this address."))
+        }
+
+        val updated = db.withTransaction {
+            userAddressDao.clearDefaultForUser(userId)
+            userAddressDao.markAsDefault(addressId)
+            userAddressDao.getAddressById(addressId) ?: target.copy(isDefault = true)
+        }
+        syncPrimaryAddressSummaryOnUser(userId)
+        return Result.success(updated.toDomainAddress())
+    }
+
+    override suspend fun getApiLegalDocuments(): Result<List<LegalDocument>> {
+        val baseUrl = dataStoreManager.backendBaseUrlFlow.firstOrNull()
+        val remoteOverrides = mutableMapOf<String, Pair<String?, String?>>()
+        if (isProductionHttpMode() && isBackendConfigured()) {
+            val res = pharmaRemoteDataSource?.fetchLegalDocuments()
+            if (res is NetworkResult.Success) {
+                res.data.forEach { dto ->
+                    remoteOverrides[dto.id] = dto.url to dto.version
+                    dto.slug?.let { slug -> remoteOverrides[slug] = dto.url to dto.version }
+                }
+            }
+        }
+        return Result.success(
+            LegalDocumentsCatalog.resolveDocuments(
+                backendBaseUrl = baseUrl,
+                remoteOverrides = remoteOverrides
+            )
         )
     }
 
@@ -1566,22 +2083,25 @@ class PharmaRepositoryImpl(
             }
         }
 
-        // Opportunistically refresh verified batch & inventory stock records
-        when (val batchesRes = remote.fetchBatches()) {
-            is NetworkResult.Success -> {
-                if (batchesRes.data.isNotEmpty()) {
-                    batchDao.insertBatches(batchesRes.data.map { it.toEntity() })
+        // Opportunistically refresh verified batch & inventory stock records ONLY for authorized Brand/Manufacturer roles
+        val activeRole = getApiUsersMe()?.role
+        if (activeRole?.canAccessRealTimeInventory == true) {
+            when (val batchesRes = remote.fetchBatches()) {
+                is NetworkResult.Success -> {
+                    if (batchesRes.data.isNotEmpty()) {
+                        batchDao.insertBatches(batchesRes.data.map { it.toEntity() })
+                    }
                 }
+                else -> Unit
             }
-            else -> Unit
-        }
-        when (val invRes = remote.fetchInventory()) {
-            is NetworkResult.Success -> {
-                if (invRes.data.isNotEmpty()) {
-                    productInventoryDao.insertAll(invRes.data.map { it.toEntity() })
+            when (val invRes = remote.fetchInventory()) {
+                is NetworkResult.Success -> {
+                    if (invRes.data.isNotEmpty()) {
+                        productInventoryDao.insertAll(invRes.data.map { it.toEntity() })
+                    }
                 }
+                else -> Unit
             }
-            else -> Unit
         }
 
         return Result.success(Unit)
@@ -3625,27 +4145,49 @@ class PharmaRepositoryImpl(
         }
     }
 
-    override fun getApiBatchesFlow(): Flow<List<BatchWithProduct>> {
-        return combine(
-            batchDao.getAllBatchesFlow(),
-            productDao.getAllActiveProductsFlow()
-        ) { batches, products ->
-            val pMap = products.associateBy { it.id }
-            batches.map { b ->
-                val p = pMap[b.productId]
-                BatchWithProduct(
-                    batch = b,
-                    productName = p?.name ?: "Product #${b.productId}",
-                    brand = p?.brand ?: "",
-                    saltComposition = p?.saltComposition ?: "",
-                    daysUntilExpiry = Formatters.daysUntil(b.expiryDateEpochMillis)
-                )
-            }
+    private suspend fun requireInventoryAuthorizedUser(): Result<AuthUser> {
+        val user = getApiUsersMe()
+            ?: return Result.failure(SecurityException("Authentication required to access Real-Time Inventory."))
+        if (!user.role.canAccessRealTimeInventory) {
+            return Result.failure(
+                SecurityException("Access denied (403): Real-Time Inventory is restricted to authorized Brand and Manufacturer accounts.")
+            )
         }
+        return Result.success(user)
     }
 
+    override suspend fun isProductionBackendConnected(): Boolean = isProductionHttpMode()
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    override fun getApiBatchesFlow(): Flow<List<BatchWithProduct>> =
+        dataStoreManager.loggedInUserIdFlow.flatMapLatest { userId ->
+            val user = userId?.let { userDao.getUserById(it) }
+            val role = user?.let { UserRole.fromString(it.role) }
+            if (user == null || role?.canAccessRealTimeInventory != true) {
+                flowOf(emptyList())
+            } else {
+                combine(
+                    batchDao.getBatchesForSupplierFlow(user.id),
+                    productDao.getAllActiveProductsFlow()
+                ) { batches, products ->
+                    val pMap = products.associateBy { it.id }
+                    batches.map { b ->
+                        val p = pMap[b.productId]
+                        BatchWithProduct(
+                            batch = b,
+                            productName = p?.name ?: "Product #${b.productId}",
+                            brand = p?.brand ?: "",
+                            saltComposition = p?.saltComposition ?: "",
+                            daysUntilExpiry = Formatters.daysUntil(b.expiryDateEpochMillis)
+                        )
+                    }
+                }
+            }
+        }
+
     override suspend fun getApiBatches(): List<BatchWithProduct> {
-        val batches = batchDao.getAllBatches()
+        val user = requireInventoryAuthorizedUser().getOrNull() ?: return emptyList()
+        val batches = batchDao.getBatchesForSupplier(user.id)
         val products = productDao.getAllProducts().associateBy { it.id }
         return batches.map { b ->
             val p = products[b.productId]
@@ -3660,156 +4202,210 @@ class PharmaRepositoryImpl(
     }
 
     override suspend fun postApiBatches(batch: BatchEntity): Result<Long> {
+        val authorizedUser = requireInventoryAuthorizedUser().getOrElse { return Result.failure(it) }
+        val scopedBatch = batch.copy(supplierId = authorizedUser.id)
         if (isProductionHttpMode()) {
             val remote = pharmaRemoteDataSource
                 ?: return Result.failure(IllegalStateException("Remote API is not initialized."))
-            return when (val res = remote.createBatch(batch.toDto())) {
+            return when (val res = remote.createBatch(scopedBatch.toDto())) {
                 is NetworkResult.Success -> {
-                    val savedId = batchDao.insertBatch(res.data.toEntity())
+                    val returned = res.data.toEntity()
+                    val persisted = if (returned.supplierId <= 0L) returned.copy(supplierId = authorizedUser.id) else returned
+                    val savedId = batchDao.insertBatch(persisted)
                     Result.success(savedId)
                 }
                 else -> Result.failure(res.toException())
             }
         }
-        val id = batchDao.insertBatch(batch)
+        val id = batchDao.insertBatch(scopedBatch)
         return Result.success(id)
     }
 
-    override fun getRealTimeInventoryFlow(): Flow<List<InventoryStockItem>> {
-        return combine(
-            batchDao.getAllBatchesFlow(),
-            productDao.getAllProductsFlow(),
-            recallDao.getAllRecallsFlow()
-        ) { batches, products, recalls ->
-            val pMap = products.associateBy { it.id }
-            val activeRecalls = recalls.filter { it.isActive }
+    override suspend fun refreshRealTimeInventory(): Result<Unit> {
+        val authorizedUser = requireInventoryAuthorizedUser().getOrElse { return Result.failure(it) }
+        if (!isProductionHttpMode()) {
+            return Result.success(Unit)
+        }
+        val remote = pharmaRemoteDataSource
+            ?: return Result.failure(IllegalStateException("Remote API is not initialized."))
 
-            val batchItems = batches.map { b ->
-                val p = pMap[b.productId]
-                val daysUntilExpiry = Formatters.daysUntil(b.expiryDateEpochMillis)
-                val expiryStatus = when {
-                    daysUntilExpiry < 0 -> ExpiryRiskStatus.EXPIRED
-                    daysUntilExpiry <= 30 -> ExpiryRiskStatus.EXPIRING_CRITICAL
-                    daysUntilExpiry <= 90 -> ExpiryRiskStatus.EXPIRING_WARNING
-                    else -> ExpiryRiskStatus.HEALTHY
+        val batchesResult = remote.fetchBatches()
+        return when (batchesResult) {
+            is NetworkResult.Success -> {
+                val remoteEntities = batchesResult.data.map { dto ->
+                    val entity = dto.toEntity()
+                    if (entity.supplierId <= 0L) entity.copy(supplierId = authorizedUser.id) else entity
                 }
-
-                val reorderThreshold = 25
-                val stockStatus = when {
-                    b.remainingQuantity <= 0 -> StockLevelStatus.OUT_OF_STOCK
-                    b.remainingQuantity <= 10 -> StockLevelStatus.CRITICAL_LOW
-                    b.remainingQuantity <= reorderThreshold -> StockLevelStatus.LOW_STOCK
-                    else -> StockLevelStatus.HEALTHY
-                }
-
-                val matchingRecall = activeRecalls.firstOrNull { r ->
-                    r.productId == b.productId && (r.batchNumbersCsv.isBlank() || r.batchNumbersCsv.contains(b.batchNumber))
-                }
-                val isRecalled = matchingRecall != null
-
-                val flags = mutableListOf<String>()
-                if (b.remainingQuantity <= 0) {
-                    flags.add("Out of Stock (0 units)")
-                } else if (b.remainingQuantity <= 10) {
-                    flags.add("Critical Low Stock (${b.remainingQuantity} units left)")
-                } else if (b.remainingQuantity <= reorderThreshold) {
-                    flags.add("Below Reorder Level (≤$reorderThreshold units)")
-                }
-
-                if (daysUntilExpiry < 0) {
-                    flags.add("Expired (${-daysUntilExpiry}d ago) - Quarantine")
-                } else if (daysUntilExpiry <= 30) {
-                    flags.add("Expiring soon ($daysUntilExpiry days left)")
-                }
-
-                if (isRecalled) {
-                    flags.add("Active Recall: ${matchingRecall?.reason ?: "Regulatory Hold"}")
-                }
-
-                val storage = try {
-                    StorageCondition.valueOf(b.storageCondition)
-                } catch (_: Exception) {
-                    try {
-                        p?.storageCondition?.let { StorageCondition.valueOf(it) } ?: StorageCondition.ROOM_TEMPERATURE
-                    } catch (_: Exception) {
-                        StorageCondition.ROOM_TEMPERATURE
+                db.withTransaction {
+                    batchDao.deleteBatchesForSupplier(authorizedUser.id)
+                    if (remoteEntities.isNotEmpty()) {
+                        batchDao.insertBatches(remoteEntities)
                     }
                 }
-
-                if (storage == StorageCondition.REFRIGERATED_2_8 || storage == StorageCondition.FROZEN) {
-                    flags.add("Cold Chain Monitored")
+                // Also refresh SKU-level inventory records when endpoint is available
+                when (val invRes = remote.fetchInventory()) {
+                    is NetworkResult.Success -> {
+                        if (invRes.data.isNotEmpty()) {
+                            productInventoryDao.insertAll(invRes.data.map { it.toEntity() })
+                        }
+                    }
+                    else -> Unit
                 }
-
-                val unitPrice = if (b.ptr > 0) b.ptr else (b.mrp * 0.78)
-                val totalVal = b.remainingQuantity * unitPrice
-
-                InventoryStockItem(
-                    id = b.id,
-                    productId = b.productId,
-                    productName = p?.name ?: "Product #${b.productId}",
-                    brand = p?.brand ?: "Generic",
-                    saltComposition = p?.saltComposition ?: "",
-                    dosageForm = p?.dosageForm ?: "Tablet",
-                    therapeuticCategory = p?.therapeuticCategory ?: "General",
-                    batchNumber = b.batchNumber,
-                    remainingQuantity = b.remainingQuantity,
-                    initialQuantity = b.initialQuantity,
-                    reorderThreshold = reorderThreshold,
-                    stockStatus = stockStatus,
-                    expiryDateEpochMillis = b.expiryDateEpochMillis,
-                    daysUntilExpiry = daysUntilExpiry,
-                    expiryStatus = expiryStatus,
-                    storageCondition = storage,
-                    mrp = b.mrp,
-                    ptr = unitPrice,
-                    totalValuation = totalVal,
-                    isRecalled = isRecalled,
-                    recallReason = matchingRecall?.reason,
-                    criticalFlags = flags
-                )
+                Result.success(Unit)
             }
-
-            // Products with 0 batches registered -> Flag as Out of Stock
-            val productIdsWithBatches = batches.map { it.productId }.toSet()
-            val missingProductItems = products.filter { !productIdsWithBatches.contains(it.id) }.map { p ->
-                val storage = try {
-                    StorageCondition.valueOf(p.storageCondition)
-                } catch (_: Exception) {
-                    StorageCondition.ROOM_TEMPERATURE
-                }
-                InventoryStockItem(
-                    id = -p.id,
-                    productId = p.id,
-                    productName = p.name,
-                    brand = p.brand,
-                    saltComposition = p.saltComposition,
-                    dosageForm = p.dosageForm,
-                    therapeuticCategory = p.therapeuticCategory,
-                    batchNumber = "NO-LOT",
-                    remainingQuantity = 0,
-                    initialQuantity = 0,
-                    reorderThreshold = 25,
-                    stockStatus = StockLevelStatus.OUT_OF_STOCK,
-                    expiryDateEpochMillis = System.currentTimeMillis() + 86400000L * 365,
-                    daysUntilExpiry = 365,
-                    expiryStatus = ExpiryRiskStatus.HEALTHY,
-                    storageCondition = storage,
-                    mrp = 0.0,
-                    ptr = 0.0,
-                    totalValuation = 0.0,
-                    isRecalled = false,
-                    recallReason = null,
-                    criticalFlags = listOf("No Stock Recorded / 0 Units Available")
-                )
-            }
-
-            (batchItems + missingProductItems).sortedWith(
-                compareByDescending<InventoryStockItem> { it.isCritical }
-                    .thenBy { it.remainingQuantity }
-                    .thenBy { it.daysUntilExpiry }
-            )
+            else -> Result.failure(batchesResult.toException())
         }
     }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    override fun getRealTimeInventoryFlow(): Flow<List<InventoryStockItem>> =
+        dataStoreManager.loggedInUserIdFlow.flatMapLatest { userId ->
+            val user = userId?.let { userDao.getUserById(it) }
+            val role = user?.let { UserRole.fromString(it.role) }
+            if (user == null || role?.canAccessRealTimeInventory != true) {
+                flowOf(emptyList())
+            } else {
+                combine(
+                    batchDao.getBatchesForSupplierFlow(user.id),
+                    productDao.getAllProductsFlow(),
+                    recallDao.getAllRecallsFlow()
+                ) { batches, products, recalls ->
+                    val pMap = products.associateBy { it.id }
+                    val activeRecalls = recalls.filter { it.isActive }
+
+                    val batchItems = batches.map { b ->
+                        val p = pMap[b.productId]
+                        val daysUntilExpiry = Formatters.daysUntil(b.expiryDateEpochMillis)
+                        val expiryStatus = when {
+                            daysUntilExpiry < 0 -> ExpiryRiskStatus.EXPIRED
+                            daysUntilExpiry <= 30 -> ExpiryRiskStatus.EXPIRING_CRITICAL
+                            daysUntilExpiry <= 90 -> ExpiryRiskStatus.EXPIRING_WARNING
+                            else -> ExpiryRiskStatus.HEALTHY
+                        }
+
+                        val reorderThreshold = 25
+                        val stockStatus = when {
+                            b.remainingQuantity <= 0 -> StockLevelStatus.OUT_OF_STOCK
+                            b.remainingQuantity <= 10 -> StockLevelStatus.CRITICAL_LOW
+                            b.remainingQuantity <= reorderThreshold -> StockLevelStatus.LOW_STOCK
+                            else -> StockLevelStatus.HEALTHY
+                        }
+
+                        val matchingRecall = activeRecalls.firstOrNull { r ->
+                            r.productId == b.productId && (r.batchNumbersCsv.isBlank() || r.batchNumbersCsv.contains(b.batchNumber))
+                        }
+                        val isRecalled = matchingRecall != null
+
+                        val flags = mutableListOf<String>()
+                        if (b.remainingQuantity <= 0) {
+                            flags.add("Out of Stock (0 units)")
+                        } else if (b.remainingQuantity <= 10) {
+                            flags.add("Critical Low Stock (${b.remainingQuantity} units left)")
+                        } else if (b.remainingQuantity <= reorderThreshold) {
+                            flags.add("Below Reorder Level (≤$reorderThreshold units)")
+                        }
+
+                        if (daysUntilExpiry < 0) {
+                            flags.add("Expired (${-daysUntilExpiry}d ago) - Quarantine")
+                        } else if (daysUntilExpiry <= 30) {
+                            flags.add("Expiring soon ($daysUntilExpiry days left)")
+                        }
+
+                        if (isRecalled) {
+                            flags.add("Active Recall: ${matchingRecall?.reason ?: "Regulatory Hold"}")
+                        }
+
+                        val storage = try {
+                            StorageCondition.valueOf(b.storageCondition)
+                        } catch (_: Exception) {
+                            try {
+                                p?.storageCondition?.let { StorageCondition.valueOf(it) } ?: StorageCondition.ROOM_TEMPERATURE
+                            } catch (_: Exception) {
+                                StorageCondition.ROOM_TEMPERATURE
+                            }
+                        }
+
+                        if (storage == StorageCondition.REFRIGERATED_2_8 || storage == StorageCondition.FROZEN) {
+                            flags.add("Cold Chain Monitored")
+                        }
+
+                        val unitPrice = if (b.ptr > 0) b.ptr else (b.mrp * 0.78)
+                        val totalVal = b.remainingQuantity * unitPrice
+
+                        InventoryStockItem(
+                            id = b.id,
+                            productId = b.productId,
+                            productName = p?.name ?: "Product #${b.productId}",
+                            brand = p?.brand ?: "Generic",
+                            saltComposition = p?.saltComposition ?: "",
+                            dosageForm = p?.dosageForm ?: "Tablet",
+                            therapeuticCategory = p?.therapeuticCategory ?: "General",
+                            batchNumber = b.batchNumber,
+                            remainingQuantity = b.remainingQuantity,
+                            initialQuantity = b.initialQuantity,
+                            reorderThreshold = reorderThreshold,
+                            stockStatus = stockStatus,
+                            mfgDateEpochMillis = b.mfgDateEpochMillis,
+                            expiryDateEpochMillis = b.expiryDateEpochMillis,
+                            daysUntilExpiry = daysUntilExpiry,
+                            expiryStatus = expiryStatus,
+                            storageCondition = storage,
+                            mrp = b.mrp,
+                            ptr = unitPrice,
+                            totalValuation = totalVal,
+                            isRecalled = isRecalled,
+                            recallReason = matchingRecall?.reason,
+                            criticalFlags = flags,
+                            supplierId = b.supplierId
+                        )
+                    }
+
+                    // Products owned by this brand/manufacturer with 0 batches registered -> Flag as Out of Stock
+                    val productIdsWithBatches = batches.map { it.productId }.toSet()
+                    val missingProductItems = products
+                        .filter { it.createdBy == user.id && !productIdsWithBatches.contains(it.id) }
+                        .map { p ->
+                            val storage = try {
+                                StorageCondition.valueOf(p.storageCondition)
+                            } catch (_: Exception) {
+                                StorageCondition.ROOM_TEMPERATURE
+                            }
+                            InventoryStockItem(
+                                id = -p.id,
+                                productId = p.id,
+                                productName = p.name,
+                                brand = p.brand,
+                                saltComposition = p.saltComposition,
+                                dosageForm = p.dosageForm,
+                                therapeuticCategory = p.therapeuticCategory,
+                                batchNumber = "NO-LOT",
+                                remainingQuantity = 0,
+                                initialQuantity = 0,
+                                reorderThreshold = 25,
+                                stockStatus = StockLevelStatus.OUT_OF_STOCK,
+                                mfgDateEpochMillis = null,
+                                expiryDateEpochMillis = System.currentTimeMillis() + 86400000L * 365,
+                                daysUntilExpiry = 365,
+                                expiryStatus = ExpiryRiskStatus.HEALTHY,
+                                storageCondition = storage,
+                                mrp = 0.0,
+                                ptr = 0.0,
+                                totalValuation = 0.0,
+                                isRecalled = false,
+                                recallReason = null,
+                                criticalFlags = listOf("No Stock Recorded / 0 Units Available"),
+                                supplierId = user.id
+                            )
+                        }
+
+                    (batchItems + missingProductItems).sortedWith(
+                        compareByDescending<InventoryStockItem> { it.isCritical }
+                            .thenBy { it.remainingQuantity }
+                            .thenBy { it.daysUntilExpiry }
+                    )
+                }
+            }
+        }
 
     override fun getInventorySummaryFlow(): Flow<InventoryDashboardSummary> {
         return getRealTimeInventoryFlow().map { items ->
@@ -3828,13 +4424,16 @@ class PharmaRepositoryImpl(
     }
 
     override suspend fun adjustBatchStock(batchId: Long, newQuantity: Int, reason: String): Result<Unit> {
+        val authorizedUser = requireInventoryAuthorizedUser().getOrElse { return Result.failure(it) }
         val safeQty = newQuantity.coerceAtLeast(0)
         if (isProductionHttpMode() && batchId > 0) {
             val remote = pharmaRemoteDataSource
                 ?: return Result.failure(IllegalStateException("Remote API is not initialized."))
             return when (val res = remote.adjustBatchStock(batchId, safeQty, reason)) {
                 is NetworkResult.Success -> {
-                    batchDao.insertBatch(res.data.toEntity())
+                    val returned = res.data.toEntity()
+                    val persisted = if (returned.supplierId <= 0L) returned.copy(supplierId = authorizedUser.id) else returned
+                    batchDao.insertBatch(persisted)
                     Result.success(Unit)
                 }
                 else -> Result.failure(res.toException())
@@ -3842,6 +4441,13 @@ class PharmaRepositoryImpl(
         }
         return try {
             if (batchId > 0) {
+                val existing = batchDao.getBatchById(batchId)
+                    ?: return Result.failure(IllegalArgumentException("Batch not found."))
+                if (existing.supplierId != authorizedUser.id) {
+                    return Result.failure(
+                        SecurityException("Access denied (403): You can only modify stock for your own organization's batches.")
+                    )
+                }
                 batchDao.updateBatchQuantity(batchId, safeQty)
             }
             Result.success(Unit)
@@ -3861,19 +4467,37 @@ class PharmaRepositoryImpl(
         }
     }
 
-    override fun getProductInventoryFlow(): Flow<List<ProductInventoryEntity>> {
-        return productInventoryDao.getAllInventoryFlow()
-    }
+    @OptIn(ExperimentalCoroutinesApi::class)
+    override fun getProductInventoryFlow(): Flow<List<ProductInventoryEntity>> =
+        dataStoreManager.loggedInUserIdFlow.flatMapLatest { userId ->
+            val user = userId?.let { userDao.getUserById(it) }
+            val role = user?.let { UserRole.fromString(it.role) }
+            if (user == null || role?.canAccessRealTimeInventory != true) {
+                flowOf(emptyList())
+            } else {
+                productInventoryDao.getAllInventoryFlow()
+            }
+        }
 
-    override fun getLowStockProductInventoryFlow(): Flow<List<ProductInventoryEntity>> {
-        return productInventoryDao.getLowStockInventoryFlow()
-    }
+    @OptIn(ExperimentalCoroutinesApi::class)
+    override fun getLowStockProductInventoryFlow(): Flow<List<ProductInventoryEntity>> =
+        dataStoreManager.loggedInUserIdFlow.flatMapLatest { userId ->
+            val user = userId?.let { userDao.getUserById(it) }
+            val role = user?.let { UserRole.fromString(it.role) }
+            if (user == null || role?.canAccessRealTimeInventory != true) {
+                flowOf(emptyList())
+            } else {
+                productInventoryDao.getLowStockInventoryFlow()
+            }
+        }
 
     override suspend fun getProductInventoryBySku(sku: String): ProductInventoryEntity? {
+        requireInventoryAuthorizedUser().getOrNull() ?: return null
         return productInventoryDao.getInventoryBySku(sku)
     }
 
     override suspend fun insertOrUpdateProductInventory(inventory: ProductInventoryEntity): Long {
+        requireInventoryAuthorizedUser().getOrElse { throw it }
         if (isProductionHttpMode()) {
             val remote = pharmaRemoteDataSource ?: throw IllegalStateException("Remote API is not initialized.")
             return when (val res = remote.upsertInventoryItem(inventory.toDto())) {
@@ -3885,6 +4509,7 @@ class PharmaRepositoryImpl(
     }
 
     override suspend fun updateProductInventoryStock(sku: String, newStock: Int): Result<Unit> {
+        requireInventoryAuthorizedUser().getOrElse { return Result.failure(it) }
         if (isProductionHttpMode()) {
             val remote = pharmaRemoteDataSource
                 ?: return Result.failure(IllegalStateException("Remote API is not initialized."))
@@ -3905,6 +4530,7 @@ class PharmaRepositoryImpl(
     }
 
     override suspend fun updateProductInventoryReorderThreshold(sku: String, newThreshold: Int): Result<Unit> {
+        requireInventoryAuthorizedUser().getOrElse { return Result.failure(it) }
         if (isProductionHttpMode()) {
             val remote = pharmaRemoteDataSource
                 ?: return Result.failure(IllegalStateException("Remote API is not initialized."))
@@ -4417,14 +5043,13 @@ class PharmaRepositoryImpl(
                 val openOrders = orderDao.getOpenOrderCountForBuyer(user.id)
                 val basket = basketDao.getActiveBasketForBuyer(user.id)
                 val basketItemsCount = if (basket != null) basketDao.getBasketItems(basket.id).size else 0
-                val nearExpiryCount = batchDao.getNearExpiryBatchCount(now + (90L * 24 * 60 * 60 * 1000))
                 val shortageAlertsCount = analyticsDao.getHighRiskShortageCount()
                 val ledgerBal = ledgerDao.getTotalOutstandingBalanceForBuyer(user.id) ?: 0.0
                 DashboardKpis(
                     role = UserRole.STOCKIST,
                     openOrdersCount = openOrders,
                     basketItemsCount = basketItemsCount,
-                    nearExpiryBatchesCount = nearExpiryCount,
+                    nearExpiryBatchesCount = 0,
                     shortageAlertsCount = shortageAlertsCount,
                     ledgerBalance = ledgerBal
                 )

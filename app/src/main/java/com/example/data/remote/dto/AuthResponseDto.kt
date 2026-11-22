@@ -36,7 +36,10 @@ data class UserDto(
     @param:Json(name = "address") val address: String,
     @param:Json(name = "role") val role: String,
     @param:Json(name = "status") val status: String = "ACTIVE",
-    @param:Json(name = "createdAtEpochMillis") val createdAtEpochMillis: Long = System.currentTimeMillis()
+    @param:Json(name = "createdAtEpochMillis") val createdAtEpochMillis: Long = System.currentTimeMillis(),
+    @param:Json(name = "emailVerified") val emailVerified: Boolean = false,
+    @param:Json(name = "phoneVerified") val phoneVerified: Boolean = false,
+    @param:Json(name = "profileBio") val profileBio: String? = null
 ) {
     fun toAuthUser(): AuthUser {
         val parsedRole = try {
@@ -58,7 +61,10 @@ data class UserDto(
             gstin = gstin,
             address = address,
             role = parsedRole,
-            status = parsedStatus
+            status = parsedStatus,
+            emailVerified = emailVerified,
+            phoneVerified = phoneVerified,
+            profileBio = profileBio
         )
     }
 
@@ -79,7 +85,10 @@ data class UserDto(
             passwordSalt = "",
             role = role.uppercase(),
             status = status.uppercase(),
-            createdAtEpochMillis = createdAtEpochMillis
+            createdAtEpochMillis = createdAtEpochMillis,
+            emailVerified = emailVerified,
+            phoneVerified = phoneVerified,
+            profileBio = profileBio
         )
     }
 }

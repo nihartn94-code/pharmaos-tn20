@@ -128,12 +128,14 @@ fun DashboardScreen(
     onNavigateToOptimizer: () -> Unit = {},
     onNavigateToCompliance: () -> Unit = {},
     onNavigateToSearch: () -> Unit = onNavigateToCatalogue,
+    onNavigateToManufacturerCatalogue: () -> Unit = onNavigateToCatalogue,
     onLoggedOut: () -> Unit = {}
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     DashboardScreenContent(
         uiState = uiState,
         onNavigateToCatalogue = onNavigateToCatalogue,
+        onNavigateToManufacturerCatalogue = onNavigateToManufacturerCatalogue,
         onNavigateToBasket = onNavigateToBasket,
         onNavigateToOrders = onNavigateToOrders,
         onNavigateToBatches = onNavigateToBatches,
@@ -173,6 +175,7 @@ fun DashboardScreenContent(
     onNavigateToOptimizer: () -> Unit = {},
     onNavigateToCompliance: () -> Unit = {},
     onNavigateToSearch: () -> Unit = onNavigateToCatalogue,
+    onNavigateToManufacturerCatalogue: () -> Unit = onNavigateToCatalogue,
     onAdjustStock: (String, Int) -> Unit = { _, _ -> },
     onReorderProduct: (ProductInventoryEntity, Int) -> Unit = { _, _ -> },
     onLogout: () -> Unit = {}
@@ -197,7 +200,7 @@ fun DashboardScreenContent(
                     },
                     onNavigateToCatalogue = {
                         coroutineScope.launch { drawerState.close() }
-                        onNavigateToCatalogue()
+                        onNavigateToManufacturerCatalogue()
                     },
                     onNavigateToOrders = {
                         coroutineScope.launch { drawerState.close() }
@@ -479,16 +482,18 @@ fun DashboardScreenContent(
                     onViewAllClick = onNavigateToOrders
                 )
 
-                Spacer(modifier = Modifier.height(14.dp))
+                if (uiState.isRealTimeInventoryAuthorized) {
+                    Spacer(modifier = Modifier.height(14.dp))
 
-                // Real-Time Shortage Alerts Dashboard Component
-                ShortageAlertsDashboardComponent(
-                    items = uiState.inventoryItems,
-                    onReorderClick = onReorderProduct,
-                    onAdjustStock = onAdjustStock,
-                    onViewAllClick = onNavigateToShortages,
-                    onProductClick = { onNavigateToShortages() }
-                )
+                    // Real-Time Shortage Alerts Dashboard Component (Brand & Manufacturer only)
+                    ShortageAlertsDashboardComponent(
+                        items = uiState.inventoryItems,
+                        onReorderClick = onReorderProduct,
+                        onAdjustStock = onAdjustStock,
+                        onViewAllClick = onNavigateToShortages,
+                        onProductClick = { onNavigateToShortages() }
+                    )
+                }
 
                 Spacer(modifier = Modifier.height(16.dp))
             }
@@ -1466,19 +1471,25 @@ private fun DashboardDrawerContent(
                             )
                         }
                         Spacer(modifier = Modifier.width(12.dp))
-                        Text(
-                            text = "Manufacturer Catalog",
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 14.sp,
-                            color = MaterialTheme.colorScheme.onSurface,
-                            modifier = Modifier.weight(1f)
-                        )
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Manufacturer Catalog",
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 14.sp,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Text(
+                                text = "Explore labs & medicines",
+                                fontSize = 11.5.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
                         Surface(
                             shape = RoundedCornerShape(12.dp),
                             color = Color(0xFFDCFCE7)
                         ) {
                             Text(
-                                text = "240+ Labs",
+                                text = "Explore",
                                 fontSize = 11.sp,
                                 fontWeight = FontWeight.Bold,
                                 color = Color(0xFF059669),
@@ -1578,57 +1589,59 @@ private fun DashboardDrawerContent(
                     )
                 }
 
-                Spacer(modifier = Modifier.height(4.dp))
+                if (currentUser?.role?.canAccessRealTimeInventory == true) {
+                    Spacer(modifier = Modifier.height(4.dp))
 
-                // Real-Time Inventory Dashboard
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(14.dp))
-                        .clickable { onNavigateToBatches() }
-                        .padding(horizontal = 10.dp, vertical = 10.dp)
-                        .testTag("drawer_item_inventory_dashboard"),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Box(
+                    // Real-Time Inventory Dashboard (Brand & Manufacturer exclusive)
+                    Row(
                         modifier = Modifier
-                            .size(36.dp)
-                            .clip(RoundedCornerShape(10.dp))
-                            .background(Color(0xFFFEF3C7)),
-                        contentAlignment = Alignment.Center
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(14.dp))
+                            .clickable { onNavigateToBatches() }
+                            .padding(horizontal = 10.dp, vertical = 10.dp)
+                            .testTag("drawer_item_inventory_dashboard"),
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Icon(
-                            imageVector = Icons.Default.Inventory2,
-                            contentDescription = null,
-                            tint = Color(0xFFD97706),
-                            modifier = Modifier.size(20.dp)
-                        )
-                    }
-                    Spacer(modifier = Modifier.width(12.dp))
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = "Inventory Dashboard",
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 14.sp,
-                            color = MaterialTheme.colorScheme.onSurface
-                        )
-                        Text(
-                            text = "Stock levels & critical flags",
-                            fontSize = 10.5.sp,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                    Surface(
-                        shape = RoundedCornerShape(8.dp),
-                        color = Color(0xFFDC2626)
-                    ) {
-                        Text(
-                            text = "LIVE",
-                            fontSize = 9.sp,
-                            fontWeight = FontWeight.ExtraBold,
-                            color = Color.White,
-                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                        )
+                        Box(
+                            modifier = Modifier
+                                .size(36.dp)
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(Color(0xFFFEF3C7)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Inventory2,
+                                contentDescription = null,
+                                tint = Color(0xFFD97706),
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Inventory Dashboard",
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 14.sp,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Text(
+                                text = "Stock levels & critical flags",
+                                fontSize = 10.5.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        Surface(
+                            shape = RoundedCornerShape(8.dp),
+                            color = Color(0xFFDC2626)
+                        ) {
+                            Text(
+                                text = "LIVE",
+                                fontSize = 9.sp,
+                                fontWeight = FontWeight.ExtraBold,
+                                color = Color.White,
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                            )
+                        }
                     }
                 }
 

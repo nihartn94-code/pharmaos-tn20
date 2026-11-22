@@ -7,6 +7,9 @@ import com.example.data.remote.dto.BasketDto
 import com.example.data.remote.dto.BasketLoadReportDto
 import com.example.data.remote.dto.BatchDto
 import com.example.data.remote.dto.ComplianceVerificationDto
+import com.example.data.remote.dto.ConfirmContactVerificationRequestDto
+import com.example.data.remote.dto.ContactVerificationRequestDto
+import com.example.data.remote.dto.ContactVerificationStatusDto
 import com.example.data.remote.dto.CreateOrderRequestDto
 import com.example.data.remote.dto.CreateRecallRequestDto
 import com.example.data.remote.dto.CreateReturnRequestDto
@@ -15,6 +18,7 @@ import com.example.data.remote.dto.CreditNoteDto
 import com.example.data.remote.dto.DashboardStatsDto
 import com.example.data.remote.dto.FulfillOrderItemRequestDto
 import com.example.data.remote.dto.LedgerBalanceDto
+import com.example.data.remote.dto.LegalDocumentDto
 import com.example.data.remote.dto.NamedBasketDto
 import com.example.data.remote.dto.NotificationDto
 import com.example.data.remote.dto.OptimizationResultDto
@@ -38,7 +42,9 @@ import com.example.data.remote.dto.UpdateBasketQtyRequestDto
 import com.example.data.remote.dto.UpdateOrderStatusRequestDto
 import com.example.data.remote.dto.UpdateProductStatusRequestDto
 import com.example.data.remote.dto.UpdateReorderThresholdRequestDto
+import com.example.data.remote.dto.UpdateUserProfileRequestDto
 import com.example.data.remote.dto.UpdateUserStatusRequestDto
+import com.example.data.remote.dto.UserAddressDto
 import com.example.data.remote.dto.UserDto
 import com.example.data.remote.util.NetworkResult
 import com.example.data.remote.util.safeApiCall
@@ -63,6 +69,80 @@ class PharmaRemoteDataSource(
     suspend fun fetchCurrentUser(): NetworkResult<UserDto> {
         if (!networkModule.isBackendConfigured()) return notConfiguredError()
         return safeApiEnvelopeCall(networkModule.moshi) { networkModule.userApiService().getCurrentUser() }
+    }
+
+    suspend fun updateCurrentUserProfile(request: UpdateUserProfileRequestDto): NetworkResult<UserDto> {
+        if (!networkModule.isBackendConfigured()) return notConfiguredError()
+        return safeApiEnvelopeCall(networkModule.moshi) {
+            networkModule.userApiService().updateCurrentUserProfile(request)
+        }
+    }
+
+    suspend fun requestContactVerification(
+        channel: String,
+        value: String
+    ): NetworkResult<ContactVerificationStatusDto> {
+        if (!networkModule.isBackendConfigured()) return notConfiguredError()
+        return safeApiEnvelopeCall(networkModule.moshi) {
+            networkModule.userApiService().requestContactVerification(
+                ContactVerificationRequestDto(channel = channel, value = value)
+            )
+        }
+    }
+
+    suspend fun confirmContactVerification(
+        channel: String,
+        value: String,
+        code: String
+    ): NetworkResult<ContactVerificationStatusDto> {
+        if (!networkModule.isBackendConfigured()) return notConfiguredError()
+        return safeApiEnvelopeCall(networkModule.moshi) {
+            networkModule.userApiService().confirmContactVerification(
+                ConfirmContactVerificationRequestDto(channel = channel, value = value, code = code)
+            )
+        }
+    }
+
+    suspend fun fetchUserAddresses(): NetworkResult<List<UserAddressDto>> {
+        if (!networkModule.isBackendConfigured()) return notConfiguredError()
+        return safeApiEnvelopeCall(networkModule.moshi) {
+            networkModule.userApiService().getUserAddresses()
+        }
+    }
+
+    suspend fun createUserAddress(dto: UserAddressDto): NetworkResult<UserAddressDto> {
+        if (!networkModule.isBackendConfigured()) return notConfiguredError()
+        return safeApiEnvelopeCall(networkModule.moshi) {
+            networkModule.userApiService().createUserAddress(dto)
+        }
+    }
+
+    suspend fun updateUserAddress(addressId: Long, dto: UserAddressDto): NetworkResult<UserAddressDto> {
+        if (!networkModule.isBackendConfigured()) return notConfiguredError()
+        return safeApiEnvelopeCall(networkModule.moshi) {
+            networkModule.userApiService().updateUserAddress(addressId, dto)
+        }
+    }
+
+    suspend fun deleteUserAddress(addressId: Long): NetworkResult<Unit> {
+        if (!networkModule.isBackendConfigured()) return notConfiguredError()
+        return safeApiCall(networkModule.moshi) {
+            networkModule.userApiService().deleteUserAddress(addressId)
+        }
+    }
+
+    suspend fun setDefaultUserAddress(addressId: Long): NetworkResult<UserAddressDto> {
+        if (!networkModule.isBackendConfigured()) return notConfiguredError()
+        return safeApiEnvelopeCall(networkModule.moshi) {
+            networkModule.userApiService().setDefaultUserAddress(addressId)
+        }
+    }
+
+    suspend fun fetchLegalDocuments(): NetworkResult<List<LegalDocumentDto>> {
+        if (!networkModule.isBackendConfigured()) return notConfiguredError()
+        return safeApiEnvelopeCall(networkModule.moshi) {
+            networkModule.userApiService().getLegalDocuments()
+        }
     }
 
     suspend fun fetchAllUsers(): NetworkResult<List<UserDto>> {

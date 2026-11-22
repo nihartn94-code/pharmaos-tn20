@@ -40,6 +40,7 @@ import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.FilterList
 import androidx.compose.material.icons.filled.Inventory
 import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.NotificationsActive
 import androidx.compose.material.icons.filled.NotificationsOff
 import androidx.compose.material.icons.filled.Refresh
@@ -97,6 +98,7 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -160,6 +162,7 @@ fun InventoryDashboardScreen(
         onUpdateCriticalThreshold = { viewModel.updateCriticalThreshold(it) },
         onToggleAutoNotifications = { viewModel.toggleAutoNotifications(it) },
         onToggleMonitoring = { viewModel.toggleMonitoring(it) },
+        onRefreshInventory = { viewModel.refreshInventory() },
         onClearMessages = { viewModel.clearMessages() }
     )
 }
@@ -182,6 +185,7 @@ fun InventoryDashboardContent(
     onUpdateCriticalThreshold: (Int) -> Unit = {},
     onToggleAutoNotifications: (Boolean) -> Unit = {},
     onToggleMonitoring: (Boolean) -> Unit = {},
+    onRefreshInventory: () -> Unit = {},
     onClearMessages: () -> Unit
 ) {
     val snackbarHostState = remember { SnackbarHostState() }
@@ -216,8 +220,16 @@ fun InventoryDashboardContent(
                             style = MaterialTheme.typography.titleLarge,
                             fontWeight = FontWeight.Bold
                         )
+                        val subtitleText = when {
+                            !uiState.isAuthResolved -> "Checking permissions..."
+                            !uiState.isInventoryAuthorized -> "Brand & Manufacturer Access Only"
+                            else -> {
+                                val sourceLabel = if (uiState.isBackendConnected) "Live Server" else "Live Inventory"
+                                "$sourceLabel • ${uiState.inventorySummary.totalStockUnits} units across ${uiState.inventorySummary.totalSkusCount} SKUs"
+                            }
+                        }
                         Text(
-                            text = "Room State: ${uiState.inventorySummary.totalStockUnits} units across ${uiState.inventorySummary.totalSkusCount} SKUs",
+                            text = subtitleText,
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -229,17 +241,37 @@ fun InventoryDashboardContent(
                     }
                 },
                 actions = {
-                    // Products & Stock Inventory button
-                    IconButton(
-                        onClick = onNavigateToProducts,
-                        modifier = Modifier.testTag("nav_to_products_inventory_button")
-                    ) {
-                        Icon(
-                            Icons.Default.Inventory,
-                            contentDescription = "Products Inventory (Room)",
-                            tint = Color(0xFF2563EB)
-                        )
-                    }
+                    if (uiState.isAuthResolved && uiState.isInventoryAuthorized) {
+                        // Refresh inventory button
+                        IconButton(
+                            onClick = onRefreshInventory,
+                            enabled = !uiState.isRefreshing,
+                            modifier = Modifier.testTag("inventory_refresh_button")
+                        ) {
+                            if (uiState.isRefreshing) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(18.dp),
+                                    strokeWidth = 2.dp
+                                )
+                            } else {
+                                Icon(
+                                    Icons.Default.Refresh,
+                                    contentDescription = "Refresh Inventory"
+                                )
+                            }
+                        }
+
+                        // Products & Stock Inventory button
+                        IconButton(
+                            onClick = onNavigateToProducts,
+                            modifier = Modifier.testTag("nav_to_products_inventory_button")
+                        ) {
+                            Icon(
+                                Icons.Default.Inventory,
+                                contentDescription = "Products Inventory",
+                                tint = Color(0xFF2563EB)
+                            )
+                        }
 
                     // Recalls badge button
                     IconButton(
@@ -309,6 +341,7 @@ fun InventoryDashboardContent(
                             }
                         }
                     }
+                    }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = MaterialTheme.colorScheme.surface
@@ -316,23 +349,48 @@ fun InventoryDashboardContent(
             )
         },
         floatingActionButton = {
-            FloatingActionButton(
-                onClick = { showAddBatchDialog = true },
-                containerColor = MaterialTheme.colorScheme.primary,
-                contentColor = MaterialTheme.colorScheme.onPrimary,
-                modifier = Modifier.testTag("add_stock_batch_fab")
-            ) {
-                Row(
-                    modifier = Modifier.padding(horizontal = 16.dp),
-                    verticalAlignment = Alignment.CenterVertically
+            if (uiState.isAuthResolved && uiState.isInventoryAuthorized) {
+                FloatingActionButton(
+                    onClick = { showAddBatchDialog = true },
+                    containerColor = MaterialTheme.colorScheme.primary,
+                    contentColor = MaterialTheme.colorScheme.onPrimary,
+                    modifier = Modifier.testTag("add_stock_batch_fab")
                 ) {
-                    Icon(Icons.Default.Add, contentDescription = null)
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text("Inward Stock", fontWeight = FontWeight.Bold)
+                    Row(
+                        modifier = Modifier.padding(horizontal = 16.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(Icons.Default.Add, contentDescription = null)
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Inward Stock", fontWeight = FontWeight.Bold)
+                    }
                 }
             }
         }
     ) { padding ->
+        if (!uiState.isAuthResolved) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(padding)
+                    .testTag("inventory_auth_loading")
+            ) {
+                LoadingState(message = "Verifying account permissions...")
+            }
+            return@Scaffold
+        }
+
+        if (!uiState.isInventoryAuthorized) {
+            InventoryAccessRestrictedView(
+                roleLabel = uiState.currentUser?.role?.displayName ?: "Stockist",
+                onNavigateBack = onNavigateBack,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(padding)
+            )
+            return@Scaffold
+        }
+
         Column(
             modifier = Modifier
                 .fillMaxSize()
@@ -415,20 +473,103 @@ fun InventoryDashboardContent(
 
             Spacer(modifier = Modifier.height(4.dp))
 
-            // Content List
-            if (uiState.isLoading && uiState.inventoryItems.isEmpty()) {
-                LoadingState(message = "Reading real-time inventory from Room database...")
-            } else if (uiState.filteredInventoryItems.isEmpty()) {
-                EmptyState(
-                    title = "No Inventory Matches",
-                    message = if (uiState.searchQuery.isNotBlank()) "No medicines match '${uiState.searchQuery}' in this category."
-                    else "No stock records found for this filter tab.",
-                    actionLabel = "Clear Filter",
-                    onActionClick = {
-                        onSearchQueryChanged("")
-                        onInventoryTabChanged(InventoryTab.ALL)
+            val hasRealBatches = uiState.inventoryItems.any { it.id > 0 }
+
+            // Non-blocking error banner when real cached batches are still displayed
+            if (uiState.loadError != null && hasRealBatches) {
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = MaterialTheme.colorScheme.errorContainer,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 4.dp)
+                        .testTag("inventory_inline_error_banner")
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Warning,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.onErrorContainer,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = uiState.loadError,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onErrorContainer,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                        TextButton(
+                            onClick = onRefreshInventory,
+                            modifier = Modifier.testTag("inventory_retry_button")
+                        ) {
+                            Text("Retry", fontWeight = FontWeight.Bold)
+                        }
                     }
+                }
+            }
+
+            // Content List (Loading / Error / Empty / Data)
+            if (uiState.isLoading && !hasRealBatches) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .testTag("inventory_loading_state")
+                ) {
+                    LoadingState(
+                        message = if (uiState.isBackendConnected) {
+                            "Syncing real-time inventory from server..."
+                        } else {
+                            "Loading real-time inventory..."
+                        }
+                    )
+                }
+            } else if (uiState.loadError != null && !hasRealBatches) {
+                InventoryErrorState(
+                    message = uiState.loadError,
+                    onRetry = onRefreshInventory,
+                    modifier = Modifier.fillMaxSize()
                 )
+            } else if (uiState.inventoryItems.isEmpty()) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .testTag("inventory_empty_state")
+                ) {
+                    EmptyState(
+                        title = "No Inventory Records",
+                        message = "No stock batches are currently available for your account. Add an inward stock batch or refresh to sync.",
+                        actionLabel = "Inward Stock",
+                        onActionClick = { showAddBatchDialog = true }
+                    )
+                }
+            } else if (uiState.filteredInventoryItems.isEmpty()) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .testTag("inventory_empty_state")
+                ) {
+                    EmptyState(
+                        title = "No Inventory Matches",
+                        message = if (uiState.searchQuery.isNotBlank()) "No medicines match '${uiState.searchQuery}' in this category."
+                        else "No stock records found for this filter tab.",
+                        actionLabel = "Clear Filter",
+                        onActionClick = {
+                            onSearchQueryChanged("")
+                            onInventoryTabChanged(InventoryTab.ALL)
+                        }
+                    )
+                }
             } else {
                 LazyColumn(
                     modifier = Modifier.fillMaxSize(),
@@ -447,27 +588,29 @@ fun InventoryDashboardContent(
         }
     }
 
-    // Dialog for stock adjustment (Direct Room update)
-    itemToAdjust?.let { item ->
-        StockAdjustmentDialog(
-            item = item,
-            onDismiss = { itemToAdjust = null },
-            onConfirmAdjustment = { newQty, reason ->
-                onAdjustBatchStock(
-                    item.id,
-                    newQty,
-                    reason,
-                    { itemToAdjust = null }
-                )
-            }
-        )
-    }
+    if (uiState.isAuthResolved && uiState.isInventoryAuthorized) {
+        // Dialog for stock adjustment
+        itemToAdjust?.let { item ->
+            StockAdjustmentDialog(
+                item = item,
+                onDismiss = { itemToAdjust = null },
+                onConfirmAdjustment = { newQty, reason ->
+                    onAdjustBatchStock(
+                        item.id,
+                        newQty,
+                        reason,
+                        { itemToAdjust = null }
+                    )
+                }
+            )
+        }
 
-    // Dialog for adding a new inward batch to Room
-    if (showAddBatchDialog) {
-        AddStockBatchDialog(
-            catalogue = uiState.catalogueProducts,
-            onDismiss = { showAddBatchDialog = false },
+        // Dialog for adding a new inward batch
+        if (showAddBatchDialog) {
+            AddStockBatchDialog(
+                catalogue = uiState.catalogueProducts,
+                supplierId = uiState.currentUser?.id ?: 1L,
+                onDismiss = { showAddBatchDialog = false },
             onAddBatch = { batch ->
                 onCreateBatch(batch) {
                     showAddBatchDialog = false
@@ -476,17 +619,145 @@ fun InventoryDashboardContent(
         )
     }
 
-    // Dialog for configuring automated critical depletion thresholds and alerts
-    if (showMonitorSettingsDialog) {
-        DepletionThresholdSettingsDialog(
-            currentThreshold = uiState.monitorState.criticalThreshold,
-            isMonitoringActive = uiState.monitorState.isMonitoringActive,
-            notificationsEnabled = uiState.monitorState.notificationsEnabled,
-            onUpdateThreshold = onUpdateCriticalThreshold,
-            onToggleNotifications = onToggleAutoNotifications,
-            onToggleMonitoring = onToggleMonitoring,
-            onDismiss = { showMonitorSettingsDialog = false }
-        )
+        // Dialog for configuring automated critical depletion thresholds and alerts
+        if (showMonitorSettingsDialog) {
+            DepletionThresholdSettingsDialog(
+                currentThreshold = uiState.monitorState.criticalThreshold,
+                isMonitoringActive = uiState.monitorState.isMonitoringActive,
+                notificationsEnabled = uiState.monitorState.notificationsEnabled,
+                onUpdateThreshold = onUpdateCriticalThreshold,
+                onToggleNotifications = onToggleAutoNotifications,
+                onToggleMonitoring = onToggleMonitoring,
+                onDismiss = { showMonitorSettingsDialog = false }
+            )
+        }
+    }
+}
+
+@Composable
+internal fun InventoryAccessRestrictedView(
+    roleLabel: String,
+    onNavigateBack: () -> Unit,
+    modifier: Modifier = Modifier,
+    testTagName: String = "inventory_access_restricted_view"
+) {
+    Box(
+        modifier = modifier
+            .padding(24.dp)
+            .testTag(testTagName),
+        contentAlignment = Alignment.Center
+    ) {
+        Card(
+            shape = RoundedCornerShape(20.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(24.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Surface(
+                    shape = CircleShape,
+                    color = MaterialTheme.colorScheme.errorContainer,
+                    modifier = Modifier.size(64.dp)
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Icon(
+                            imageVector = Icons.Default.Lock,
+                            contentDescription = "Access Restricted",
+                            tint = MaterialTheme.colorScheme.onErrorContainer,
+                            modifier = Modifier.size(30.dp)
+                        )
+                    }
+                }
+                Spacer(modifier = Modifier.height(16.dp))
+                Text(
+                    text = "Brand & Manufacturer Access Only",
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Bold,
+                    textAlign = TextAlign.Center
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = "Real-Time Inventory is exclusive to authorized Brand (Pharma Company) and Manufacturer accounts. Your current role ($roleLabel) does not have permission to view or modify manufacturer warehouse inventory.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    textAlign = TextAlign.Center
+                )
+                Spacer(modifier = Modifier.height(20.dp))
+                Button(
+                    onClick = onNavigateBack,
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("inventory_restricted_back_button")
+                ) {
+                    Text("Return to Dashboard", fontWeight = FontWeight.SemiBold)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun InventoryErrorState(
+    message: String,
+    onRetry: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Box(
+        modifier = modifier
+            .padding(24.dp)
+            .testTag("inventory_error_state"),
+        contentAlignment = Alignment.Center
+    ) {
+        Card(
+            shape = RoundedCornerShape(18.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.4f)),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(24.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Warning,
+                    contentDescription = "Inventory Error",
+                    tint = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.size(40.dp)
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+                Text(
+                    text = "Unable to Load Real-Time Inventory",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    textAlign = TextAlign.Center
+                )
+                Spacer(modifier = Modifier.height(6.dp))
+                Text(
+                    text = message,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    textAlign = TextAlign.Center
+                )
+                Spacer(modifier = Modifier.height(16.dp))
+                Button(
+                    onClick = onRetry,
+                    shape = RoundedCornerShape(10.dp),
+                    modifier = Modifier.testTag("inventory_retry_button")
+                ) {
+                    Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("Retry", fontWeight = FontWeight.SemiBold)
+                }
+            }
+        }
     }
 }
 
@@ -650,7 +921,10 @@ private fun InventoryStockItemCard(
                 Spacer(modifier = Modifier.width(8.dp))
 
                 // Stock Level Badge
-                StockStatusBadge(status = item.stockStatus)
+                StockStatusBadge(
+                    status = item.stockStatus,
+                    modifier = Modifier.testTag("inventory_item_status_${item.id}")
+                )
             }
 
             // Salt composition
@@ -726,7 +1000,8 @@ private fun InventoryStockItemCard(
                             StockLevelStatus.CRITICAL_LOW -> Color(0xFFEA580C)
                             StockLevelStatus.LOW_STOCK -> Color(0xFFD97706)
                             StockLevelStatus.HEALTHY -> Color(0xFF16A34A)
-                        }
+                        },
+                        modifier = Modifier.testTag("inventory_item_qty_${item.id}")
                     )
                 }
 
@@ -768,7 +1043,9 @@ private fun InventoryStockItemCard(
                             fontSize = 11.sp,
                             fontWeight = FontWeight.SemiBold,
                             color = MaterialTheme.colorScheme.onSecondaryContainer,
-                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                            modifier = Modifier
+                                .padding(horizontal = 6.dp, vertical = 2.dp)
+                                .testTag("inventory_item_batch_${item.id}")
                         )
                     }
 
@@ -776,7 +1053,36 @@ private fun InventoryStockItemCard(
                 }
 
                 // Expiry chip
-                ExpiryRiskBadge(item = item)
+                ExpiryRiskBadge(
+                    item = item,
+                    textModifier = Modifier.testTag("inventory_item_expiry_${item.id}")
+                )
+            }
+
+            // Manufacturing Date row (when supported by batch record)
+            item.mfgDateEpochMillis?.let { mfgDate ->
+                if (item.batchNumber != "NO-LOT") {
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "Mfg: ${Formatters.formatDate(mfgDate)}",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.testTag("inventory_item_mfg_${item.id}")
+                        )
+                        Text(
+                            text = "Exp Date: ${Formatters.formatDate(item.expiryDateEpochMillis)}",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
             }
 
             Spacer(modifier = Modifier.height(8.dp))
@@ -809,7 +1115,9 @@ private fun InventoryStockItemCard(
                         OutlinedButton(
                             onClick = onAdjustStock,
                             shape = RoundedCornerShape(10.dp),
-                            modifier = Modifier.height(36.dp)
+                            modifier = Modifier
+                                .height(36.dp)
+                                .testTag("inventory_adjust_btn_${item.id}")
                         ) {
                             Icon(Icons.Default.Edit, contentDescription = null, modifier = Modifier.size(14.dp))
                             Spacer(modifier = Modifier.width(4.dp))
@@ -835,7 +1143,10 @@ private fun InventoryStockItemCard(
 }
 
 @Composable
-private fun StockStatusBadge(status: StockLevelStatus) {
+private fun StockStatusBadge(
+    status: StockLevelStatus,
+    modifier: Modifier = Modifier
+) {
     val (bg, fg) = when (status) {
         StockLevelStatus.OUT_OF_STOCK -> Color(0xFFFEE2E2) to Color(0xFFDC2626)
         StockLevelStatus.CRITICAL_LOW -> Color(0xFFFFF7ED) to Color(0xFFEA580C)
@@ -853,13 +1164,16 @@ private fun StockStatusBadge(status: StockLevelStatus) {
             fontSize = 11.sp,
             fontWeight = FontWeight.Bold,
             color = fg,
-            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+            modifier = modifier.padding(horizontal = 8.dp, vertical = 3.dp)
         )
     }
 }
 
 @Composable
-private fun ExpiryRiskBadge(item: InventoryStockItem) {
+private fun ExpiryRiskBadge(
+    item: InventoryStockItem,
+    textModifier: Modifier = Modifier
+) {
     if (item.batchNumber == "NO-LOT") return
 
     val (bg, fg, label) = when {
@@ -878,7 +1192,7 @@ private fun ExpiryRiskBadge(item: InventoryStockItem) {
             fontSize = 11.sp,
             fontWeight = FontWeight.SemiBold,
             color = fg,
-            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+            modifier = textModifier.padding(horizontal = 6.dp, vertical = 2.dp)
         )
     }
 }
@@ -1049,6 +1363,7 @@ private fun StockAdjustmentDialog(
 @Composable
 private fun AddStockBatchDialog(
     catalogue: List<com.example.domain.model.ProductDetail>,
+    supplierId: Long = 1L,
     onDismiss: () -> Unit,
     onAddBatch: (BatchEntity) -> Unit
 ) {
@@ -1058,6 +1373,7 @@ private fun AddStockBatchDialog(
     var ptrText by remember { mutableStateOf("120.00") }
     var mrpText by remember { mutableStateOf("160.00") }
     var storageCondition by remember { mutableStateOf(StorageCondition.ROOM_TEMPERATURE) }
+    var mfgDaysAgoText by remember { mutableStateOf("30") }
     var expiryDaysText by remember { mutableStateOf("365") }
 
     AlertDialog(
@@ -1124,14 +1440,24 @@ private fun AddStockBatchDialog(
 
                 Spacer(modifier = Modifier.height(8.dp))
 
-                OutlinedTextField(
-                    value = expiryDaysText,
-                    onValueChange = { expiryDaysText = it.filter { c -> c.isDigit() } },
-                    label = { Text("Days until expiry") },
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(
+                        value = mfgDaysAgoText,
+                        onValueChange = { mfgDaysAgoText = it.filter { c -> c.isDigit() } },
+                        label = { Text("Mfg (days ago)") },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        singleLine = true,
+                        modifier = Modifier.weight(1f)
+                    )
+                    OutlinedTextField(
+                        value = expiryDaysText,
+                        onValueChange = { expiryDaysText = it.filter { c -> c.isDigit() } },
+                        label = { Text("Exp (days left)") },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        singleLine = true,
+                        modifier = Modifier.weight(1f)
+                    )
+                }
             }
         },
         confirmButton = {
@@ -1140,14 +1466,17 @@ private fun AddStockBatchDialog(
                     val qty = quantityText.toIntOrNull() ?: 100
                     val ptr = ptrText.toDoubleOrNull() ?: 100.0
                     val mrp = mrpText.toDoubleOrNull() ?: 150.0
+                    val mfgDaysAgo = mfgDaysAgoText.toLongOrNull() ?: 30L
                     val days = expiryDaysText.toLongOrNull() ?: 365L
-                    val expiryEpoch = System.currentTimeMillis() + (days * 86400000L)
+                    val now = System.currentTimeMillis()
+                    val mfgEpoch = now - (mfgDaysAgo * 86400000L)
+                    val expiryEpoch = now + (days * 86400000L)
 
                     val newBatch = BatchEntity(
                         productId = selectedProductId,
-                        supplierId = 1L,
+                        supplierId = supplierId,
                         batchNumber = batchNumber.ifBlank { "LOT-001" },
-                        mfgDateEpochMillis = System.currentTimeMillis() - 86400000L * 30,
+                        mfgDateEpochMillis = mfgEpoch,
                         expiryDateEpochMillis = expiryEpoch,
                         initialQuantity = qty,
                         remainingQuantity = qty,
@@ -1158,7 +1487,7 @@ private fun AddStockBatchDialog(
                     onAddBatch(newBatch)
                 }
             ) {
-                Text("Save to Room DB")
+                Text("Save Stock Batch")
             }
         },
         dismissButton = {
@@ -1482,6 +1811,8 @@ fun InventoryDashboardScreenPreview() {
         InventoryDashboardContent(
             uiState = InventoryUiState(
                 isLoading = false,
+                isAuthResolved = true,
+                isInventoryAuthorized = true,
                 inventorySummary = InventoryDashboardSummary(
                     totalStockUnits = 2400,
                     totalInventoryValue = 485200.0,

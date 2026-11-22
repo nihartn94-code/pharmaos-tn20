@@ -18,6 +18,13 @@ enum class UserRole(val displayName: String) {
     val canAccessLivePipeline: Boolean
         get() = this == MANUFACTURER || this == PHARMA_COMPANY
 
+    /**
+     * Real-Time Inventory is intended exclusively for authorized Brand (PHARMA_COMPANY)
+     * and Manufacturer accounts — strictly restricted for Stockist accounts.
+     */
+    val canAccessRealTimeInventory: Boolean
+        get() = this == MANUFACTURER || this == PHARMA_COMPANY
+
     companion object {
         fun fromString(raw: String?): UserRole {
             if (raw.isNullOrBlank()) return STOCKIST
@@ -111,7 +118,50 @@ data class AuthUser(
     val gstin: String?,
     val address: String,
     val role: UserRole,
-    val status: AccountStatus
+    val status: AccountStatus,
+    val emailVerified: Boolean = false,
+    val phoneVerified: Boolean = false,
+    val profileBio: String? = null
+)
+
+enum class ContactVerificationChannel(val apiValue: String, val label: String) {
+    EMAIL("EMAIL", "Email"),
+    PHONE("PHONE", "Phone")
+}
+
+data class UserAddress(
+    val id: Long = 0L,
+    val userId: Long = 0L,
+    val addressName: String,
+    val contactPerson: String,
+    val phone: String,
+    val addressLine1: String,
+    val addressLine2: String = "",
+    val city: String,
+    val state: String,
+    val postalCode: String,
+    val country: String = "India",
+    val isDefault: Boolean = false,
+    val updatedAtEpochMillis: Long = System.currentTimeMillis()
+) {
+    fun formattedSingleLine(): String = listOfNotNull(
+        addressLine1.trim().takeIf { it.isNotEmpty() },
+        addressLine2.trim().takeIf { it.isNotEmpty() },
+        city.trim().takeIf { it.isNotEmpty() },
+        state.trim().takeIf { it.isNotEmpty() },
+        postalCode.trim().takeIf { it.isNotEmpty() },
+        country.trim().takeIf { it.isNotEmpty() }
+    ).joinToString(", ")
+}
+
+data class LegalDocument(
+    val id: String,
+    val title: String,
+    val subtitle: String,
+    val slug: String,
+    val configuredUrl: String? = null,
+    val versionLabel: String? = null,
+    val contentSummary: List<String> = emptyList()
 )
 
 data class ProductDetail(
@@ -275,6 +325,7 @@ data class InventoryStockItem(
     val initialQuantity: Int,
     val reorderThreshold: Int = 20,
     val stockStatus: StockLevelStatus,
+    val mfgDateEpochMillis: Long? = null,
     val expiryDateEpochMillis: Long,
     val daysUntilExpiry: Long,
     val expiryStatus: ExpiryRiskStatus,
@@ -284,7 +335,8 @@ data class InventoryStockItem(
     val totalValuation: Double,
     val isRecalled: Boolean = false,
     val recallReason: String? = null,
-    val criticalFlags: List<String> = emptyList()
+    val criticalFlags: List<String> = emptyList(),
+    val supplierId: Long = 0L
 ) {
     val isCritical: Boolean
         get() = stockStatus == StockLevelStatus.OUT_OF_STOCK ||
