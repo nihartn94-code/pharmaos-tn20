@@ -73,12 +73,81 @@ import com.example.ui.screens.trust.PharmaTrustScoreScreen
 import com.example.ui.screens.trust.SupplierComparisonScreen
 import com.example.ui.screens.trust.TrustScoreViewModel
 
+import androidx.compose.runtime.rememberCoroutineScope
+import com.example.domain.model.WorkspaceType
+import com.example.ui.screens.company.CompanyAddMedicineScreen
+import com.example.ui.screens.company.CompanyApprovalsScreen
+import com.example.ui.screens.company.CompanyCatalogueScreen
+import com.example.ui.screens.company.CompanyDashboardScreen
+import com.example.ui.screens.company.CompanyMasterDataScreen
+import com.example.ui.screens.company.CompanyWorkspaceViewModel
+import com.example.ui.screens.manufacturer.ManufacturerBannersScreen
+import com.example.ui.screens.manufacturer.ManufacturerDashboardScreen
+import com.example.ui.screens.manufacturer.ManufacturerPromotionsScreen
+import com.example.ui.screens.manufacturer.ManufacturerUpdatesScreen
+import com.example.ui.screens.manufacturer.ManufacturerWorkspaceViewModel
+import com.example.ui.screens.stockist.StockistInventoryViewModel
+import com.example.ui.screens.stockist.StockistPurchasedInventoryScreen
+import kotlinx.coroutines.flow.firstOrNull
+import kotlinx.coroutines.launch
+
 @Composable
 fun AppNavigation() {
     val context = LocalContext.current
     val app = context.applicationContext as PharmaApplication
     val factory = remember { PharmaViewModelFactory(app) }
     val navController = rememberNavController()
+    val coroutineScope = rememberCoroutineScope()
+
+    suspend fun resolveAuthorizedRootRoute(): String {
+        val user = app.repository.getApiUsersMeFlow().firstOrNull()
+        if (user == null) return NavRoutes.LOGIN
+        val savedWorkspace = app.workspaceRepository.getActiveWorkspaceFlow().firstOrNull()
+        val effectiveWorkspace = if (savedWorkspace != null && user.authorizedWorkspaces().contains(savedWorkspace)) {
+            savedWorkspace
+        } else {
+            user.defaultWorkspace()
+        }
+        return NavRoutes.rootRouteForWorkspace(effectiveWorkspace)
+    }
+
+    fun navigateToAuthorizedRoot() {
+        coroutineScope.launch {
+            val target = resolveAuthorizedRootRoute()
+            navController.navigate(target) {
+                popUpTo(0) { inclusive = true }
+                launchSingleTop = true
+            }
+        }
+    }
+
+    fun performFullLogout() {
+        coroutineScope.launch {
+            runCatching {
+                val previousUser = app.repository.getApiUsersMeFlow().firstOrNull()
+                app.workspaceRepository.clearSensitiveLocalSessionCaches(previousUser = previousUser)
+            }
+            navController.navigate(NavRoutes.LOGIN) {
+                popUpTo(0) { inclusive = true }
+                launchSingleTop = true
+            }
+        }
+    }
+
+    // Global HTTP 401 session expiration handler
+    LaunchedEffect(Unit) {
+        app.networkModule.sessionExpiredEvents.collect {
+            runCatching {
+                val previousUser = app.repository.getApiUsersMeFlow().firstOrNull()
+                app.repository.logout()
+                app.workspaceRepository.clearSensitiveLocalSessionCaches(previousUser = previousUser)
+            }
+            navController.navigate(NavRoutes.LOGIN) {
+                popUpTo(0) { inclusive = true }
+                launchSingleTop = true
+            }
+        }
+    }
 
     NavHost(
         navController = navController,
@@ -88,7 +157,7 @@ fun AppNavigation() {
         composable(NavRoutes.SPLASH) {
             LaunchedEffect(Unit) {
                 val targetRoute = when (app.repository.resolveLaunchDestination()) {
-                    LaunchDestination.DASHBOARD -> NavRoutes.DASHBOARD
+                    LaunchDestination.DASHBOARD -> resolveAuthorizedRootRoute()
                     LaunchDestination.COMPLIANCE_VERIFICATION -> NavRoutes.COMPLIANCE_VERIFICATION
                     LaunchDestination.LOGIN -> NavRoutes.LOGIN
                     LaunchDestination.WELCOME -> NavRoutes.WELCOME
@@ -129,9 +198,7 @@ fun AppNavigation() {
                     }
                 },
                 onLoginSuccess = {
-                    navController.navigate(NavRoutes.DASHBOARD) {
-                        popUpTo(0) { inclusive = true }
-                    }
+                    navigateToAuthorizedRoot()
                 }
             )
         }
@@ -148,9 +215,7 @@ fun AppNavigation() {
                 },
                 onRegisterSuccess = { role ->
                     if (role == com.example.domain.model.UserRole.ADMIN) {
-                        navController.navigate(NavRoutes.DASHBOARD) {
-                            popUpTo(0) { inclusive = true }
-                        }
+                        navigateToAuthorizedRoot()
                     } else {
                         navController.navigate(NavRoutes.COMPLIANCE_VERIFICATION) {
                             popUpTo(0) { inclusive = true }
@@ -168,20 +233,16 @@ fun AppNavigation() {
                     if (navController.previousBackStackEntry != null) {
                         navController.popBackStack()
                     } else {
-                        navController.navigate(NavRoutes.DASHBOARD) {
-                            popUpTo(0) { inclusive = true }
-                        }
+                        navigateToAuthorizedRoot()
                     }
                 },
                 onVerificationComplete = {
-                    navController.navigate(NavRoutes.DASHBOARD) {
-                        popUpTo(0) { inclusive = true }
-                    }
+                    navigateToAuthorizedRoot()
                 }
             )
         }
 
-        // Dashboard
+        // Stockist Dashboard
         composable(NavRoutes.DASHBOARD) {
             val dashboardViewModel: DashboardViewModel = viewModel(factory = factory)
             DashboardScreen(
@@ -210,11 +271,247 @@ fun AppNavigation() {
                 onNavigateToOptimizer = { navController.navigate(NavRoutes.BEST_BUY_OPTIMIZER) },
                 onNavigateToCompliance = { navController.navigate(NavRoutes.COMPLIANCE_VERIFICATION) },
                 onNavigateToSearch = { navController.navigate(NavRoutes.SEARCH_MOLECULES) },
-                onLoggedOut = {
-                    navController.navigate(NavRoutes.LOGIN) {
-                        popUpTo(0) { inclusive = true }
+                onNavigateToStockistPurchasedInventory = {
+                    navController.navigate(NavRoutes.STOCKIST_PURCHASED_INVENTORY) {
+                        launchSingleTop = true
+                    }
+                },
+                onOpenOfferBanner = { banner ->
+                    val linkedProductId = banner.linkedProductId
+                    if (linkedProductId != null && linkedProductId > 0L) {
+                        navController.navigate(NavRoutes.medicineDetails(linkedProductId))
+                    } else {
+                        navController.navigate(NavRoutes.medicineCatalogue(focus = "products")) {
+                            launchSingleTop = true
+                        }
+                    }
+                },
+                onLoggedOut = { performFullLogout() }
+            )
+        }
+
+        // Stockist Purchased Inventory (Strictly isolated from Manufacturer Real-Time Inventory)
+        composable(NavRoutes.STOCKIST_PURCHASED_INVENTORY) {
+            val stockistInventoryViewModel: StockistInventoryViewModel = viewModel(factory = factory)
+            StockistPurchasedInventoryScreen(
+                viewModel = stockistInventoryViewModel,
+                onNavigateBack = {
+                    if (!navController.popBackStack()) {
+                        navigateToAuthorizedRoot()
                     }
                 }
+            )
+        }
+
+        // =========================================================================
+        // MANUFACTURER WORKSPACE (Independent Navigation Architecture)
+        // =========================================================================
+        composable(NavRoutes.MANUFACTURER_DASHBOARD) {
+            val manufacturerViewModel: ManufacturerWorkspaceViewModel = viewModel(factory = factory)
+            ManufacturerDashboardScreen(
+                viewModel = manufacturerViewModel,
+                onNavigateBanners = {
+                    navController.navigate(NavRoutes.MANUFACTURER_BANNERS) { launchSingleTop = true }
+                },
+                onNavigatePromotions = {
+                    navController.navigate(NavRoutes.MANUFACTURER_PROMOTIONS) { launchSingleTop = true }
+                },
+                onNavigateUpdates = {
+                    navController.navigate(NavRoutes.MANUFACTURER_UPDATES) { launchSingleTop = true }
+                },
+                onNavigateProfile = { navController.navigate(NavRoutes.PROFILE_SETTINGS) },
+                onNavigateNotifications = { navController.navigate(NavRoutes.NOTIFICATIONS) },
+                onNavigateRealTimeInventory = { navController.navigate(NavRoutes.INVENTORY_DASHBOARD) },
+                onNavigateBatches = { navController.navigate(NavRoutes.BATCH_EXPIRY) },
+                onNavigateRecalls = { navController.navigate(NavRoutes.RECALLS) },
+                onNavigateOrders = { navController.navigate(NavRoutes.MY_ORDERS) },
+                onSwitchToCompanyWorkspace = {
+                    coroutineScope.launch {
+                        app.workspaceRepository.switchActiveWorkspace(WorkspaceType.COMPANY)
+                        navController.navigate(NavRoutes.COMPANY_DASHBOARD) {
+                            popUpTo(0) { inclusive = true }
+                            launchSingleTop = true
+                        }
+                    }
+                },
+                onReturnToAuthorizedWorkspace = { navigateToAuthorizedRoot() }
+            )
+        }
+
+        composable(NavRoutes.MANUFACTURER_BANNERS) {
+            val manufacturerViewModel: ManufacturerWorkspaceViewModel = viewModel(factory = factory)
+            ManufacturerBannersScreen(
+                viewModel = manufacturerViewModel,
+                onNavigateHome = {
+                    navController.navigate(NavRoutes.MANUFACTURER_DASHBOARD) {
+                        popUpTo(NavRoutes.MANUFACTURER_DASHBOARD) { inclusive = true }
+                        launchSingleTop = true
+                    }
+                },
+                onNavigatePromotions = {
+                    navController.navigate(NavRoutes.MANUFACTURER_PROMOTIONS) { launchSingleTop = true }
+                },
+                onNavigateUpdates = {
+                    navController.navigate(NavRoutes.MANUFACTURER_UPDATES) { launchSingleTop = true }
+                },
+                onNavigateProfile = { navController.navigate(NavRoutes.PROFILE_SETTINGS) },
+                onReturnToAuthorizedWorkspace = { navigateToAuthorizedRoot() }
+            )
+        }
+
+        composable(NavRoutes.MANUFACTURER_PROMOTIONS) {
+            val manufacturerViewModel: ManufacturerWorkspaceViewModel = viewModel(factory = factory)
+            ManufacturerPromotionsScreen(
+                viewModel = manufacturerViewModel,
+                onNavigateHome = {
+                    navController.navigate(NavRoutes.MANUFACTURER_DASHBOARD) {
+                        popUpTo(NavRoutes.MANUFACTURER_DASHBOARD) { inclusive = true }
+                        launchSingleTop = true
+                    }
+                },
+                onNavigateProducts = {
+                    navController.navigate(NavRoutes.MANUFACTURER_BANNERS) { launchSingleTop = true }
+                },
+                onNavigateUpdates = {
+                    navController.navigate(NavRoutes.MANUFACTURER_UPDATES) { launchSingleTop = true }
+                },
+                onNavigateProfile = { navController.navigate(NavRoutes.PROFILE_SETTINGS) },
+                onReturnToAuthorizedWorkspace = { navigateToAuthorizedRoot() }
+            )
+        }
+
+        composable(NavRoutes.MANUFACTURER_UPDATES) {
+            val manufacturerViewModel: ManufacturerWorkspaceViewModel = viewModel(factory = factory)
+            ManufacturerUpdatesScreen(
+                viewModel = manufacturerViewModel,
+                onNavigateHome = {
+                    navController.navigate(NavRoutes.MANUFACTURER_DASHBOARD) {
+                        popUpTo(NavRoutes.MANUFACTURER_DASHBOARD) { inclusive = true }
+                        launchSingleTop = true
+                    }
+                },
+                onNavigateProducts = {
+                    navController.navigate(NavRoutes.MANUFACTURER_BANNERS) { launchSingleTop = true }
+                },
+                onNavigatePromotions = {
+                    navController.navigate(NavRoutes.MANUFACTURER_PROMOTIONS) { launchSingleTop = true }
+                },
+                onNavigateProfile = { navController.navigate(NavRoutes.PROFILE_SETTINGS) },
+                onReturnToAuthorizedWorkspace = { navigateToAuthorizedRoot() }
+            )
+        }
+
+        // =========================================================================
+        // COMPANY WORKSPACE (Independent Navigation Architecture)
+        // =========================================================================
+        composable(NavRoutes.COMPANY_DASHBOARD) {
+            val companyViewModel: CompanyWorkspaceViewModel = viewModel(factory = factory)
+            CompanyDashboardScreen(
+                viewModel = companyViewModel,
+                onNavigateCatalogue = {
+                    navController.navigate(NavRoutes.COMPANY_CATALOGUE) { launchSingleTop = true }
+                },
+                onNavigateAddMedicine = {
+                    navController.navigate(NavRoutes.COMPANY_ADD_MEDICINE) { launchSingleTop = true }
+                },
+                onNavigateApprovals = {
+                    navController.navigate(NavRoutes.COMPANY_APPROVALS) { launchSingleTop = true }
+                },
+                onNavigateManagement = {
+                    navController.navigate(NavRoutes.COMPANY_MASTER_DATA) { launchSingleTop = true }
+                },
+                onNavigateProfile = { navController.navigate(NavRoutes.PROFILE_SETTINGS) },
+                onNavigateNotifications = { navController.navigate(NavRoutes.NOTIFICATIONS) },
+                onSwitchToManufacturerWorkspace = {
+                    coroutineScope.launch {
+                        app.workspaceRepository.switchActiveWorkspace(WorkspaceType.MANUFACTURER)
+                        navController.navigate(NavRoutes.MANUFACTURER_DASHBOARD) {
+                            popUpTo(0) { inclusive = true }
+                            launchSingleTop = true
+                        }
+                    }
+                },
+                onReturnToAuthorizedWorkspace = { navigateToAuthorizedRoot() }
+            )
+        }
+
+        composable(NavRoutes.COMPANY_CATALOGUE) {
+            val companyViewModel: CompanyWorkspaceViewModel = viewModel(factory = factory)
+            CompanyCatalogueScreen(
+                viewModel = companyViewModel,
+                onNavigateHome = {
+                    navController.navigate(NavRoutes.COMPANY_DASHBOARD) {
+                        popUpTo(NavRoutes.COMPANY_DASHBOARD) { inclusive = true }
+                        launchSingleTop = true
+                    }
+                },
+                onNavigateAddMedicine = {
+                    navController.navigate(NavRoutes.COMPANY_ADD_MEDICINE) { launchSingleTop = true }
+                },
+                onNavigateApprovals = {
+                    navController.navigate(NavRoutes.COMPANY_APPROVALS) { launchSingleTop = true }
+                },
+                onNavigateManagement = {
+                    navController.navigate(NavRoutes.COMPANY_MASTER_DATA) { launchSingleTop = true }
+                },
+                onNavigateProfile = { navController.navigate(NavRoutes.PROFILE_SETTINGS) },
+                onReturnToAuthorizedWorkspace = { navigateToAuthorizedRoot() }
+            )
+        }
+
+        composable(NavRoutes.COMPANY_ADD_MEDICINE) {
+            val companyViewModel: CompanyWorkspaceViewModel = viewModel(factory = factory)
+            CompanyAddMedicineScreen(
+                viewModel = companyViewModel,
+                onNavigateBack = { navController.popBackStack() },
+                onSubmittedSuccess = {
+                    navController.navigate(NavRoutes.COMPANY_APPROVALS) {
+                        popUpTo(NavRoutes.COMPANY_ADD_MEDICINE) { inclusive = true }
+                        launchSingleTop = true
+                    }
+                }
+            )
+        }
+
+        composable(NavRoutes.COMPANY_APPROVALS) {
+            val companyViewModel: CompanyWorkspaceViewModel = viewModel(factory = factory)
+            CompanyApprovalsScreen(
+                viewModel = companyViewModel,
+                onNavigateHome = {
+                    navController.navigate(NavRoutes.COMPANY_DASHBOARD) {
+                        popUpTo(NavRoutes.COMPANY_DASHBOARD) { inclusive = true }
+                        launchSingleTop = true
+                    }
+                },
+                onNavigateCatalogue = {
+                    navController.navigate(NavRoutes.COMPANY_CATALOGUE) { launchSingleTop = true }
+                },
+                onNavigateManagement = {
+                    navController.navigate(NavRoutes.COMPANY_MASTER_DATA) { launchSingleTop = true }
+                },
+                onNavigateProfile = { navController.navigate(NavRoutes.PROFILE_SETTINGS) },
+                onReturnToAuthorizedWorkspace = { navigateToAuthorizedRoot() }
+            )
+        }
+
+        composable(NavRoutes.COMPANY_MASTER_DATA) {
+            val companyViewModel: CompanyWorkspaceViewModel = viewModel(factory = factory)
+            CompanyMasterDataScreen(
+                viewModel = companyViewModel,
+                onNavigateHome = {
+                    navController.navigate(NavRoutes.COMPANY_DASHBOARD) {
+                        popUpTo(NavRoutes.COMPANY_DASHBOARD) { inclusive = true }
+                        launchSingleTop = true
+                    }
+                },
+                onNavigateCatalogue = {
+                    navController.navigate(NavRoutes.COMPANY_CATALOGUE) { launchSingleTop = true }
+                },
+                onNavigateApprovals = {
+                    navController.navigate(NavRoutes.COMPANY_APPROVALS) { launchSingleTop = true }
+                },
+                onNavigateProfile = { navController.navigate(NavRoutes.PROFILE_SETTINGS) },
+                onReturnToAuthorizedWorkspace = { navigateToAuthorizedRoot() }
             )
         }
 
@@ -626,11 +923,7 @@ fun AppNavigation() {
                 onNavigateToSupplierSettings = { navController.navigate(NavRoutes.SUPPLIER_SETTINGS) },
                 onNavigateToCsv = { navController.navigate(NavRoutes.CSV_IMPORT_EXPORT) },
                 onNavigateToAdminUsers = { navController.navigate(NavRoutes.ADMIN_USER_MANAGEMENT) },
-                onLoggedOut = {
-                    navController.navigate(NavRoutes.LOGIN) {
-                        popUpTo(0) { inclusive = true }
-                    }
-                }
+                onLoggedOut = { performFullLogout() }
             )
         }
 

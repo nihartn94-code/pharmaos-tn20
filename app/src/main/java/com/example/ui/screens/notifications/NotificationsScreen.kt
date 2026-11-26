@@ -100,8 +100,9 @@ fun NotificationsScreen(
                     val (icon, tint) = when (type) {
                         NotificationType.ORDER_STATUS_CHANGED, NotificationType.NEW_ORDER_RECEIVED -> Icons.Default.LocalShipping to MaterialTheme.colorScheme.primary
                         NotificationType.EXPIRY_ALERT -> Icons.Default.HourglassBottom to Color(0xFFEE9B00)
-                        NotificationType.RECALL_ALERT, NotificationType.SHORTAGE_RISK -> Icons.Default.Warning to MaterialTheme.colorScheme.error
-                        NotificationType.RETURN_UPDATE -> Icons.Default.AssignmentTurnedIn to Color(0xFF2A9D8F)
+                        NotificationType.RECALL_ALERT, NotificationType.SHORTAGE_RISK, NotificationType.MEDICINE_REJECTED -> Icons.Default.Warning to MaterialTheme.colorScheme.error
+                        NotificationType.RETURN_UPDATE, NotificationType.MEDICINE_APPROVED -> Icons.Default.AssignmentTurnedIn to Color(0xFF2A9D8F)
+                        NotificationType.MEDICINE_SUBMITTED, NotificationType.BANNER_PUBLISHED, NotificationType.MEDICINE_ANNOUNCEMENT -> Icons.Default.Notifications to MaterialTheme.colorScheme.tertiary
                     }
 
                     Card(

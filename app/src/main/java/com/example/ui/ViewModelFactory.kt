@@ -30,7 +30,25 @@ class PharmaViewModelFactory(
                 AuthViewModel(repo) as T
             }
             modelClass.isAssignableFrom(DashboardViewModel::class.java) -> {
-                DashboardViewModel(repo) as T
+                DashboardViewModel(repo, app.workspaceRepository) as T
+            }
+            modelClass.isAssignableFrom(com.example.ui.screens.manufacturer.ManufacturerWorkspaceViewModel::class.java) -> {
+                com.example.ui.screens.manufacturer.ManufacturerWorkspaceViewModel(
+                    pharmaRepository = repo,
+                    workspaceRepository = app.workspaceRepository
+                ) as T
+            }
+            modelClass.isAssignableFrom(com.example.ui.screens.company.CompanyWorkspaceViewModel::class.java) -> {
+                com.example.ui.screens.company.CompanyWorkspaceViewModel(
+                    pharmaRepository = repo,
+                    workspaceRepository = app.workspaceRepository
+                ) as T
+            }
+            modelClass.isAssignableFrom(com.example.ui.screens.stockist.StockistInventoryViewModel::class.java) -> {
+                com.example.ui.screens.stockist.StockistInventoryViewModel(
+                    pharmaRepository = repo,
+                    workspaceRepository = app.workspaceRepository
+                ) as T
             }
             modelClass.isAssignableFrom(CatalogueViewModel::class.java) -> {
                 CatalogueViewModel(repo) as T

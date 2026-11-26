@@ -24,7 +24,12 @@ data class UserEntity(
     val createdAtEpochMillis: Long = System.currentTimeMillis(),
     val emailVerified: Boolean = false,
     val phoneVerified: Boolean = false,
-    val profileBio: String? = null
+    val profileBio: String? = null,
+    val organizationId: Long = 0L,
+    val organizationType: String = "",
+    val organizationName: String = "",
+    val assignedRolesCsv: String = "",
+    val permissionsCsv: String = ""
 )
 
 @Entity(
@@ -52,7 +57,18 @@ data class ProductEntity(
     val isRx: Boolean,
     val isActive: Boolean = true,
     val createdBy: Long,
-    val createdAtEpochMillis: Long = System.currentTimeMillis()
+    val createdAtEpochMillis: Long = System.currentTimeMillis(),
+    val organizationId: Long = 0L,
+    val approvalStatus: String = "APPROVED",
+    val catalogueStatus: String = "ACTIVE",
+    val genericName: String = "",
+    val routeOfAdministration: String = "Oral",
+    val packagingType: String = "Blister Strip",
+    val description: String = "",
+    val imageUrl: String? = null,
+    val skuCode: String = "",
+    val mrp: Double = 0.0,
+    val regulatoryIdentifier: String? = null
 )
 
 @Entity(

@@ -38,11 +38,26 @@ class NetworkModule(
         .addLast(KotlinJsonAdapterFactory())
         .build()
 
+    val sessionExpiredEvents = kotlinx.coroutines.flow.MutableSharedFlow<String>(extraBufferCapacity = 1)
+
     val okHttpClient: OkHttpClient = OkHttpClient.Builder()
         .connectTimeout(ApiConfig.CONNECT_TIMEOUT_SECONDS, TimeUnit.SECONDS)
         .readTimeout(ApiConfig.READ_TIMEOUT_SECONDS, TimeUnit.SECONDS)
         .writeTimeout(ApiConfig.WRITE_TIMEOUT_SECONDS, TimeUnit.SECONDS)
         .addInterceptor(AuthInterceptor(tokenProvider))
+        .addInterceptor(Interceptor { chain ->
+            val request = chain.request()
+            val response = chain.proceed(request)
+            val path = request.url.encodedPath
+            val isPublicAuth = path.endsWith("/auth/login") ||
+                path.endsWith("/auth/register") ||
+                path.endsWith("/auth/google") ||
+                path.endsWith("/auth/refresh")
+            if (response.code == 401 && !isPublicAuth) {
+                sessionExpiredEvents.tryEmit("Your session has expired. Please sign in again.")
+            }
+            response
+        })
         .apply {
             extraInterceptors.forEach { addInterceptor(it) }
         }
@@ -86,4 +101,6 @@ class NetworkModule(
     fun orderApiService(): OrderApiService = retrofit.create(OrderApiService::class.java)
     fun supplierApiService(): SupplierApiService = retrofit.create(SupplierApiService::class.java)
     fun notificationApiService(): NotificationApiService = retrofit.create(NotificationApiService::class.java)
+    fun workspaceApiService(): com.example.data.remote.api.WorkspaceApiService =
+        retrofit.create(com.example.data.remote.api.WorkspaceApiService::class.java)
 }

@@ -39,6 +39,29 @@ object NavRoutes {
     const val PROFILE_SETTINGS = "profile_settings"
     const val NOTIFICATIONS = "notifications"
 
+    // Stockist Isolated Purchased Inventory
+    const val STOCKIST_PURCHASED_INVENTORY = "stockist_purchased_inventory"
+
+    // Dedicated Manufacturer Workspace Routes
+    const val MANUFACTURER_DASHBOARD = "manufacturer_dashboard"
+    const val MANUFACTURER_BANNERS = "manufacturer_banners"
+    const val MANUFACTURER_PROMOTIONS = "manufacturer_promotions"
+    const val MANUFACTURER_UPDATES = "manufacturer_updates"
+
+    // Dedicated Company Workspace Routes
+    const val COMPANY_DASHBOARD = "company_dashboard"
+    const val COMPANY_CATALOGUE = "company_catalogue"
+    const val COMPANY_ADD_MEDICINE = "company_add_medicine"
+    const val COMPANY_APPROVALS = "company_approvals"
+    const val COMPANY_MASTER_DATA = "company_master_data"
+
+    fun rootRouteForWorkspace(workspace: com.example.domain.model.WorkspaceType): String = when (workspace) {
+        com.example.domain.model.WorkspaceType.STOCKIST -> DASHBOARD
+        com.example.domain.model.WorkspaceType.MANUFACTURER -> MANUFACTURER_DASHBOARD
+        com.example.domain.model.WorkspaceType.COMPANY -> COMPANY_DASHBOARD
+        com.example.domain.model.WorkspaceType.ADMIN -> DASHBOARD
+    }
+
     fun medicineCatalogue(
         focus: String = "products",
         manufacturer: String = "",

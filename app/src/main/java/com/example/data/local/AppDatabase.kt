@@ -62,9 +62,18 @@ import com.example.data.local.entity.UserEntity
         ShortageRiskEntity::class,
         ProofOfDeliveryEntity::class,
         SupplierSettingsEntity::class,
-        com.example.data.local.entity.ComplianceVerificationEntity::class
+        com.example.data.local.entity.ComplianceVerificationEntity::class,
+        com.example.data.local.entity.OrganizationEntity::class,
+        com.example.data.local.entity.OrganizationMemberEntity::class,
+        com.example.data.local.entity.MedicineSubmissionEntity::class,
+        com.example.data.local.entity.ApprovalAuditLogEntity::class,
+        com.example.data.local.entity.MasterDataEntity::class,
+        com.example.data.local.entity.OfferBannerEntity::class,
+        com.example.data.local.entity.PromotionalCampaignEntity::class,
+        com.example.data.local.entity.MedicineAnnouncementEntity::class,
+        com.example.data.local.entity.StockistPurchasedInventoryEntity::class
     ],
-    version = 5,
+    version = 6,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -83,6 +92,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun notificationDao(): NotificationDao
     abstract fun analyticsDao(): AnalyticsDao
     abstract fun complianceDao(): com.example.data.local.dao.ComplianceDao
+    abstract fun workspaceManagementDao(): com.example.data.local.dao.WorkspaceManagementDao
 
     companion object {
         @Volatile

@@ -27,6 +27,7 @@ class DataStoreManager(private val context: Context) : TokenProvider {
         private val KEY_REFRESH_TOKEN = stringPreferencesKey("auth_refresh_token")
         private val KEY_BACKEND_BASE_URL = stringPreferencesKey("backend_base_url")
         private val KEY_AUTH_EXECUTION_MODE = stringPreferencesKey("auth_execution_mode")
+        private val KEY_ACTIVE_WORKSPACE = stringPreferencesKey("active_workspace")
         const val DEFAULT_DEPLETION_THRESHOLD = 10
     }
 
@@ -79,6 +80,10 @@ class DataStoreManager(private val context: Context) : TokenProvider {
         preferences[KEY_AUTO_DEPLETION_NOTIFICATIONS_ENABLED] ?: true
     }
 
+    val activeWorkspaceFlow: Flow<com.example.domain.model.WorkspaceType?> = context.dataStore.data.map { preferences ->
+        com.example.domain.model.WorkspaceType.fromString(preferences[KEY_ACTIVE_WORKSPACE])
+    }
+
     suspend fun setLoggedInUserId(userId: Long?) {
         context.dataStore.edit { preferences ->
             if (userId != null && userId > 0) {
@@ -117,7 +122,18 @@ class DataStoreManager(private val context: Context) : TokenProvider {
             preferences.remove(KEY_LOGGED_IN_USER_ID)
             preferences.remove(KEY_ACCESS_TOKEN)
             preferences.remove(KEY_REFRESH_TOKEN)
+            preferences.remove(KEY_ACTIVE_WORKSPACE)
             // Preserve KEY_ONBOARDING_COMPLETED on logout so returning users skip the Welcome Screen
+        }
+    }
+
+    suspend fun setActiveWorkspace(workspace: com.example.domain.model.WorkspaceType?) {
+        context.dataStore.edit { preferences ->
+            if (workspace != null) {
+                preferences[KEY_ACTIVE_WORKSPACE] = workspace.name
+            } else {
+                preferences.remove(KEY_ACTIVE_WORKSPACE)
+            }
         }
     }
 

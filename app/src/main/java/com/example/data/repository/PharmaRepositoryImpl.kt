@@ -210,7 +210,12 @@ class PharmaRepositoryImpl(
                     status = remoteUser.status,
                     emailVerified = remoteUser.emailVerified,
                     phoneVerified = remoteUser.phoneVerified,
-                    profileBio = remoteUser.profileBio
+                    profileBio = remoteUser.profileBio,
+                    organizationId = if (remoteUser.organizationId > 0L) remoteUser.organizationId else existing.organizationId,
+                    organizationType = remoteUser.organizationType.ifBlank { existing.organizationType },
+                    organizationName = remoteUser.organizationName.ifBlank { existing.organizationName },
+                    assignedRolesCsv = remoteUser.assignedRolesCsv.ifBlank { existing.assignedRolesCsv },
+                    permissionsCsv = remoteUser.permissionsCsv.ifBlank { existing.permissionsCsv }
                 )
             )
             existing.id
@@ -537,6 +542,13 @@ class PharmaRepositoryImpl(
     private fun UserEntity.toDomainAuthUser(): AuthUser {
         val parsedRole = try { UserRole.valueOf(role) } catch (_: Exception) { UserRole.STOCKIST }
         val parsedStatus = try { AccountStatus.valueOf(status) } catch (_: Exception) { AccountStatus.ACTIVE }
+        val parsedRoles = com.example.domain.model.RolePermissionMatrix.parseRolesCsv(assignedRolesCsv, parsedRole)
+        val explicitPerms = com.example.domain.model.PharmaPermission.parseCsv(permissionsCsv)
+        val resolvedOrgType = com.example.domain.model.OrganizationType.fromString(
+            organizationType.takeIf { it.isNotBlank() },
+            parsedRole
+        )
+        val resolvedOrgId = if (organizationId > 0L) organizationId else id
         return AuthUser(
             id = id,
             fullName = fullName,
@@ -549,7 +561,15 @@ class PharmaRepositoryImpl(
             status = parsedStatus,
             emailVerified = emailVerified,
             phoneVerified = phoneVerified,
-            profileBio = profileBio
+            profileBio = profileBio,
+            organizationId = resolvedOrgId,
+            organizationType = resolvedOrgType,
+            organizationName = organizationName.ifBlank { businessName },
+            assignedRoles = parsedRoles,
+            permissions = com.example.domain.model.RolePermissionMatrix.resolvePermissions(
+                roles = parsedRoles,
+                explicitPermissions = explicitPerms
+            )
         )
     }
 
@@ -1894,15 +1914,29 @@ class PharmaRepositoryImpl(
             analyticsDao.getAllSupplierSettingsFlow()
         ) { products, offers, settings ->
             val settingsMap = settings.associateBy { it.supplierId }
-            products.map { p ->
-                val prodOffers = offers.filter { it.productId == p.id }
-                buildProductSummaryFields(p, prodOffers, settingsMap)
-            }
+            products
+                .filter { p ->
+                    com.example.domain.model.AccessControlPolicy.isMedicineDiscoverableByStockist(
+                        approvalStatus = com.example.domain.model.MedicineSubmissionStatus.fromString(p.approvalStatus),
+                        publicationStatus = com.example.domain.model.CataloguePublicationStatus.fromString(p.catalogueStatus),
+                        isActive = p.isActive
+                    )
+                }
+                .map { p ->
+                    val prodOffers = offers.filter { it.productId == p.id }
+                    buildProductSummaryFields(p, prodOffers, settingsMap)
+                }
         }
     }
 
     override suspend fun getApiProducts(): List<ProductDetail> {
-        val products = productDao.getAllProducts().filter { it.isActive }
+        val products = productDao.getAllProducts().filter { p ->
+            com.example.domain.model.AccessControlPolicy.isMedicineDiscoverableByStockist(
+                approvalStatus = com.example.domain.model.MedicineSubmissionStatus.fromString(p.approvalStatus),
+                publicationStatus = com.example.domain.model.CataloguePublicationStatus.fromString(p.catalogueStatus),
+                isActive = p.isActive
+            )
+        }
         val offers = offerDao.getAllActiveOffers()
         val settingsMap = analyticsDao.getAllSupplierSettings().associateBy { it.supplierId }
         return products.map { p ->

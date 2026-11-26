@@ -1,0 +1,1153 @@
+# PHARMAOS – COMPLETE ROLE-BASED APPLICATION TRANSFORMATION AND STATELESS BACKEND INTEGRATION
+
+Act as a senior Android developer, enterprise software architect, database architect, UI/UX designer and application security engineer.
+
+You are working on my existing PharmaOS Android application provided in `pharmaos-tn20-main (2).zip`.
+
+Your responsibility is to transform the existing application into a professional, scalable, secure, role-based pharmaceutical business management platform.
+
+Do not rebuild the application from scratch. Understand the entire existing codebase before making modifications.
+
+# PHASE 1: EXISTING PROJECT AUDIT
+
+Inspect the complete project, including:
+
+- Existing project structure.
+- Kotlin and Jetpack Compose screens.
+- Authentication and registration.
+- AuthViewModel.kt.
+- AppNavigation.kt.
+- NavRoutes.kt.
+- DashboardScreen.kt.
+- DashboardViewModel.kt.
+- PharmaApplication.kt.
+- PharmaRepositoryImpl.kt.
+- ProductRepository.kt.
+- NetworkModule.kt.
+- ApiConfig.kt.
+- DataStoreManager.kt.
+- Room database, entities and DAOs.
+- Retrofit API services and DTOs.
+- AndroidManifest.xml.
+- Gradle configuration.
+- PHARMAOS_API_CONTRACT.md.
+- Existing tests.
+- Existing light and dark themes.
+
+The existing application routes different user types towards a common dashboard. Replace this behaviour with separate role-specific workspaces.
+
+Preserve all existing working features and reusable components.
+
+# PHASE 2: FINAL TECHNOLOGY STACK
+
+Continue using the existing technology stack:
+
+## Android frontend
+
+- Kotlin.
+- Jetpack Compose.
+- Material 3.
+- MVVM architecture.
+- Repository pattern.
+- Kotlin Coroutines.
+- StateFlow.
+- Navigation Compose.
+- Room database for local caching.
+- DataStore for preferences.
+- Retrofit.
+- OkHttp.
+- Moshi.
+
+## Backend
+
+- Java Spring Boot.
+- Spring Security.
+- Stateless REST API architecture.
+- JWT authentication.
+- Role-based and permission-based authorization.
+- PostgreSQL.
+- JDBC or NamedParameterJdbcTemplate.
+- Raw SQL queries.
+
+Do not introduce Hibernate or JPA.
+
+The backend is being developed separately by another developer. Do not assume that proposed endpoints are already implemented.
+
+# PHASE 3: ORGANISATION AND USER ROLE ARCHITECTURE
+
+PharmaOS must support three primary user experiences:
+
+1. Stockist.
+2. Manufacturer.
+3. Company.
+
+IMPORTANT BUSINESS RULE:
+
+Manufacturer and Company belong to the same type of pharmaceutical organisation.
+
+Do not create duplicate organisation records for Manufacturer and Company.
+
+There must be two primary organisation types:
+
+- STOCKIST.
+- PHARMACEUTICAL_ORGANIZATION.
+
+Each pharmaceutical organisation can have multiple employees.
+
+Each employee can have:
+
+- Manufacturer permissions.
+- Company permissions.
+- Both Manufacturer and Company permissions.
+
+Manufacturer and Company employees belonging to the same pharmaceutical organisation must share the same organisation ID.
+
+The existing application uses the following role identifiers:
+
+- STOCKIST.
+- MANUFACTURER.
+- PHARMA_COMPANY.
+- ADMIN.
+
+Preserve compatibility with these identifiers.
+
+Display PHARMA_COMPANY as "Company" in the user interface.
+
+Do not introduce a conflicting COMPANY enum without coordinating the migration with the backend developer.
+
+Preserve the existing ADMIN role as a separate administrative function.
+
+# PHASE 4: APPROVED ROLE AND PERMISSION MATRIX
+
+Implement the following permission matrix.
+
+| Feature | Stockist | Manufacturer | Company |
+|---|---|---|---|
+| Browse medicines | Yes | Yes | Yes |
+| Create basket | Yes | No | No |
+| Place orders | Yes | No | No |
+| Manage own purchased inventory | Yes | No | No |
+| Create offer banners | No | Yes | No |
+| Manage promotional campaigns | No | Yes | No |
+| Publish medicine announcements | No | Yes | No |
+| Submit new medicines | No | Yes | Yes |
+| Approve new medicines | No | No | Yes |
+| Reject medicine submissions | No | No | Yes |
+| Edit approved catalogue | No | Limited | Yes |
+| Manage salt compositions | No | No | Yes |
+| Manage dosage forms | No | No | Yes |
+| Manage brands | No | No | Yes |
+| Profile and settings | Yes | Yes | Yes |
+| Notifications | Yes | Yes | Yes |
+
+Manufacturer users can only edit explicitly permitted information associated with their own organisation's products.
+
+Manufacturer users must not modify approved medicine compositions, strengths or regulatory information without Company approval.
+
+A user with both Manufacturer and Company permissions may access both workspaces.
+
+Implement granular permissions instead of relying entirely on hardcoded role conditions.
+
+Suggested permissions:
+
+- PRODUCT_VIEW
+- BASKET_MANAGE
+- ORDER_CREATE
+- ORDER_VIEW
+- STOCKIST_INVENTORY_MANAGE
+- INVOICE_VIEW
+- BANNER_CREATE
+- BANNER_UPDATE
+- BANNER_DELETE
+- CAMPAIGN_MANAGE
+- MEDICINE_ANNOUNCEMENT_CREATE
+- MEDICINE_SUBMIT
+- MEDICINE_EDIT
+- MEDICINE_APPROVE
+- MEDICINE_REJECT
+- MEDICINE_CATALOGUE_MANAGE
+- COMPOSITION_MANAGE
+- DOSAGE_FORM_MANAGE
+- BRAND_MANAGE
+- ANALYTICS_VIEW
+- ORGANIZATION_MEMBER_MANAGE
+- ROLE_ASSIGN
+
+Use a consistent permission naming convention across Android, backend and database.
+
+# PHASE 5: ROLE-BASED AUTHENTICATION AND NAVIGATION
+
+Maintain a common authentication and registration system.
+
+After successful authentication:
+
+1. Obtain the authenticated user details from the backend.
+2. Obtain organisation ID.
+3. Obtain organisation type.
+4. Obtain assigned roles and permissions.
+5. Determine the appropriate workspace.
+6. Navigate to the corresponding dashboard.
+
+Navigation flow:
+
+- STOCKIST → Stockist Dashboard.
+- MANUFACTURER → Manufacturer Dashboard.
+- PHARMA_COMPANY → Company Dashboard.
+- ADMIN → Existing authorised administrative workspace.
+
+If an authenticated pharmaceutical employee has both Manufacturer and Company permissions, provide a professional workspace switcher.
+
+Do not require the user to log in again when switching between authorised workspaces.
+
+Do not allow users to assign themselves elevated permissions using registration, profile settings, local preferences or navigation routes.
+
+Any role selected on the login screen must be treated only as an intended workspace. The authenticated backend permissions determine actual access.
+
+Implement separate navigation graphs or clearly isolated role-specific navigation destinations.
+
+Restrict:
+
+- Bottom navigation.
+- Side navigation drawer.
+- Dashboard action buttons.
+- Quick actions.
+- Deep links.
+- Restricted screen access.
+
+Handle logout, app restart, token expiration, permission changes and restoration of the authenticated workspace correctly.
+
+# PHASE 6: STOCKIST WORKSPACE
+
+Preserve and improve the existing Stockist functionality.
+
+## Stockist dashboard
+
+Display relevant information such as:
+
+- Active purchase orders.
+- Pending deliveries.
+- Recent purchases.
+- Purchased stock alerts.
+- Total purchase value.
+- Latest medicine launches.
+- Manufacturer offers.
+- Promotional banners.
+- Recommended purchasing opportunities.
+- Quick access to Explore and Basket.
+
+## Stockist bottom navigation
+
+Recommended navigation:
+
+- Home.
+- Explore.
+- Basket.
+- Orders.
+- Profile.
+
+## Stockist features
+
+Preserve:
+
+- Medicine exploration.
+- Generic medicine search.
+- Salt composition search.
+- Dosage form filters.
+- Product comparison.
+- Supplier quotations.
+- Alternative brands.
+- Basket management.
+- Saved basket templates.
+- Best Buy Basket Optimizer.
+- Purchase orders.
+- Order tracking.
+- Tax invoice downloads.
+- Returns.
+- Credit information.
+- Notifications.
+- Profile and settings.
+
+Stockists must only see approved medicines.
+
+Only commercially available products with valid supplier information should be purchasable.
+
+Manufacturer-created offer banners and medicine announcements must appear dynamically on the Stockist dashboard according to their publication status and visibility rules.
+
+## Inventory separation
+
+Stockists may manage their own purchased inventory.
+
+However, Stockists must not access manufacturer warehouse inventory, production batches, manufacturing stock information or restricted real-time inventory dashboards.
+
+The existing API contract restricts real-time inventory and batch APIs to Manufacturer and PHARMA_COMPANY roles.
+
+Preserve this security boundary.
+
+If necessary, define a separate Stockist purchased-inventory module and proposed API contract rather than granting Stockists access to the existing restricted manufacturer inventory endpoints.
+
+# PHASE 7: MANUFACTURER WORKSPACE
+
+Create a genuinely separate Manufacturer workspace.
+
+Do not simply reuse the Stockist dashboard and hide a few buttons.
+
+## Manufacturer dashboard
+
+Display:
+
+- Active promotional campaigns.
+- Published banners.
+- Scheduled offers.
+- Expiring offers.
+- Published medicine announcements.
+- Pending medicine submissions.
+- Recently approved medicines.
+- Campaign performance.
+- Relevant operational alerts.
+
+## Manufacturer bottom navigation
+
+Recommended navigation:
+
+- Home.
+- Products.
+- Promotions.
+- Updates.
+- Profile.
+
+## A. Offer banner management
+
+Create a complete offer banner management module.
+
+The Manufacturer must be able to:
+
+- Create a new banner.
+- Upload a banner image.
+- Preview the banner.
+- Edit an existing banner.
+- Save a banner as draft.
+- Publish a banner.
+- Schedule publication.
+- Set start and end dates.
+- Activate or deactivate a banner.
+- Archive a banner.
+- Delete eligible banners.
+- Link a banner to an approved medicine or campaign.
+
+Banner creation fields:
+
+- Banner ID.
+- Organisation ID.
+- Banner title.
+- Subtitle.
+- Description.
+- Banner image.
+- Associated medicine or product.
+- Associated campaign.
+- Offer type.
+- Offer details.
+- Start date and time.
+- End date and time.
+- Display priority.
+- Target audience.
+- Call-to-action text.
+- Publication status.
+
+Supported banner statuses:
+
+- DRAFT.
+- SCHEDULED.
+- ACTIVE.
+- EXPIRED.
+- INACTIVE.
+- ARCHIVED.
+
+Automatically display eligible banners to the intended Stockist audience.
+
+Expired or inactive banners must not be displayed.
+
+Server-side visibility rules must determine whether a banner is published and active.
+
+Use shared persistent image storage for production uploads. Do not rely on backend-instance local file storage.
+
+## B. Promotional campaigns
+
+Allow authorised Manufacturer users to:
+
+- Create promotional campaigns.
+- Create wholesale discount schemes.
+- Configure bulk purchase offers.
+- Associate approved products.
+- Configure campaign dates.
+- Define applicable commercial terms.
+- Activate or deactivate campaigns.
+- View campaign performance.
+
+Commercial discounts must be validated and calculated by the backend.
+
+## C. Medicine announcements and updates
+
+Allow Manufacturer users to publish:
+
+- New approved medicine launches.
+- Packaging updates.
+- Product availability updates.
+- Approved product information announcements.
+- New strength announcements after catalogue approval.
+- Commercial updates.
+- Promotional announcements.
+
+Only approved medicines belonging to the organisation may be linked to published product announcements.
+
+Do not allow promotional announcements to bypass medicine approval.
+
+Provide draft, preview, publish, edit, archive and notification functionality.
+
+Do not introduce unverified medical claims or automatically generate unsupported clinical information.
+
+## D. New medicine submission
+
+Allow Manufacturer users to submit new medicine information to Company users for approval.
+
+Manufacturer users must be able to:
+
+- Create a medicine submission.
+- Save as draft.
+- Submit for approval.
+- View pending submissions.
+- View approved submissions.
+- View rejected submissions.
+- Read rejection reasons.
+- Correct and resubmit rejected submissions.
+
+Manufacturers must not approve their own medicine submissions through Manufacturer permissions.
+
+## E. Existing manufacturer operational features
+
+Preserve existing authorised features such as:
+
+- Real-time inventory.
+- Production batch management.
+- Stock information.
+- Drug recall management.
+- Live pipeline.
+- Relevant analytics.
+
+Make these available through appropriate Manufacturer navigation and permissions.
+
+Do not expose these restricted operational features to Stockists.
+
+# PHASE 8: COMPANY WORKSPACE
+
+Create a completely separate Company workspace focused on pharmaceutical catalogue administration.
+
+## Company dashboard
+
+Display:
+
+- Total approved medicines.
+- Active catalogue products.
+- Pending medicine approvals.
+- Rejected submissions.
+- Recently added medicines.
+- Draft submissions.
+- Brands managed.
+- Catalogue updates.
+- Relevant inventory and operational summaries where authorised.
+
+## Company bottom navigation
+
+Recommended navigation:
+
+- Home.
+- Catalogue.
+- Approvals.
+- Management.
+- Profile.
+
+## A. Add new medicine
+
+Create a professional multi-section Add New Medicine form.
+
+### Basic information
+
+- Medicine name.
+- Generic medicine name.
+- Brand name.
+- Salt composition.
+- Strength.
+- Dosage form.
+- Route of administration.
+- Manufacturer association.
+- Organisation association.
+
+### Product information
+
+- Pack size.
+- Packaging type.
+- Product description.
+- Product image.
+- SKU or product identifier.
+- Storage requirements.
+- Prescription classification where applicable.
+
+### Commercial information
+
+- MRP.
+- Applicable tax information.
+- Product availability.
+- Commercial status.
+
+Supplier-specific price, MOQ and stock information should be maintained in appropriate supplier quotation and inventory records, not incorrectly duplicated into the medicine master.
+
+### Supporting information
+
+- Relevant supporting documents.
+- Required regulatory identifiers.
+- Product labels where applicable.
+- Additional approved information.
+
+Provide:
+
+- Field validation.
+- Image upload.
+- Duplicate checking.
+- Save as draft.
+- Preview.
+- Submit for approval.
+- Confirmation messages.
+- Error handling.
+
+Do not fabricate missing pharmaceutical, regulatory or commercial data.
+
+## B. Medicine catalogue management
+
+Company users must be able to:
+
+- View approved medicines.
+- Search and filter medicines.
+- Edit authorised medicine information.
+- Submit important catalogue changes for review.
+- Activate or deactivate products.
+- Manage product images.
+- View submission history.
+- View approval history.
+
+Do not permanently delete medicines that are referenced by existing orders, invoices or inventory records.
+
+Use appropriate deactivation and archival mechanisms.
+
+## C. Master data management
+
+Provide Company sections for:
+
+- Salt compositions.
+- Generic medicines.
+- Dosage forms.
+- Medicine strengths.
+- Brands.
+- Packaging information.
+- Product classifications.
+
+Use normalized database relationships.
+
+Prevent unnecessary duplicate records.
+
+Company users must only manage master data within their authorised scope. Platform-wide shared reference data must require explicitly assigned administrative permissions.
+
+# PHASE 9: MEDICINE APPROVAL WORKFLOW
+
+Implement the following compulsory medicine approval workflow:
+
+Manufacturer or Company employee submits medicine.
+
+Submission enters PENDING_APPROVAL.
+
+Authorised Company approver reviews the submission.
+
+Company approver approves or rejects it.
+
+Approved medicine becomes available in the approved catalogue.
+
+Stockists can discover the medicine and purchase it once valid commercial availability is configured.
+
+## Supported submission statuses
+
+- DRAFT.
+- PENDING_APPROVAL.
+- APPROVED.
+- REJECTED.
+- WITHDRAWN.
+
+Maintain catalogue publication status separately where appropriate:
+
+- ACTIVE.
+- INACTIVE.
+- ARCHIVED.
+
+## Company approval screen
+
+Display:
+
+- Pending medicine submissions.
+- Submitting employee.
+- Organisation.
+- Submission date.
+- Medicine information.
+- Supporting documents.
+- Product images.
+- Duplicate detection results.
+- Existing record comparison when applicable.
+- Approval and rejection actions.
+
+On approval:
+
+- Validate reviewer permissions.
+- Validate organisation ownership.
+- Validate required medicine information.
+- Prevent duplicate catalogue records.
+- Create or update the approved catalogue record.
+- Record reviewer details and timestamp.
+- Notify the submitting employee.
+- Refresh eligible catalogue data.
+
+On rejection:
+
+- Require a rejection reason.
+- Record reviewer details and timestamp.
+- Notify the submitting employee.
+- Allow correction and resubmission.
+
+By default, prevent users from approving their own submissions. If the business requires self-approval, make it an explicitly approved backend policy.
+
+Use database transactions and concurrency protection to prevent duplicate approvals.
+
+Maintain complete approval audit history.
+
+Never expose draft, rejected or pending medicine submissions through public Stockist catalogue APIs.
+
+# PHASE 10: DATABASE ARCHITECTURE
+
+Design the database requirements according to the following conceptual structure.
+
+Do not delete or recreate existing production database records.
+
+Inspect the existing schema before proposing database migrations.
+
+## Organisation and access management tables
+
+- organizations
+- users
+- organization_members
+- roles
+- permissions
+- user_roles
+- role_permissions
+
+## Medicine management tables
+
+- medicines
+- medicine_submissions
+- medicine_compositions
+- generic_medicines
+- dosage_forms
+- medicine_strengths
+- brands
+- medicine_images
+- medicine_documents
+- approval_audit_logs
+
+## Manufacturer management tables
+
+- offer_banners
+- campaigns
+- campaign_products
+- medicine_announcements
+- banner_analytics
+
+## Stockist and commercial tables
+
+Preserve existing tables for:
+
+- suppliers
+- supplier_quotes
+- baskets
+- basket_items
+- basket_templates
+- orders
+- order_items
+- invoices
+- inventory
+- notifications
+- user_addresses
+
+Adapt these conceptual names to the existing schema where appropriate.
+
+## Required database relationships
+
+- organizations → organization_members: One-to-many.
+- users → organization_members: One-to-many.
+- organization_members → user_roles: One-to-many.
+- roles → user_roles: One-to-many.
+- roles → role_permissions: One-to-many.
+- permissions → role_permissions: One-to-many.
+- organizations → medicines: One-to-many.
+- organizations → medicine_submissions: One-to-many.
+- users → medicine_submissions: One-to-many.
+- medicines → medicine_submissions: Optional reference for new submissions and existing medicine updates.
+- organizations → offer_banners: One-to-many.
+- organizations → campaigns: One-to-many.
+- organizations → medicine_announcements: One-to-many.
+
+Company and Manufacturer permissions must be associated with organisation membership.
+
+Every organisation-owned record must have the appropriate organisation ID and ownership constraints.
+
+Include:
+
+- Primary keys.
+- Foreign keys.
+- Unique constraints.
+- Check constraints.
+- Appropriate indexes.
+- Created timestamps.
+- Updated timestamps.
+- Created-by fields.
+- Audit history.
+- Versioning for concurrent updates where required.
+
+Use precise PostgreSQL numeric types for prices, tax and financial calculations.
+
+Prepare migration proposals and a database relationship diagram for the backend developer.
+
+# PHASE 11: STATELESS SERVER ARCHITECTURE
+
+The entire production backend must follow stateless REST API principles.
+
+Do not use:
+
+- Server-side HTTP sessions.
+- In-memory user sessions.
+- Server-local persistent basket data.
+- Server-local persistent inventory.
+- Server-local campaign or medicine state.
+- Hardcoded user permissions.
+
+Every protected API request must contain a valid JWT access token.
+
+Example request:
+
+Authorization: Bearer ACCESS_TOKEN
+
+The backend must independently authenticate and authorize every protected request.
+
+Verify:
+
+- Token signature.
+- Token expiration.
+- Token issuer and audience.
+- Authenticated user identity.
+- Active account status.
+- Organisation membership.
+- Assigned role.
+- Required permissions.
+- Record ownership.
+
+The backend must support multiple independent server instances using the same authoritative PostgreSQL database.
+
+Use shared persistent storage for uploaded images and documents.
+
+Refresh-token rotation, revocation records and other necessary persistent security information may be maintained in the shared database.
+
+The Android application must never be responsible for final authorization decisions.
+
+# PHASE 12: API CONTRACT AND BACKEND INTEGRATION
+
+Inspect the existing PHARMAOS_API_CONTRACT.md file.
+
+The current API contract contains proposed endpoints awaiting backend confirmation.
+
+Do not claim that these endpoints are live.
+
+Extend the contract to cover:
+
+- Organisation membership.
+- Authenticated roles and permissions.
+- Workspace access.
+- Company catalogue management.
+- Medicine submissions.
+- Medicine approval.
+- Medicine rejection.
+- Manufacturer banner management.
+- Campaign management.
+- Medicine announcements.
+- Stockist promotional feeds.
+- Notifications.
+- Audit history.
+- Image and document uploads.
+
+For each endpoint document:
+
+- HTTP method.
+- Endpoint path.
+- Authentication requirement.
+- Required permission.
+- Organisation ownership requirement.
+- Request JSON.
+- Response JSON.
+- HTTP status codes.
+- Validation rules.
+- Error response format.
+
+Clearly label every unconfirmed endpoint as PROPOSED.
+
+Coordinate the exact request and response DTOs with the Spring Boot backend developer.
+
+Reuse the existing Retrofit and OkHttp implementation.
+
+Do not duplicate networking modules, authentication interceptors or remote data sources unnecessarily.
+
+Implement:
+
+- Secure JWT storage.
+- Access-token renewal.
+- Unauthorized response handling.
+- Forbidden response handling.
+- Network timeout handling.
+- Retry strategies for safe operations.
+- Configurable backend base URL.
+- HTTPS for production.
+- Safe logging.
+
+Use idempotency protection for critical operations such as order creation and medicine approval.
+
+Never simulate successful production operations if the backend is unavailable.
+
+# PHASE 13: LOCAL DATABASE AND SYNCHRONIZATION
+
+PostgreSQL is the authoritative source of persistent business data.
+
+Room should be used for:
+
+- Catalogue caching.
+- Cached dashboard information.
+- Offline browsing.
+- Appropriate local preferences.
+- Previously synchronized business information.
+
+Keep the existing Room functionality where useful.
+
+Do not use Room as the final production authority for:
+
+- User permissions.
+- Medicine approval.
+- Product pricing.
+- Supplier quotations.
+- Active promotions.
+- Inventory availability.
+- Orders.
+- Invoices.
+
+When a remote operation succeeds:
+
+- Update the relevant local cache.
+- Refresh StateFlow.
+- Refresh affected screens immediately.
+- Prevent duplicate records.
+- Display the latest server-confirmed information.
+
+When a remote operation fails:
+
+- Display the actual error.
+- Preserve existing valid cached information.
+- Do not falsely report success.
+
+Isolate private cached information by user and organisation.
+
+Clear or switch private cached information correctly during logout and account switching.
+
+Preserve Development Local Mode as a clearly separated testing environment.
+
+Production authentication must never silently fall back to local authentication.
+
+# PHASE 14: SHARED FEATURES AND NOTIFICATIONS
+
+Maintain shared components for:
+
+- Login.
+- Registration.
+- Profile.
+- Settings.
+- Address management.
+- Notifications.
+- Legal documents.
+- Help and support.
+- Theme settings.
+- Logout.
+
+Notifications should be role-specific.
+
+Stockist notifications:
+
+- New offers.
+- Approved medicine launches.
+- Order updates.
+- Delivery updates.
+- Stock alerts.
+
+Manufacturer notifications:
+
+- Medicine submission status.
+- Company approval or rejection.
+- Campaign expiration.
+- Banner publication status.
+- Product-related updates.
+
+Company notifications:
+
+- Pending medicine submissions.
+- Catalogue change requests.
+- Approval activity.
+- Relevant employee activity.
+
+Ensure notifications respect organisation ownership and user permissions.
+
+# PHASE 15: PROFESSIONAL UI AND UX DESIGN
+
+Maintain the existing PharmaOS branding, design language and reusable UI components.
+
+Provide three visually distinct and functionally distinct dashboards.
+
+Each workspace must have:
+
+- Dedicated dashboard content.
+- Relevant statistics.
+- Unique quick actions.
+- Role-specific navigation.
+- Relevant cards and widgets.
+- Meaningful empty states.
+- Loading indicators.
+- Error states.
+- Form validation.
+- Confirmation dialogs.
+
+Support both light mode and dark mode.
+
+Use:
+
+- Professional Material 3 components.
+- Consistent typography.
+- Accessible colour contrast.
+- Proper spacing and alignment.
+- Responsive layouts.
+- Reusable cards.
+- Clear icons.
+- Appropriate animations.
+- Accessible touch targets.
+
+Do not unnecessarily change existing working Stockist screens.
+
+Do not introduce excessive gradients, unrelated colours or inconsistent UI designs.
+
+Add Compose @Preview functions for newly created major screens wherever practical so the screens can be inspected using Android Studio without requiring live backend data.
+
+# PHASE 16: EXISTING FEATURES THAT MUST BE PRESERVED
+
+Do not remove or break:
+
+- Existing login and registration.
+- Existing onboarding.
+- Product exploration.
+- Medicine search.
+- Basket functionality.
+- Quantity adjustments.
+- Basket templates.
+- Best Buy Basket Optimizer.
+- Supplier quotations.
+- Order management.
+- Invoices.
+- Returns.
+- Credit information.
+- Inventory and batch management.
+- Live pipeline.
+- Drug recall management.
+- Shortage alerts.
+- Profile and settings.
+- Notifications.
+- Dark mode.
+- Light mode.
+
+Some Explore, Search and Basket Optimizer enhancements require sample master data that will be supplied separately.
+
+Do not fabricate production medicine prices, supplier quotations or inventory records to complete those features.
+
+Keep these modules ready for future verified data integration.
+
+# PHASE 17: SECURITY AND ORGANISATION ISOLATION
+
+Implement strict authorization requirements.
+
+A Stockist must not:
+
+- Submit medicines.
+- Approve medicines.
+- Create promotional campaigns.
+- Access restricted manufacturing information.
+- Access another Stockist's basket, orders or inventory.
+
+A Manufacturer must not:
+
+- Approve medicine submissions using Manufacturer permissions.
+- Edit another organisation's promotional banners.
+- Publish unapproved medicines.
+- Modify restricted approved catalogue information.
+- Assign themselves Company permissions.
+
+A Company user must not:
+
+- Approve another organisation's submissions without explicit authorization.
+- Modify another organisation's medicines.
+- Bypass required validation.
+- Assign themselves elevated permissions.
+
+Validate ownership using the authenticated principal and backend database membership records.
+
+Never trust organisation IDs, user IDs, roles or permissions supplied by the client without validation.
+
+Record audit logs for:
+
+- Role changes.
+- Medicine approvals.
+- Medicine rejections.
+- Catalogue modifications.
+- Banner publication.
+- Campaign modifications.
+- Sensitive administrative operations.
+
+# PHASE 18: TESTING AND VALIDATION
+
+Create or update unit tests, integration tests and relevant Compose UI tests.
+
+Verify the following scenarios:
+
+1. Stockist login opens the Stockist workspace.
+2. Manufacturer login opens the Manufacturer workspace.
+3. Company login opens the Company workspace.
+4. A user with both permissions can switch authorised workspaces.
+5. Restricted routes cannot be accessed manually.
+6. Stockist cannot submit medicines.
+7. Manufacturer can submit medicines.
+8. Manufacturer cannot approve medicines without Company approval permission.
+9. Company approver can approve medicines.
+10. Company approver can reject medicines with a reason.
+11. Approved medicines become discoverable by Stockists.
+12. Unapproved medicines remain hidden.
+13. Manufacturer can create and publish eligible offer banners.
+14. Active banners appear in the Stockist dashboard.
+15. Expired banners disappear from the Stockist dashboard.
+16. Organisation data isolation works.
+17. Stockists cannot access manufacturer inventory APIs.
+18. Token expiration is handled correctly.
+19. Logout removes access to restricted information.
+20. Private cached data does not leak between accounts.
+21. Dark mode works for all three workspaces.
+22. Light mode works for all three workspaces.
+23. Existing Stockist functionality continues working.
+24. The project builds successfully using its existing Gradle wrapper.
+
+Test error handling for HTTP 400, 401, 403, 404, 409 and 500 responses.
+
+Clearly distinguish:
+
+- Unit tests.
+- Mocked API tests.
+- Local database tests.
+- Live backend integration tests.
+
+Do not claim tests have passed unless they have actually been executed successfully.
+
+# PHASE 19: IMPLEMENTATION ORDER
+
+Follow this order:
+
+Step 1: Audit the existing code and prepare an implementation plan.
+
+Step 2: Implement organisation membership and permission models.
+
+Step 3: Implement authenticated workspace routing.
+
+Step 4: Create independent Stockist, Manufacturer and Company navigation.
+
+Step 5: Preserve and reorganize existing Stockist functionality.
+
+Step 6: Create Company catalogue management screens.
+
+Step 7: Create medicine submission and approval screens.
+
+Step 8: Create Manufacturer offer banner management.
+
+Step 9: Create campaign and medicine announcement modules.
+
+Step 10: Integrate eligible promotions into the Stockist dashboard.
+
+Step 11: Implement notification updates.
+
+Step 12: Extend remote data sources and API contracts.
+
+Step 13: Implement caching and synchronization.
+
+Step 14: Verify permissions and organisation isolation.
+
+Step 15: Execute build and regression tests.
+
+Complete and validate each step before proceeding to the next.
+
+If an operation requires an unconfirmed backend API, implement the appropriate frontend state handling and document the backend dependency without pretending the operation is connected.
+
+# PHASE 20: FINAL DELIVERABLES
+
+After implementation, provide:
+
+1. Complete updated Android application source code.
+2. Existing architecture audit.
+3. Updated application architecture diagram.
+4. Organisation and role relationship diagram.
+5. Database ER diagram.
+6. Final role and permission matrix.
+7. Stockist navigation structure.
+8. Manufacturer navigation structure.
+9. Company navigation structure.
+10. Medicine submission and approval workflow.
+11. Manufacturer banner publication workflow.
+12. List of newly created files.
+13. List of modified files.
+14. Proposed PostgreSQL schema and migration requirements.
+15. Updated PHARMAOS_API_CONTRACT.md.
+16. Backend integration requirements for the Spring Boot developer.
+17. Testing results.
+18. Build status.
+19. Remaining backend dependencies.
+20. Known limitations and unresolved issues.
+
+# STRICT FINAL INSTRUCTIONS
+
+- Do not rebuild the complete application from scratch.
+- Do not replace the existing technology stack.
+- Do not convert the native Android application into a web application.
+- Do not use Firebase as a replacement for the Spring Boot backend.
+- Do not replace PostgreSQL with another production database.
+- Do not introduce Hibernate or JPA.
+- Do not remove existing working features.
+- Do not create duplicate organisations for Manufacturer and Company.
+- Do not give all roles the same dashboard.
+- Do not allow client-side privilege escalation.
+- Do not invent working backend endpoints.
+- Do not generate fake production data.
+- Do not expose passwords, tokens or sensitive information.
+- Do not unnecessarily modify Gradle dependencies or signing configurations.
+- Do not commit debug keystores or secrets.
+- Do not claim backend integration is complete without live verification.
+
+The final application must look and behave like a professional pharmaceutical B2B platform with three genuinely different role-specific workspaces connected to a shared stateless backend.
+
+Start by inspecting the current PharmaOS source code and then perform the implementation incrementally. Do not stop after providing an explanation or implementation plan. Make the required source code changes, validate them and report the actual results.

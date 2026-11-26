@@ -297,7 +297,7 @@ fun LoginScreenContent(
                         Text(
                             text = when (selectedRole) {
                                 UserRole.STOCKIST -> "📦 Stockist & Distributor Portal"
-                                UserRole.PHARMA_COMPANY -> "💊 Pharma Company / Brand Portal"
+                                UserRole.PHARMA_COMPANY -> "💊 Company Portal"
                                 UserRole.MANUFACTURER -> "🏭 Manufacturer Portal"
                                 UserRole.ADMIN -> "🛡️ Administrator Portal"
                             },
@@ -426,8 +426,29 @@ fun LoginScreenContent(
                         .fillMaxWidth()
                         .padding(20.dp)
                 ) {
-                    // Quick Testing Instance Autofill Banner for Manufacturer (Development Local Mode only)
-                    if (selectedRole == UserRole.MANUFACTURER && uiState.authExecutionMode == AuthExecutionMode.DEVELOPMENT_LOCAL_MODE) {
+                    // Quick Testing Instance Autofill Banner (Development Local Mode only)
+                    if (uiState.authExecutionMode == AuthExecutionMode.DEVELOPMENT_LOCAL_MODE &&
+                        (selectedRole == UserRole.MANUFACTURER || selectedRole == UserRole.PHARMA_COMPANY || selectedRole == UserRole.STOCKIST)
+                    ) {
+                        val quickTitle = when (selectedRole) {
+                            UserRole.MANUFACTURER -> "Testing Instance: Manufacturer"
+                            UserRole.PHARMA_COMPANY -> "Testing Instance: Company"
+                            else -> "Testing Instance: Stockist"
+                        }
+                        val quickEmail = when (selectedRole) {
+                            UserRole.MANUFACTURER -> "manufacturer@pharmaos.com"
+                            UserRole.PHARMA_COMPANY -> "company@pharmaos.com"
+                            else -> "stockist@pharmaos.com"
+                        }
+                        val quickOrg = when (selectedRole) {
+                            UserRole.STOCKIST -> "Apex Pharma Distributors"
+                            else -> "Bharat Bio-Pharma"
+                        }
+                        val quickTag = when (selectedRole) {
+                            UserRole.MANUFACTURER -> "quick_fill_manufacturer_test_user"
+                            UserRole.PHARMA_COMPANY -> "quick_fill_company_test_user"
+                            else -> "quick_fill_stockist_test_user"
+                        }
                         Surface(
                             shape = RoundedCornerShape(12.dp),
                             color = Color(0xFFF0FDF4),
@@ -436,10 +457,10 @@ fun LoginScreenContent(
                                 .fillMaxWidth()
                                 .padding(bottom = 14.dp)
                                 .clickable {
-                                    identifier = "manufacturer@pharmaos.com"
+                                    identifier = quickEmail
                                     password = "Password@123"
                                 }
-                                .testTag("quick_fill_manufacturer_test_user")
+                                .testTag(quickTag)
                         ) {
                             Row(
                                 modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
@@ -467,13 +488,13 @@ fun LoginScreenContent(
                                     Spacer(modifier = Modifier.width(10.dp))
                                     Column {
                                         Text(
-                                            text = "Testing Instance: Manufacturer",
+                                            text = quickTitle,
                                             fontSize = 12.sp,
                                             fontWeight = FontWeight.Bold,
                                             color = Color(0xFF166534)
                                         )
                                         Text(
-                                            text = "manufacturer@pharmaos.com • Bharat Bio-Pharma",
+                                            text = "$quickEmail • $quickOrg",
                                             fontSize = 11.sp,
                                             color = Color(0xFF15803D)
                                         )

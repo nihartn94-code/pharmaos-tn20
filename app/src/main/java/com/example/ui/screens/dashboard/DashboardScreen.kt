@@ -16,10 +16,12 @@ import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -129,6 +131,8 @@ fun DashboardScreen(
     onNavigateToCompliance: () -> Unit = {},
     onNavigateToSearch: () -> Unit = onNavigateToCatalogue,
     onNavigateToManufacturerCatalogue: () -> Unit = onNavigateToCatalogue,
+    onNavigateToStockistPurchasedInventory: () -> Unit = {},
+    onOpenOfferBanner: (com.example.domain.model.OfferBanner) -> Unit = { onNavigateToCatalogue() },
     onLoggedOut: () -> Unit = {}
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
@@ -150,8 +154,13 @@ fun DashboardScreen(
         onNavigateToOptimizer = onNavigateToOptimizer,
         onNavigateToCompliance = onNavigateToCompliance,
         onNavigateToSearch = onNavigateToSearch,
+        onNavigateToStockistPurchasedInventory = onNavigateToStockistPurchasedInventory,
+        onOpenOfferBanner = onOpenOfferBanner,
         onAdjustStock = { sku, delta -> viewModel.adjustInventoryStock(sku, delta) },
         onReorderProduct = { item, qty -> viewModel.reorderProduct(item, qty) },
+        onRefreshDashboard = { viewModel.refreshDashboard() },
+        onSelectAlertFilter = { viewModel.selectAlertFilter(it) },
+        onMarkAlertRead = { viewModel.markTradeAlertRead(it) },
         onLogout = { viewModel.logout(onLoggedOut) }
     )
 }
@@ -176,8 +185,13 @@ fun DashboardScreenContent(
     onNavigateToCompliance: () -> Unit = {},
     onNavigateToSearch: () -> Unit = onNavigateToCatalogue,
     onNavigateToManufacturerCatalogue: () -> Unit = onNavigateToCatalogue,
+    onNavigateToStockistPurchasedInventory: () -> Unit = {},
+    onOpenOfferBanner: (com.example.domain.model.OfferBanner) -> Unit = { onNavigateToCatalogue() },
     onAdjustStock: (String, Int) -> Unit = { _, _ -> },
     onReorderProduct: (ProductInventoryEntity, Int) -> Unit = { _, _ -> },
+    onRefreshDashboard: () -> Unit = {},
+    onSelectAlertFilter: (TradeAlertSeverity?) -> Unit = {},
+    onMarkAlertRead: (DashboardTradeAlert) -> Unit = {},
     onLogout: () -> Unit = {}
 ) {
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
@@ -195,6 +209,7 @@ fun DashboardScreenContent(
                 DashboardDrawerContent(
                     currentUser = uiState.currentUser,
                     cartItemCount = uiState.cartItemCount,
+                    stockistPurchasedInventoryCount = uiState.stockistPurchasedInventoryCount,
                     onCloseDrawer = {
                         coroutineScope.launch { drawerState.close() }
                     },
@@ -209,6 +224,10 @@ fun DashboardScreenContent(
                     onNavigateToBasket = {
                         coroutineScope.launch { drawerState.close() }
                         onNavigateToBasket()
+                    },
+                    onNavigateToStockistPurchasedInventory = {
+                        coroutineScope.launch { drawerState.close() }
+                        onNavigateToStockistPurchasedInventory()
                     },
                     onNavigateToOptimizer = {
                         coroutineScope.launch { drawerState.close() }
@@ -382,120 +401,188 @@ fun DashboardScreenContent(
                 )
             }
         ) { paddingValues ->
-            Column(
+            Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(paddingValues)
-                    .verticalScroll(rememberScrollState())
-                    .padding(horizontal = 16.dp, vertical = 12.dp),
-                verticalArrangement = Arrangement.spacedBy(16.dp)
+                    .padding(paddingValues),
+                contentAlignment = Alignment.TopCenter
             ) {
-                // Greeting & Role Header
-                GreetingHeaderRow(
-                    userName = uiState.currentUser?.fullName?.ifBlank { "Rohan Sharma" } ?: "Rohan Sharma",
-                    roleName = uiState.currentUser?.role?.displayName?.split("/")?.firstOrNull()?.trim() ?: "Stockist",
-                    onRoleClick = onNavigateToSettings
-                )
-
-                // Search Bar
-                SearchBarPill(
-                    onClick = onNavigateToSearch
-                )
-
-                // Category Grid (4x2)
-                CategoryGrid(
-                    onCategoryClick = { onNavigateToCatalogue() }
-                )
-
-                // Top Deals Section
-                TopDealsSection(
-                    onViewAllClick = onNavigateToCatalogue,
-                    onDealClick = { onNavigateToCatalogue() }
-                )
-
-                // Track Your Orders Banner
-                TrackOrdersBanner(
-                    onClick = onNavigateToOrders
-                )
-
-                Spacer(modifier = Modifier.height(14.dp))
-
-                // Reusable Order History Compact Widget
-                com.example.ui.components.OrderHistoryCompactWidget(
-                    transactions = listOf(
-                        com.example.ui.components.OrderTransactionUiModel(
-                            orderId = 1L,
-                            orderNumber = "PO-44820",
-                            formattedDate = "Today, 02:45 PM",
-                            rawEpochMillis = System.currentTimeMillis() - 4 * 3600 * 1000L,
-                            status = com.example.domain.model.OrderStatus.DISPATCHED,
-                            statusStageDescription = "Hub 2 Passed",
-                            buyerName = "Apex Regional Stockist",
-                            supplierName = "MedPlus Wholesale Ltd.",
-                            totalAmount = 71904.0,
-                            formattedTotalAmount = "₹71,904.00",
-                            subtotal = 64200.0,
-                            gstAmount = 7704.0,
-                            deliveryCharge = 0.0,
-                            itemCount = 1500,
-                            itemsSummary = "Paracetamol 500mg (Batch PCM-2024-B1)",
-                            transporterName = "BlueDart Express",
-                            vehicleNumber = "DL-01-AB-4200",
-                            expectedDeliveryDate = "Tomorrow, 11:30 AM"
-                        ),
-                        com.example.ui.components.OrderTransactionUiModel(
-                            orderId = 2L,
-                            orderNumber = "PO-44815",
-                            formattedDate = "Yesterday, 11:15 AM",
-                            rawEpochMillis = System.currentTimeMillis() - 24 * 3600 * 1000L,
-                            status = com.example.domain.model.OrderStatus.PACKED,
-                            statusStageDescription = "Serialization & QC Done",
-                            buyerName = "Apex Regional Stockist",
-                            supplierName = "Fortis Healthcare Chain",
-                            totalAmount = 140000.0,
-                            formattedTotalAmount = "₹1,40,000.00",
-                            subtotal = 125000.0,
-                            gstAmount = 15000.0,
-                            deliveryCharge = 0.0,
-                            itemCount = 2000,
-                            itemsSummary = "Amoxicillin 250mg (Batch AMX-2024-C9)"
-                        ),
-                        com.example.ui.components.OrderTransactionUiModel(
-                            orderId = 3L,
-                            orderNumber = "PO-44780",
-                            formattedDate = "10 Nov 2026, 09:20 AM",
-                            rawEpochMillis = System.currentTimeMillis() - 120 * 3600 * 1000L,
-                            status = com.example.domain.model.OrderStatus.DELIVERED,
-                            statusStageDescription = "Delivered & Verified with digital invoice & POD",
-                            buyerName = "Apex Regional Stockist",
-                            supplierName = "Apollo Pharmacy Hub",
-                            totalAmount = 100128.0,
-                            formattedTotalAmount = "₹1,00,128.00",
-                            subtotal = 89400.0,
-                            gstAmount = 10728.0,
-                            deliveryCharge = 0.0,
-                            itemCount = 1200,
-                            itemsSummary = "Azithromycin 500mg, Azithral 500"
-                        )
-                    ),
-                    onOrderClick = { onNavigateToOrders() },
-                    onViewAllClick = onNavigateToOrders
-                )
-
-                if (uiState.isRealTimeInventoryAuthorized) {
-                    Spacer(modifier = Modifier.height(14.dp))
-
-                    // Real-Time Shortage Alerts Dashboard Component (Brand & Manufacturer only)
-                    ShortageAlertsDashboardComponent(
-                        items = uiState.inventoryItems,
-                        onReorderClick = onReorderProduct,
-                        onAdjustStock = onAdjustStock,
-                        onViewAllClick = onNavigateToShortages,
-                        onProductClick = { onNavigateToShortages() }
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .widthIn(max = 840.dp)
+                        .verticalScroll(rememberScrollState())
+                        .padding(horizontal = 16.dp, vertical = 12.dp)
+                        .testTag("dashboard_main_scroll"),
+                    verticalArrangement = Arrangement.spacedBy(16.dp)
+                ) {
+                    // Greeting & Role Header
+                    GreetingHeaderRow(
+                        userName = uiState.currentUser?.fullName?.ifBlank { "Rohan Sharma" } ?: "Rohan Sharma",
+                        roleName = uiState.currentUser?.role?.displayName?.split("/")?.firstOrNull()?.trim() ?: "Stockist",
+                        onRoleClick = onNavigateToSettings
                     )
-                }
 
-                Spacer(modifier = Modifier.height(16.dp))
+                    // Executive 3-Pillar Operations Pulse (Inventory • Trade Alerts • Pending Orders)
+                    DashboardOperationsPulseCard(
+                        uiState = uiState,
+                        onRefreshClick = onRefreshDashboard,
+                        onInventoryClick = if (uiState.isRealTimeInventoryAuthorized) onNavigateToShortages else onNavigateToCatalogue,
+                        onAlertsClick = onNavigateToNotifications,
+                        onPendingOrdersClick = onNavigateToOrders
+                    )
+
+                    // Search Bar
+                    SearchBarPill(
+                        onClick = onNavigateToSearch
+                    )
+
+                    // 1. Current Inventory Overview (RBAC-aware)
+                    CurrentInventoryDashboardSection(
+                        uiState = uiState,
+                        onOpenFullInventory = onNavigateToShortages,
+                        onOpenCatalogue = onNavigateToCatalogue,
+                        onOpenBasket = onNavigateToBasket
+                    )
+
+                    // 2. Active Trade Alerts
+                    ActiveTradeAlertsSection(
+                        alerts = uiState.activeTradeAlerts,
+                        filteredAlerts = uiState.filteredTradeAlerts,
+                        selectedFilter = uiState.selectedAlertFilter,
+                        onSelectFilter = onSelectAlertFilter,
+                        onMarkAlertRead = onMarkAlertRead,
+                        onAlertClick = { alert ->
+                            when (alert.category) {
+                                TradeAlertCategory.ORDER -> onNavigateToOrders()
+                                TradeAlertCategory.INVENTORY,
+                                TradeAlertCategory.EXPIRY,
+                                TradeAlertCategory.RECALL -> {
+                                    if (uiState.isRealTimeInventoryAuthorized) {
+                                        onNavigateToShortages()
+                                    } else {
+                                        onNavigateToNotifications()
+                                    }
+                                }
+                                TradeAlertCategory.SHORTAGE,
+                                TradeAlertCategory.TRADE -> onNavigateToNotifications()
+                            }
+                        },
+                        onViewAllAlerts = onNavigateToNotifications
+                    )
+
+                    // 3. Pending Orders Summary
+                    PendingOrdersSummarySection(
+                        summary = uiState.pendingOrdersSummary,
+                        onOpenOrders = onNavigateToOrders,
+                        onBrowseCatalogue = onNavigateToCatalogue
+                    )
+
+                    // Category Grid (4x2)
+                    CategoryGrid(
+                        onCategoryClick = { onNavigateToCatalogue() }
+                    )
+
+                    // Dynamic Active Manufacturer Offer Banners (auto-hides expired/inactive)
+                    if (uiState.activeOfferBanners.isNotEmpty()) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("stockist_active_offer_banners"),
+                            verticalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = "Active Trade Offer Banners",
+                                    fontSize = 16.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.onBackground
+                                )
+                                Text(
+                                    text = "${uiState.activeOfferBanners.size} live",
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                            }
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .horizontalScroll(rememberScrollState()),
+                                horizontalArrangement = Arrangement.spacedBy(12.dp)
+                            ) {
+                                uiState.activeOfferBanners.forEach { banner ->
+                                    Box(modifier = Modifier.width(308.dp)) {
+                                        com.example.ui.components.OfferBannerShowcaseCard(
+                                            banner = banner,
+                                            onActionClick = { onOpenOfferBanner(banner) }
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // Dynamic Published Medicine Announcements
+                    if (uiState.publishedAnnouncements.isNotEmpty()) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("stockist_medicine_announcements"),
+                            verticalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            Text(
+                                text = "Medicine Launch & Trade Updates",
+                                fontSize = 16.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onBackground
+                            )
+                            uiState.publishedAnnouncements.take(3).forEach { announcement ->
+                                com.example.ui.components.MedicineAnnouncementCard(
+                                    announcement = announcement,
+                                    onClick = onNavigateToCatalogue
+                                )
+                            }
+                        }
+                    }
+
+                    // Top Deals Section
+                    TopDealsSection(
+                        onViewAllClick = onNavigateToCatalogue,
+                        onDealClick = { onNavigateToCatalogue() }
+                    )
+
+                    // Track Your Orders Banner
+                    TrackOrdersBanner(
+                        onClick = onNavigateToOrders
+                    )
+
+                    // Live Order History Compact Widget (from Room/Backend orders)
+                    if (uiState.recentOrderTransactions.isNotEmpty()) {
+                        com.example.ui.components.OrderHistoryCompactWidget(
+                            transactions = uiState.recentOrderTransactions.take(3),
+                            onOrderClick = { onNavigateToOrders() },
+                            onViewAllClick = onNavigateToOrders
+                        )
+                    }
+
+                    if (uiState.isRealTimeInventoryAuthorized) {
+                        // Real-Time Shortage Alerts Dashboard Component (Brand & Manufacturer only)
+                        ShortageAlertsDashboardComponent(
+                            items = uiState.inventoryItems,
+                            onReorderClick = onReorderProduct,
+                            onAdjustStock = onAdjustStock,
+                            onViewAllClick = onNavigateToShortages,
+                            onProductClick = { onNavigateToShortages() }
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(16.dp))
+                }
             }
         }
     }
@@ -573,21 +660,21 @@ private fun GreetingHeaderRow(
         Text(
             text = "Good Morning,",
             fontSize = 12.sp,
-            color = Color(0xFF64748B),
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
             fontWeight = FontWeight.Normal
         )
         Text(
             text = userName,
-            fontSize = 18.sp,
+            fontSize = 20.sp,
             fontWeight = FontWeight.Bold,
-            color = Color(0xFF0F172A),
+            color = MaterialTheme.colorScheme.onBackground,
             modifier = Modifier.testTag("dashboard_greeting_name")
         )
         Spacer(modifier = Modifier.height(4.dp))
         Surface(
             shape = RoundedCornerShape(12.dp),
-            color = Color(0xFFF1F5F9),
-            border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFE2E8F0)),
+            color = MaterialTheme.colorScheme.surfaceVariant,
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
             modifier = Modifier
                 .clickable { onRoleClick() }
                 .testTag("dashboard_role_pill")
@@ -600,13 +687,13 @@ private fun GreetingHeaderRow(
                     text = roleName,
                     fontSize = 12.sp,
                     fontWeight = FontWeight.Medium,
-                    color = Color(0xFF334155)
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 Spacer(modifier = Modifier.width(4.dp))
                 Icon(
                     imageVector = Icons.Default.KeyboardArrowDown,
                     contentDescription = "Role Selector",
-                    tint = Color(0xFF64748B),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.size(16.dp)
                 )
             }
@@ -1153,6 +1240,7 @@ private fun PharmaOSBottomBar(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
+                .navigationBarsPadding()
                 .padding(horizontal = 8.dp, vertical = 6.dp),
             horizontalArrangement = Arrangement.SpaceAround,
             verticalAlignment = Alignment.CenterVertically
@@ -1271,10 +1359,12 @@ private fun BottomNavItem(
 private fun DashboardDrawerContent(
     currentUser: com.example.domain.model.AuthUser?,
     cartItemCount: Int = 0,
+    stockistPurchasedInventoryCount: Int = 0,
     onCloseDrawer: () -> Unit,
     onNavigateToCatalogue: () -> Unit,
     onNavigateToOrders: () -> Unit,
     onNavigateToBasket: () -> Unit,
+    onNavigateToStockistPurchasedInventory: () -> Unit = {},
     onNavigateToOptimizer: () -> Unit,
     onNavigateToOcr: () -> Unit,
     onNavigateToBatches: () -> Unit,
@@ -1587,6 +1677,63 @@ private fun DashboardDrawerContent(
                         tint = MaterialTheme.colorScheme.outline,
                         modifier = Modifier.size(18.dp)
                     )
+                }
+
+                // Stockist Purchased Inventory (Strictly isolated from Manufacturer warehouse inventory)
+                if (currentUser?.hasPermission(com.example.domain.model.PharmaPermission.STOCKIST_INVENTORY_MANAGE) == true) {
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(14.dp))
+                            .clickable { onNavigateToStockistPurchasedInventory() }
+                            .padding(horizontal = 10.dp, vertical = 10.dp)
+                            .testTag("drawer_item_stockist_purchased_inventory"),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(36.dp)
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(Color(0xFFECFDF5)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Inventory2,
+                                contentDescription = null,
+                                tint = Color(0xFF047857),
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "My Purchased Inventory",
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 14.sp,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Text(
+                                text = "Your own received stock only",
+                                fontSize = 10.5.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        if (stockistPurchasedInventoryCount > 0) {
+                            Surface(
+                                shape = RoundedCornerShape(12.dp),
+                                color = Color(0xFF059669)
+                            ) {
+                                Text(
+                                    text = "$stockistPurchasedInventoryCount",
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color.White,
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                                )
+                            }
+                        }
+                    }
                 }
 
                 if (currentUser?.role?.canAccessRealTimeInventory == true) {

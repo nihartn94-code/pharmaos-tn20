@@ -39,7 +39,12 @@ data class UserDto(
     @param:Json(name = "createdAtEpochMillis") val createdAtEpochMillis: Long = System.currentTimeMillis(),
     @param:Json(name = "emailVerified") val emailVerified: Boolean = false,
     @param:Json(name = "phoneVerified") val phoneVerified: Boolean = false,
-    @param:Json(name = "profileBio") val profileBio: String? = null
+    @param:Json(name = "profileBio") val profileBio: String? = null,
+    @param:Json(name = "organizationId") val organizationId: Long? = null,
+    @param:Json(name = "organizationType") val organizationType: String? = null,
+    @param:Json(name = "organizationName") val organizationName: String? = null,
+    @param:Json(name = "roles") val roles: List<String>? = null,
+    @param:Json(name = "permissions") val permissions: List<String>? = null
 ) {
     fun toAuthUser(): AuthUser {
         val parsedRole = try {
@@ -52,6 +57,21 @@ data class UserDto(
         } catch (_: Exception) {
             AccountStatus.ACTIVE
         }
+        val parsedRoles = roles
+            ?.mapNotNull { raw -> UserRole.entries.firstOrNull { it.name.equals(raw.trim(), ignoreCase = true) } }
+            ?.toSet()
+            ?.takeIf { it.isNotEmpty() }
+            ?: setOf(parsedRole)
+        val explicitPermissions = permissions
+            ?.mapNotNull { raw ->
+                com.example.domain.model.PharmaPermission.entries.firstOrNull {
+                    it.name.equals(raw.trim(), ignoreCase = true)
+                }
+            }
+            ?.toSet()
+            ?: emptySet()
+        val resolvedOrgType = com.example.domain.model.OrganizationType.fromString(organizationType, parsedRole)
+        val resolvedOrgId = organizationId?.takeIf { it > 0L } ?: id
         return AuthUser(
             id = id,
             fullName = fullName,
@@ -64,7 +84,15 @@ data class UserDto(
             status = parsedStatus,
             emailVerified = emailVerified,
             phoneVerified = phoneVerified,
-            profileBio = profileBio
+            profileBio = profileBio,
+            organizationId = resolvedOrgId,
+            organizationType = resolvedOrgType,
+            organizationName = organizationName?.takeIf { it.isNotBlank() } ?: businessName,
+            assignedRoles = parsedRoles,
+            permissions = com.example.domain.model.RolePermissionMatrix.resolvePermissions(
+                roles = parsedRoles,
+                explicitPermissions = explicitPermissions
+            )
         )
     }
 
@@ -73,6 +101,25 @@ data class UserDto(
      * Password hashes are intentionally never returned by or synced from the backend.
      */
     fun toUserEntityCache(): UserEntity {
+        val parsedRole = UserRole.fromString(role)
+        val parsedRoles = roles
+            ?.mapNotNull { raw -> UserRole.entries.firstOrNull { it.name.equals(raw.trim(), ignoreCase = true) } }
+            ?.toSet()
+            ?.takeIf { it.isNotEmpty() }
+            ?: setOf(parsedRole)
+        val explicitPermissions = permissions
+            ?.mapNotNull { raw ->
+                com.example.domain.model.PharmaPermission.entries.firstOrNull {
+                    it.name.equals(raw.trim(), ignoreCase = true)
+                }
+            }
+            ?.toSet()
+            ?: emptySet()
+        val resolvedPermissions = com.example.domain.model.RolePermissionMatrix.resolvePermissions(
+            roles = parsedRoles,
+            explicitPermissions = explicitPermissions
+        )
+        val resolvedOrgType = com.example.domain.model.OrganizationType.fromString(organizationType, parsedRole)
         return UserEntity(
             id = id,
             fullName = fullName,
@@ -83,12 +130,17 @@ data class UserDto(
             address = address,
             passwordHash = "",
             passwordSalt = "",
-            role = role.uppercase(),
+            role = parsedRole.name,
             status = status.uppercase(),
             createdAtEpochMillis = createdAtEpochMillis,
             emailVerified = emailVerified,
             phoneVerified = phoneVerified,
-            profileBio = profileBio
+            profileBio = profileBio,
+            organizationId = organizationId?.takeIf { it > 0L } ?: id,
+            organizationType = resolvedOrgType.name,
+            organizationName = organizationName?.takeIf { it.isNotBlank() } ?: businessName,
+            assignedRolesCsv = com.example.domain.model.RolePermissionMatrix.rolesToCsv(parsedRoles),
+            permissionsCsv = com.example.domain.model.PharmaPermission.toCsv(resolvedPermissions)
         )
     }
 }

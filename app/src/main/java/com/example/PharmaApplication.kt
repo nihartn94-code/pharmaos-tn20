@@ -40,7 +40,13 @@ class PharmaApplication : Application() {
     lateinit var pharmaRemoteDataSource: PharmaRemoteDataSource
         private set
 
+    lateinit var workspaceRemoteDataSource: com.example.data.remote.source.WorkspaceRemoteDataSource
+        private set
+
     lateinit var repository: PharmaRepository
+        private set
+
+    lateinit var workspaceRepository: com.example.domain.repository.WorkspaceRepository
         private set
 
     lateinit var productRepository: com.example.data.repository.ProductRepository
@@ -65,6 +71,7 @@ class PharmaApplication : Application() {
         networkModule = NetworkModule(tokenProvider = dataStoreManager)
         authRemoteDataSource = AuthRemoteDataSource(networkModule)
         pharmaRemoteDataSource = PharmaRemoteDataSource(networkModule)
+        workspaceRemoteDataSource = com.example.data.remote.source.WorkspaceRemoteDataSource(networkModule)
 
         repository = PharmaRepositoryImpl(
             db = database,
@@ -75,6 +82,12 @@ class PharmaApplication : Application() {
             authRemoteDataSource = authRemoteDataSource,
             pharmaRemoteDataSource = pharmaRemoteDataSource,
             networkModule = networkModule
+        )
+        workspaceRepository = com.example.data.repository.WorkspaceRepositoryImpl(
+            db = database,
+            dataStoreManager = dataStoreManager,
+            pharmaRepository = repository,
+            remoteDataSource = workspaceRemoteDataSource
         )
         productRepository = com.example.data.repository.ProductRepository(
             productDao = database.productDao(),
@@ -114,16 +127,10 @@ class PharmaApplication : Application() {
             try {
                 dataStoreManager.authExecutionModeFlow.collect { mode ->
                     isRemoteSyncActive = mode == AuthExecutionMode.PRODUCTION_BACKEND_HTTP
-                }
-            } catch (_: Exception) {
-            }
-        }
-
-        appIoScope.launch {
-            try {
-                // Keep local dev manufacturer test instance available when using Development Local Mode
-                if (dataStoreManager.authExecutionModeFlow.first() == AuthExecutionMode.DEVELOPMENT_LOCAL_MODE) {
-                    repository.ensureDefaultManufacturerUser()
+                    if (mode == AuthExecutionMode.DEVELOPMENT_LOCAL_MODE) {
+                        repository.ensureDefaultManufacturerUser()
+                        workspaceRepository.ensureWorkspaceSeededForLocalDev()
+                    }
                 }
             } catch (_: Exception) {
                 // Ignore in test runners

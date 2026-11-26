@@ -3,7 +3,7 @@ package com.example.domain.model
 enum class UserRole(val displayName: String) {
     ADMIN("Administrator"),
     MANUFACTURER("Manufacturer"),
-    PHARMA_COMPANY("Pharmaceutical Company / Brand"),
+    PHARMA_COMPANY("Company"),
     STOCKIST("Stockist / Distributor");
 
     val isSupplier: Boolean
@@ -106,7 +106,12 @@ enum class NotificationType {
     EXPIRY_ALERT,
     RECALL_ALERT,
     RETURN_UPDATE,
-    SHORTAGE_RISK
+    SHORTAGE_RISK,
+    MEDICINE_SUBMITTED,
+    MEDICINE_APPROVED,
+    MEDICINE_REJECTED,
+    BANNER_PUBLISHED,
+    MEDICINE_ANNOUNCEMENT
 }
 
 data class AuthUser(
@@ -121,8 +126,26 @@ data class AuthUser(
     val status: AccountStatus,
     val emailVerified: Boolean = false,
     val phoneVerified: Boolean = false,
-    val profileBio: String? = null
-)
+    val profileBio: String? = null,
+    val organizationId: Long = id,
+    val organizationType: OrganizationType = OrganizationType.fromString(null, role),
+    val organizationName: String = businessName,
+    val assignedRoles: Set<UserRole> = setOf(role),
+    val permissions: Set<PharmaPermission> = RolePermissionMatrix.resolvePermissions(setOf(role))
+) {
+    fun hasPermission(permission: PharmaPermission): Boolean =
+        permissions.contains(permission) || role == UserRole.ADMIN
+
+    fun authorizedWorkspaces(): List<WorkspaceType> =
+        AccessControlPolicy.authorizedWorkspaces(this)
+
+    fun canSwitchBetweenManufacturerAndCompany(): Boolean {
+        val ws = authorizedWorkspaces()
+        return ws.contains(WorkspaceType.MANUFACTURER) && ws.contains(WorkspaceType.COMPANY)
+    }
+
+    fun defaultWorkspace(): WorkspaceType = AccessControlPolicy.defaultWorkspaceForRole(role)
+}
 
 enum class ContactVerificationChannel(val apiValue: String, val label: String) {
     EMAIL("EMAIL", "Email"),
