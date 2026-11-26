@@ -4,10 +4,14 @@ import okhttp3.Interceptor
 import okhttp3.Response
 
 /**
- * Provides the active JWT access token without blocking the main thread.
+ * Thread-safe token contract used by [AuthInterceptor] and [JwtTokenAuthenticator]
+ * without blocking the main thread.
  */
 interface TokenProvider {
     fun getAccessToken(): String?
+    fun getRefreshToken(): String? = null
+    fun updateTokens(accessToken: String?, refreshToken: String?) {}
+    fun clearTokens() {}
 }
 
 /**

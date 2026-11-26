@@ -594,3 +594,31 @@ users [STOCKIST] (1) ──< (N) stockist_purchased_inventory  (STRICTLY ISOLATE
 4. **Atomic Order & Stock Updates (JDBC):** `POST /api/v1/orders` and `PATCH /api/v1/batches/{batchId}/stock` execute inside explicit `@Transactional` JDBC blocks with `WHERE available_quantity >= :qty`.
 5. **Confirming Contracts:** Once the Spring Boot backend URL and JSON contract are finalized, update either `BuildConfig.PHARMAOS_API_BASE_URL` in `app/build.gradle.kts` or configure it at runtime via the **Configure** button on the Login/Register/Settings screens.
 
+---
+
+## 8. Post-Implementation Security & Stateless Server Verification Checklist `[PENDING LIVE BACKEND]`
+
+> **Verification Honesty Note:** No live Spring Boot backend process is running in this Android build container. All Android client behaviors (JWT Keystore storage, single-flight refresh, fail-closed RBAC, Room 5→6 migration, media upload validation, edit-before-resubmit, idempotency key reuse) are verified locally via JVM/Robolectric tests. The backend checklist below **MUST** be executed once the Spring Boot + PostgreSQL JDBC server is deployed.
+
+### A. Android Client Security & Contract Updates Implemented
+1. **Fail-Closed Auth Context (`GET /api/v1/auth/context`):** In `PRODUCTION_BACKEND_HTTP`, `organizationId` (> 0) and explicit `permissions[]` are mandatory. Missing/empty/invalid permission sets fail closed (`PermissionResolutionStatus.MISSING` / `EXPLICITLY_EMPTY` / `INVALID`) and never default to client role matrices or substitute `userId` for `organizationId`.
+2. **Least-Privilege Company Governance:** Default `PHARMA_COMPANY` role permissions no longer grant `ROLE_ASSIGN` or `ORGANIZATION_MEMBER_MANAGE`. Only designated organization administrators holding explicit `ROLE_ASSIGN` + `ORGANIZATION_MEMBER_MANAGE` (or platform `ADMIN`) may modify organization roles.
+3. **Single-Flight JWT Refresh Rotation (`POST /api/v1/auth/refresh`):** `JwtTokenAuthenticator` synchronizes concurrent `401` responses into one refresh request, rotates both `accessToken` and `refreshToken` inside Android Keystore AES-256-GCM (`SecureTokenStorage`), caps retries to 1 attempt, and emits `sessionExpiredEvents` only on `401`/refresh failure. `403 Forbidden` emits `permissionDeniedEvents` and **never** logs out or clears tokens.
+4. **Edit-Before-Resubmit & Stable Idempotency Keys:** Updating a `DRAFT` or `REJECTED` submission in production executes `PUT /api/v1/medicines/submissions/{id}` before `POST /api/v1/medicines/submissions/{id}/submit`. Retries of a failed operation reuse the same operation-scoped `Idempotency-Key` until terminal success.
+5. **Explicit HSN & GST Validation:** Silent client defaults (`30049099`, `12.0`) have been removed; `hsnCode` (4–8 digits) and `gstRatePercent` (`0`, `5`, `12`, `18`, `28`) must be explicitly provided and validated by the backend as well.
+6. **Multipart Media Upload (`POST /api/v1/media/upload`):** `MediaUploadManager` enforces MIME allowlists (`image/jpeg`, `image/png`, `image/webp` ≤ 5 MB; `application/pdf`, `image/jpeg`, `image/png` ≤ 10 MB) and blocks raw `content://` / `file://` URIs from being persisted to production domain entities.
+
+### B. Stateless Spring Boot + PostgreSQL (JDBC) Backend Verification Checklist
+- [ ] `SessionCreationPolicy.STATELESS` configured in Spring Security `SecurityFilterChain`; zero `HttpSession` / `JSESSIONID` cookies issued.
+- [ ] Zero in-memory session, basket, approval, or rate-limit state stored in Spring singleton beans (horizontal scale-out safe behind load balancer).
+- [ ] Pure `NamedParameterJdbcTemplate` / `JdbcTemplate` with parameterized SQL only (zero Hibernate/JPA dependencies on classpath).
+- [ ] JWT signature verification (`RS256` or rotated `HS256` secret from vault/env), `exp`/`nbf`/`iss` validation, and refresh token rotation with reuse detection persisted in PostgreSQL (`refresh_tokens` table).
+- [ ] Server-side RBAC + `organization_id` tenant scoping enforced on every protected endpoint (never trust client-supplied `organizationId`, `submittedByUserId`, or `roles`).
+- [ ] Public registration endpoint (`POST /api/v1/auth/register`) rejects `ADMIN` self-registration and ignores client-supplied permission lists.
+- [ ] `PUT /api/v1/medicines/submissions/{id}` allows Manufacturer edits **only** when `status IN ('DRAFT', 'REJECTED')` and denies edits on `APPROVED` records (`403`/`409`).
+- [ ] `POST /api/v1/medicines/submissions/{id}/approve` runs inside `@Transactional` JDBC lock (`SELECT ... FOR UPDATE`), rejects self-approval (`403`), inserts into `products` (`APPROVED` + `ACTIVE`), and writes immutable `approval_audit_logs`.
+- [ ] `POST /api/v1/orders` validates every line item's `approval_status = 'APPROVED' AND catalogue_status = 'ACTIVE'` plus atomic `UPDATE supplier_offers SET available_quantity = available_quantity - :qty WHERE id = :id AND available_quantity >= :qty`.
+- [ ] `Idempotency-Key` table (`UNIQUE (user_id, idempotency_key)`) replays identical responses on network retries and rejects payload mismatch with `409 Conflict`.
+- [ ] `POST /api/v1/media/upload` re-validates magic bytes/MIME/size server-side and returns signed/public HTTPS URLs from object storage (S3/GCS/MinIO).
+
+

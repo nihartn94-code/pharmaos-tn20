@@ -74,7 +74,7 @@ import com.example.data.local.entity.UserEntity
         com.example.data.local.entity.StockistPurchasedInventoryEntity::class
     ],
     version = 6,
-    exportSchema = false
+    exportSchema = true
 )
 abstract class AppDatabase : RoomDatabase() {
     abstract fun userDao(): UserDao
@@ -105,7 +105,7 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "pharmaos_database.db"
                 )
-                    .fallbackToDestructiveMigration()
+                    .addMigrations(*AppDatabaseMigrations.ALL_MIGRATIONS)
                     .build()
                 INSTANCE = instance
                 instance

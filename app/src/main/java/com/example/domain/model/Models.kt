@@ -131,10 +131,17 @@ data class AuthUser(
     val organizationType: OrganizationType = OrganizationType.fromString(null, role),
     val organizationName: String = businessName,
     val assignedRoles: Set<UserRole> = setOf(role),
-    val permissions: Set<PharmaPermission> = RolePermissionMatrix.resolvePermissions(setOf(role))
+    val permissions: Set<PharmaPermission> = RolePermissionMatrix.resolvePermissions(setOf(role)),
+    val permissionStatus: PermissionResolutionStatus = PermissionResolutionStatus.CONFIRMED,
+    val isProductionContext: Boolean = false
 ) {
-    fun hasPermission(permission: PharmaPermission): Boolean =
-        permissions.contains(permission) || role == UserRole.ADMIN
+    fun hasPermission(permission: PharmaPermission): Boolean {
+        if (permissionStatus != PermissionResolutionStatus.CONFIRMED) return false
+        return permissions.contains(permission) || (!isProductionContext && role == UserRole.ADMIN)
+    }
+
+    fun hasValidOrganizationContext(): Boolean =
+        role == UserRole.ADMIN || organizationId > 0L
 
     fun authorizedWorkspaces(): List<WorkspaceType> =
         AccessControlPolicy.authorizedWorkspaces(this)
@@ -144,7 +151,8 @@ data class AuthUser(
         return ws.contains(WorkspaceType.MANUFACTURER) && ws.contains(WorkspaceType.COMPANY)
     }
 
-    fun defaultWorkspace(): WorkspaceType = AccessControlPolicy.defaultWorkspaceForRole(role)
+    fun defaultWorkspace(): WorkspaceType =
+        authorizedWorkspaces().firstOrNull() ?: AccessControlPolicy.defaultWorkspaceForRole(role)
 }
 
 enum class ContactVerificationChannel(val apiValue: String, val label: String) {

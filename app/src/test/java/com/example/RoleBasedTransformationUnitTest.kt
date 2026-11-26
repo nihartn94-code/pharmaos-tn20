@@ -329,7 +329,7 @@ class RoleBasedTransformationUnitTest {
         assertTrue(mapped.hasPermission(PharmaPermission.BANNER_CREATE))
         assertTrue(mapped.hasPermission(PharmaPermission.MEDICINE_APPROVE))
 
-        // Legacy backend response without organization/permissions fields still maps safely
+        // Production mode MUST fail closed when backend omits organizationId or permissions
         val legacyDto = UserDto(
             id = 10L,
             fullName = "Legacy Stockist",
@@ -339,10 +339,16 @@ class RoleBasedTransformationUnitTest {
             address = "Pune",
             role = "STOCKIST"
         )
-        val legacyMapped = legacyDto.toAuthUser()
-        assertEquals(OrganizationType.STOCKIST, legacyMapped.organizationType)
-        assertTrue(legacyMapped.hasPermission(PharmaPermission.BASKET_MANAGE))
-        assertFalse(legacyMapped.hasPermission(PharmaPermission.MEDICINE_APPROVE))
+        val legacyProdMapped = legacyDto.toAuthUser(isProductionMode = true)
+        assertEquals(OrganizationType.STOCKIST, legacyProdMapped.organizationType)
+        assertEquals(0L, legacyProdMapped.organizationId)
+        assertFalse(legacyProdMapped.hasPermission(PharmaPermission.BASKET_MANAGE))
+        assertFalse(legacyProdMapped.hasPermission(PharmaPermission.MEDICINE_APPROVE))
+
+        // Isolated local dev mode derives local defaults for test convenience
+        val legacyDevMapped = legacyDto.toAuthUser(isProductionMode = false)
+        assertTrue(legacyDevMapped.hasPermission(PharmaPermission.BASKET_MANAGE))
+        assertFalse(legacyDevMapped.hasPermission(PharmaPermission.MEDICINE_APPROVE))
     }
 
     @Test

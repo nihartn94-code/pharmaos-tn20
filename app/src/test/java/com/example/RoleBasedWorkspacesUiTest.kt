@@ -1,5 +1,14 @@
 package com.example
 
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.width
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
@@ -16,6 +25,7 @@ import com.example.domain.model.OfferBanner
 import com.example.domain.model.OrganizationType
 import com.example.domain.model.RolePermissionMatrix
 import com.example.domain.model.UserRole
+import com.example.ui.components.CompanyBottomBar
 import com.example.ui.components.WorkspaceAccessDeniedScreen
 import com.example.ui.screens.company.CompanyDashboardContent
 import com.example.ui.screens.company.CompanyWorkspaceUiState
@@ -34,7 +44,8 @@ import org.robolectric.annotation.Config
 /**
  * Robolectric Compose UI tests verifying distinct role workspaces,
  * dual-permission workspace switching affordance, unauthorized route guard,
- * Stockist dynamic banners/announcements, and Light & Dark theme rendering.
+ * Stockist dynamic banners/announcements, narrow 320dp + 2.0x font scale responsiveness,
+ * and Light & Dark theme rendering.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [33])
@@ -224,5 +235,80 @@ class RoleBasedWorkspacesUiTest {
 
         composeRule.onNodeWithTag("stockist_active_offer_banners").assertExists()
         composeRule.onNodeWithTag("stockist_medicine_announcements").assertExists()
+    }
+
+    @Test
+    fun manufacturerDashboardRendersAtNarrow320dpWith200PercentFontScaleInDarkTheme() {
+        val uiState = ManufacturerWorkspaceUiState(
+            isAuthorized = true,
+            canSwitchToCompany = true,
+            summary = ManufacturerDashboardSummary(
+                organizationName = "Bharat Bio-Pharma",
+                activeBannersCount = 4,
+                activeCampaignsCount = 2,
+                publishedAnnouncementsCount = 5,
+                pendingSubmissionsCount = 2,
+                approvedProductsCount = 24
+            )
+        )
+
+        composeRule.setContent {
+            val baseDensity = LocalDensity.current
+            CompositionLocalProvider(
+                LocalDensity provides Density(density = baseDensity.density, fontScale = 2.0f)
+            ) {
+                PharmaOSTheme(darkTheme = true) {
+                    Box(modifier = Modifier.width(320.dp)) {
+                        ManufacturerDashboardContent(
+                            uiState = uiState,
+                            onNavigateBanners = {},
+                            onNavigatePromotions = {},
+                            onNavigateUpdates = {},
+                            onNavigateProfile = {},
+                            onNavigateNotifications = {},
+                            onNavigateRealTimeInventory = {},
+                            onNavigateBatches = {},
+                            onNavigateRecalls = {},
+                            onNavigateOrders = {},
+                            onSwitchToCompany = {}
+                        )
+                    }
+                }
+            }
+        }
+
+        composeRule.onNodeWithTag("manufacturer_dashboard_title").assertIsDisplayed()
+        composeRule.onNodeWithTag("workspace_switcher_chip").assertIsDisplayed()
+    }
+
+    @Test
+    fun companyBottomBarUsesSeparateBadgeAtNarrow320dpAndLargeFontScale() {
+        var clickedApprovals = false
+        composeRule.setContent {
+            val baseDensity = LocalDensity.current
+            CompositionLocalProvider(
+                LocalDensity provides Density(density = baseDensity.density, fontScale = 1.6f)
+            ) {
+                PharmaOSTheme(darkTheme = false) {
+                    Column(modifier = Modifier.width(320.dp).fillMaxSize()) {
+                        CompanyBottomBar(
+                            selectedTab = "home",
+                            pendingApprovalsCount = 12,
+                            onNavigateHome = {},
+                            onNavigateCatalogue = {},
+                            onNavigateApprovals = { clickedApprovals = true },
+                            onNavigateManagement = {},
+                            onNavigateProfile = {}
+                        )
+                    }
+                }
+            }
+        }
+
+        composeRule.onNodeWithTag("company_nav_approvals").assertIsDisplayed()
+        composeRule.onNodeWithTag("company_nav_approvals_badge", useUnmergedTree = true).assertIsDisplayed()
+        composeRule.onNodeWithText("12", useUnmergedTree = true).assertIsDisplayed()
+        composeRule.onNodeWithTag("company_nav_approvals").performClick()
+        assertTrue(clickedApprovals)
     }
 }

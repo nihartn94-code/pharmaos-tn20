@@ -49,7 +49,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.foundation.horizontalScroll
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.data.remote.upload.MediaUploadKind
+import com.example.data.remote.upload.MediaUploadState
 import com.example.domain.model.MedicineSubmission
 import com.example.domain.model.UserRole
 import com.example.ui.components.WorkspaceAccessDeniedScreen
@@ -70,6 +75,7 @@ fun CompanyAddMedicineScreen(
     onSubmittedSuccess: () -> Unit
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+    val uploadState by viewModel.mediaUploadState.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
 
     // Section 1: Basic Information
@@ -87,25 +93,31 @@ fun CompanyAddMedicineScreen(
     var therapeuticCategory by remember { mutableStateOf("General Medicine") }
     var isRx by remember { mutableStateOf(true) }
 
-    // Section 3: Commercial Information
+    // Section 3: Commercial Information (Explicit required HSN & GST — no silent tax defaults)
     var mrp by remember { mutableStateOf("") }
     var ptr by remember { mutableStateOf("") }
-    var hsnCode by remember { mutableStateOf("30049099") }
-    var gstPercent by remember { mutableStateOf("12.0") }
+    var hsnCode by remember { mutableStateOf("") }
+    var gstPercent by remember { mutableStateOf("") }
     var skuCode by remember { mutableStateOf("") }
 
     // Section 4: Supporting Information
     var description by remember { mutableStateOf("") }
     var regulatoryId by remember { mutableStateOf("") }
-    var imageUri by remember { mutableStateOf<String?>(null) }
+    var persistedImageUrl by remember { mutableStateOf<String?>(null) }
 
     var showPreviewDialog by remember { mutableStateOf(false) }
 
     val photoPicker = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.PickVisualMedia()
     ) { uri ->
-        if (uri != null) imageUri = uri.toString()
+        if (uri != null) {
+            viewModel.uploadMedicineMedia(uri, MediaUploadKind.IMAGE) { remoteUrl ->
+                persistedImageUrl = remoteUrl
+            }
+        }
     }
+
+    val isUploadInFlight = uploadState is MediaUploadState.Validating || uploadState is MediaUploadState.Uploading
 
     LaunchedEffect(medicineName, brandName, saltComposition, strength, dosageForm) {
         if (medicineName.length >= 3 || saltComposition.length >= 3) {
@@ -148,11 +160,11 @@ fun CompanyAddMedicineScreen(
         isRx = isRx,
         mrp = mrp.toDoubleOrNull() ?: 0.0,
         wholesaleRatePtr = ptr.toDoubleOrNull() ?: 0.0,
-        hsnCode = hsnCode,
-        gstRatePercent = gstPercent.toDoubleOrNull() ?: 12.0,
+        hsnCode = hsnCode.trim(),
+        gstRatePercent = gstPercent.toDoubleOrNull() ?: -1.0,
         skuCode = skuCode,
         description = description,
-        imageUrl = imageUri,
+        imageUrl = persistedImageUrl,
         regulatoryIdentifier = regulatoryId.ifBlank { null }
     )
 
@@ -247,8 +259,34 @@ fun CompanyAddMedicineScreen(
                     OutlinedTextField(value = ptr, onValueChange = { ptr = it }, label = { Text("PTR / Wholesale (₹)") }, singleLine = true, modifier = Modifier.weight(1f))
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedTextField(value = hsnCode, onValueChange = { hsnCode = it }, label = { Text("HSN Code") }, singleLine = true, modifier = Modifier.weight(1f))
-                    OutlinedTextField(value = gstPercent, onValueChange = { gstPercent = it }, label = { Text("GST %") }, singleLine = true, modifier = Modifier.weight(1f))
+                    OutlinedTextField(
+                        value = hsnCode,
+                        onValueChange = { hsnCode = it.filter(Char::isDigit).take(8) },
+                        label = { Text("HSN Code*") },
+                        placeholder = { Text("e.g. 30042019") },
+                        singleLine = true,
+                        modifier = Modifier.weight(1f).testTag("add_med_hsn")
+                    )
+                    OutlinedTextField(
+                        value = gstPercent,
+                        onValueChange = { gstPercent = it },
+                        label = { Text("GST %*") },
+                        placeholder = { Text("0, 5, 12, 18, 28") },
+                        singleLine = true,
+                        modifier = Modifier.weight(1f).testTag("add_med_gst")
+                    )
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    listOf("0", "5", "12", "18", "28").forEach { slab ->
+                        FilterChip(
+                            selected = gstPercent.toDoubleOrNull() == slab.toDouble(),
+                            onClick = { gstPercent = slab },
+                            label = { Text("$slab% GST") }
+                        )
+                    }
                 }
                 OutlinedTextField(value = skuCode, onValueChange = { skuCode = it }, label = { Text("Internal SKU / Product Code") }, singleLine = true, modifier = Modifier.fillMaxWidth())
             }
@@ -257,13 +295,69 @@ fun CompanyAddMedicineScreen(
                 OutlinedTextField(value = description, onValueChange = { description = it }, label = { Text("Clinical / Commercial Description") }, minLines = 3, modifier = Modifier.fillMaxWidth())
                 OutlinedTextField(value = regulatoryId, onValueChange = { regulatoryId = it }, label = { Text("CDSCO / Regulatory Identifier") }, singleLine = true, modifier = Modifier.fillMaxWidth())
                 OutlinedButton(
+                    enabled = !isUploadInFlight,
                     onClick = {
                         photoPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
                     },
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier.fillMaxWidth().testTag("add_med_pick_image_btn")
                 ) {
                     Icon(Icons.Default.Image, contentDescription = null)
-                    Text(if (imageUri == null) "Attach Medicine Pack Image (Photo Picker)" else "Change Attached Pack Image")
+                    Text(
+                        text = if (persistedImageUrl == null) "Attach Medicine Pack Image (Photo Picker)" else "Change Attached Pack Image",
+                        modifier = Modifier.padding(start = 6.dp)
+                    )
+                }
+                when (val currentUpload = uploadState) {
+                    is MediaUploadState.Validating -> {
+                        Text("Validating selected file...", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
+                        LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                    }
+                    is MediaUploadState.Uploading -> {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "Uploading ${currentUpload.fileName} (${(currentUpload.progress * 100).toInt()}%)",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.weight(1f)
+                            )
+                            TextButton(onClick = { viewModel.cancelMedicineMediaUpload() }) { Text("Cancel") }
+                        }
+                        LinearProgressIndicator(progress = { currentUpload.progress }, modifier = Modifier.fillMaxWidth())
+                    }
+                    is MediaUploadState.Success -> {
+                        Text(
+                            text = "Pack image uploaded (${currentUpload.contentType})",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                    is MediaUploadState.Failed -> {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = currentUpload.message,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.error,
+                                modifier = Modifier.weight(1f)
+                            )
+                            if (currentUpload.retryable) {
+                                TextButton(onClick = { viewModel.retryMedicineMediaUpload { persistedImageUrl = it } }) {
+                                    Text("Retry")
+                                }
+                            }
+                        }
+                    }
+                    MediaUploadState.Cancelled -> {
+                        Text("Upload cancelled.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    MediaUploadState.Idle -> Unit
                 }
             }
 
@@ -272,14 +366,14 @@ fun CompanyAddMedicineScreen(
                 horizontalArrangement = Arrangement.spacedBy(10.dp)
             ) {
                 OutlinedButton(
-                    enabled = !uiState.isSaving,
+                    enabled = !uiState.isSaving && !isUploadInFlight,
                     onClick = { viewModel.saveMedicineDraft(buildSubmission(), onSubmittedSuccess) },
                     modifier = Modifier.weight(1f).testTag("add_med_save_draft_btn")
                 ) {
                     Text("Save Draft")
                 }
                 Button(
-                    enabled = !uiState.isSaving,
+                    enabled = !uiState.isSaving && !isUploadInFlight,
                     onClick = { viewModel.submitNewMedicine(buildSubmission(), onSubmittedSuccess) },
                     modifier = Modifier.weight(1f).testTag("add_med_submit_btn")
                 ) {

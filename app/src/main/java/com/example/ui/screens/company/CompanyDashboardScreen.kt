@@ -19,6 +19,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AddBox
 import androidx.compose.material.icons.filled.Apartment
 import androidx.compose.material.icons.filled.Approval
+import androidx.compose.material.icons.filled.Groups
 import androidx.compose.material.icons.filled.Medication
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Tune
@@ -50,6 +51,8 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.domain.model.CompanyDashboardSummary
 import com.example.domain.model.WorkspaceType
 import com.example.ui.components.CompanyBottomBar
+import com.example.ui.components.DashboardKpiCardModel
+import com.example.ui.components.ResponsiveKpiGrid
 import com.example.ui.components.WorkspaceAccessDeniedScreen
 import com.example.ui.components.WorkspaceSwitcherChip
 import com.example.ui.components.WorkspaceSwitcherDialog
@@ -195,16 +198,42 @@ fun CompanyDashboardContent(
             }
 
             item {
-                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                        CompanyKpiCard("Pending Approvals", uiState.summary.pendingApprovalsCount.toString(), "Awaiting review", Modifier.weight(1f), onNavigateApprovals)
-                        CompanyKpiCard("Active Catalogue", uiState.summary.activeCatalogueCount.toString(), "${uiState.summary.totalCatalogueCount} total SKUs", Modifier.weight(1f), onNavigateCatalogue)
-                    }
-                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                        CompanyKpiCard("Master Data", uiState.summary.masterDataEntriesCount.toString(), "Salts, forms, brands", Modifier.weight(1f), onNavigateManagement)
-                        CompanyKpiCard("Org Members", uiState.summary.organizationMembersCount.toString(), "${uiState.summary.rejectedSubmissionsCount} rejected items", Modifier.weight(1f), onNavigateManagement)
-                    }
-                }
+                ResponsiveKpiGrid(
+                    items = listOf(
+                        DashboardKpiCardModel(
+                            title = "Pending Approvals",
+                            value = uiState.summary.pendingApprovalsCount.toString(),
+                            caption = "Awaiting review",
+                            icon = Icons.Default.Approval,
+                            testTag = "company_kpi_pending",
+                            onClick = onNavigateApprovals
+                        ),
+                        DashboardKpiCardModel(
+                            title = "Active Catalogue",
+                            value = uiState.summary.activeCatalogueCount.toString(),
+                            caption = "${uiState.summary.totalCatalogueCount} total SKUs",
+                            icon = Icons.Default.Medication,
+                            testTag = "company_kpi_catalogue",
+                            onClick = onNavigateCatalogue
+                        ),
+                        DashboardKpiCardModel(
+                            title = "Master Data",
+                            value = uiState.summary.masterDataEntriesCount.toString(),
+                            caption = "Salts, forms, brands",
+                            icon = Icons.Default.Tune,
+                            testTag = "company_kpi_master_data",
+                            onClick = onNavigateManagement
+                        ),
+                        DashboardKpiCardModel(
+                            title = "Org Members",
+                            value = uiState.summary.organizationMembersCount.toString(),
+                            caption = "${uiState.summary.rejectedSubmissionsCount} rejected items",
+                            icon = Icons.Default.Groups,
+                            testTag = "company_kpi_members",
+                            onClick = onNavigateManagement
+                        )
+                    )
+                )
             }
 
             item {
@@ -262,27 +291,6 @@ fun CompanyDashboardContent(
 }
 
 @Composable
-private fun CompanyKpiCard(
-    title: String,
-    value: String,
-    caption: String,
-    modifier: Modifier = Modifier,
-    onClick: () -> Unit
-) {
-    Card(
-        shape = RoundedCornerShape(16.dp),
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-        modifier = modifier.clickable { onClick() }
-    ) {
-        Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            Text(value, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.ExtraBold, color = MaterialTheme.colorScheme.primary)
-            Text(title, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold)
-            Text(caption, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-    }
-}
-
-@Composable
 private fun CompanyModuleCard(
     icon: ImageVector,
     title: String,
@@ -323,8 +331,11 @@ private fun CompanyModuleCard(
     }
 }
 
-@Preview(showBackground = true)
-@Preview(showBackground = true, uiMode = Configuration.UI_MODE_NIGHT_YES)
+@Preview(name = "Company Compact 320dp", widthDp = 320, showBackground = true)
+@Preview(name = "Company Standard 360dp", widthDp = 360, showBackground = true)
+@Preview(name = "Company Large 411dp Font 1.5x", widthDp = 411, fontScale = 1.5f, showBackground = true)
+@Preview(name = "Company Accessibility 2.0x Dark", widthDp = 393, fontScale = 2.0f, uiMode = Configuration.UI_MODE_NIGHT_YES, showBackground = true)
+@Preview(name = "Company Tablet 840dp", widthDp = 840, showBackground = true)
 @Composable
 private fun CompanyDashboardPreview() {
     PharmaOSTheme {

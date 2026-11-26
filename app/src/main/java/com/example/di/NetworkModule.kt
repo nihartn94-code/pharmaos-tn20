@@ -11,9 +11,11 @@ import com.example.data.remote.api.UserApiService
 import com.example.data.remote.config.ApiConfig
 import com.example.data.remote.interceptor.ApiLoggingInterceptor
 import com.example.data.remote.interceptor.AuthInterceptor
+import com.example.data.remote.interceptor.JwtTokenAuthenticator
 import com.example.data.remote.interceptor.TokenProvider
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
+import kotlinx.coroutines.flow.MutableSharedFlow
 import okhttp3.Interceptor
 import okhttp3.OkHttpClient
 import retrofit2.Retrofit
@@ -23,11 +25,12 @@ import java.util.concurrent.TimeUnit
 /**
  * Centralized Retrofit, OkHttp, and Moshi network module for PharmaOS.
  *
- * Supports:
- * - Dynamic backend base URL switching (Emulator / Physical LAN / Production HTTPS)
+ * Security & Reliability Guarantees:
  * - Automatic Bearer token injection via [AuthInterceptor]
- * - Safe logging via [ApiLoggingInterceptor]
- * - Rebuilding service instances cleanly when backend URL is configured at runtime
+ * - Single-flight JWT access token refresh & refresh-token rotation via [JwtTokenAuthenticator]
+ * - Separate HTTP 401 (session expired / refresh failure) vs HTTP 403 (permission denied without logout)
+ * - Scrubbed logging via [ApiLoggingInterceptor] across debug and release builds
+ * - Dedicated refresh-only OkHttpClient without recursive Authenticator
  */
 class NetworkModule(
     private val tokenProvider: TokenProvider,
@@ -38,7 +41,36 @@ class NetworkModule(
         .addLast(KotlinJsonAdapterFactory())
         .build()
 
-    val sessionExpiredEvents = kotlinx.coroutines.flow.MutableSharedFlow<String>(extraBufferCapacity = 1)
+    val sessionExpiredEvents = MutableSharedFlow<String>(extraBufferCapacity = 2)
+    val permissionDeniedEvents = MutableSharedFlow<String>(extraBufferCapacity = 2)
+
+    @Volatile
+    private var currentBaseUrl: String = ApiConfig.normalizeBaseUrl(initialBaseUrl)
+
+    private val loggingInterceptor = ApiLoggingInterceptor()
+
+    /**
+     * Dedicated refresh-only HTTP client (no Authenticator) to avoid recursive 401 loops.
+     */
+    private val refreshOkHttpClient: OkHttpClient = OkHttpClient.Builder()
+        .connectTimeout(ApiConfig.CONNECT_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+        .readTimeout(ApiConfig.READ_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+        .writeTimeout(ApiConfig.WRITE_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+        .apply {
+            extraInterceptors.forEach { addInterceptor(it) }
+        }
+        .addInterceptor(loggingInterceptor)
+        .build()
+
+    private val jwtAuthenticator = JwtTokenAuthenticator(
+        tokenProvider = tokenProvider,
+        refreshHttpClient = refreshOkHttpClient,
+        moshi = moshi,
+        baseUrlProvider = { currentBaseUrl },
+        onSessionExpired = { reason ->
+            sessionExpiredEvents.tryEmit(reason)
+        }
+    )
 
     val okHttpClient: OkHttpClient = OkHttpClient.Builder()
         .connectTimeout(ApiConfig.CONNECT_TIMEOUT_SECONDS, TimeUnit.SECONDS)
@@ -48,24 +80,18 @@ class NetworkModule(
         .addInterceptor(Interceptor { chain ->
             val request = chain.request()
             val response = chain.proceed(request)
-            val path = request.url.encodedPath
-            val isPublicAuth = path.endsWith("/auth/login") ||
-                path.endsWith("/auth/register") ||
-                path.endsWith("/auth/google") ||
-                path.endsWith("/auth/refresh")
-            if (response.code == 401 && !isPublicAuth) {
-                sessionExpiredEvents.tryEmit("Your session has expired. Please sign in again.")
+            // HTTP 403 Forbidden is an authorization denial, NEVER an expired session logout.
+            if (response.code == 403) {
+                permissionDeniedEvents.tryEmit("Access denied: you do not have permission for this action.")
             }
             response
         })
+        .authenticator(jwtAuthenticator)
         .apply {
             extraInterceptors.forEach { addInterceptor(it) }
         }
-        .addInterceptor(ApiLoggingInterceptor())
+        .addInterceptor(loggingInterceptor)
         .build()
-
-    @Volatile
-    private var currentBaseUrl: String = ApiConfig.normalizeBaseUrl(initialBaseUrl)
 
     @Volatile
     private var retrofit: Retrofit = buildRetrofit(currentBaseUrl)

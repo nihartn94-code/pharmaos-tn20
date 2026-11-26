@@ -4,10 +4,13 @@ import android.content.res.Configuration
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -18,10 +21,12 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AddCircle
 import androidx.compose.material.icons.filled.Campaign
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Factory
 import androidx.compose.material.icons.filled.Inventory
 import androidx.compose.material.icons.filled.LocalOffer
 import androidx.compose.material.icons.filled.Notifications
+import androidx.compose.material.icons.filled.PendingActions
 import androidx.compose.material.icons.filled.Science
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Badge
@@ -45,16 +50,20 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.domain.model.BannerStatus
 import com.example.domain.model.ManufacturerDashboardSummary
 import com.example.domain.model.WorkspaceType
+import com.example.ui.components.DashboardKpiCardModel
 import com.example.ui.components.ManufacturerBottomBar
 import com.example.ui.components.OfferBannerShowcaseCard
+import com.example.ui.components.ResponsiveKpiGrid
 import com.example.ui.components.WorkspaceAccessDeniedScreen
 import com.example.ui.components.WorkspaceSwitcherChip
 import com.example.ui.components.WorkspaceSwitcherDialog
@@ -211,22 +220,42 @@ fun ManufacturerDashboardContent(
             }
 
             item {
-                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(10.dp)
-                    ) {
-                        MfgKpiCard("Active Banners", uiState.summary.activeBannersCount.toString(), "Live to Stockists", Modifier.weight(1f), onNavigateBanners)
-                        MfgKpiCard("Active Campaigns", uiState.summary.activeCampaignsCount.toString(), "Trade schemes", Modifier.weight(1f), onNavigatePromotions)
-                    }
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(10.dp)
-                    ) {
-                        MfgKpiCard("Pending Approvals", uiState.summary.pendingSubmissionsCount.toString(), "${uiState.summary.rejectedSubmissionsCount} rejected", Modifier.weight(1f), onNavigateUpdates)
-                        MfgKpiCard("Approved SKUs", uiState.summary.approvedProductsCount.toString(), "${uiState.summary.publishedAnnouncementsCount} updates live", Modifier.weight(1f), onNavigateBanners)
-                    }
-                }
+                ResponsiveKpiGrid(
+                    items = listOf(
+                        DashboardKpiCardModel(
+                            title = "Active Banners",
+                            value = uiState.summary.activeBannersCount.toString(),
+                            caption = "Live to Stockists",
+                            icon = Icons.Default.LocalOffer,
+                            testTag = "mfg_kpi_banners",
+                            onClick = onNavigateBanners
+                        ),
+                        DashboardKpiCardModel(
+                            title = "Active Campaigns",
+                            value = uiState.summary.activeCampaignsCount.toString(),
+                            caption = "Trade schemes",
+                            icon = Icons.Default.Campaign,
+                            testTag = "mfg_kpi_campaigns",
+                            onClick = onNavigatePromotions
+                        ),
+                        DashboardKpiCardModel(
+                            title = "Pending Approvals",
+                            value = uiState.summary.pendingSubmissionsCount.toString(),
+                            caption = "${uiState.summary.rejectedSubmissionsCount} rejected",
+                            icon = Icons.Default.PendingActions,
+                            testTag = "mfg_kpi_pending",
+                            onClick = onNavigateUpdates
+                        ),
+                        DashboardKpiCardModel(
+                            title = "Approved SKUs",
+                            value = uiState.summary.approvedProductsCount.toString(),
+                            caption = "${uiState.summary.publishedAnnouncementsCount} updates live",
+                            icon = Icons.Default.CheckCircle,
+                            testTag = "mfg_kpi_approved",
+                            onClick = onNavigateBanners
+                        )
+                    )
+                )
             }
 
             item {
@@ -296,22 +325,34 @@ fun ManufacturerDashboardContent(
             }
 
             item {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    MfgOperationalChip(Icons.Default.Inventory, "Real-Time Inventory", Modifier.weight(1f), "mfg_op_inventory", onNavigateRealTimeInventory)
-                    MfgOperationalChip(Icons.Default.Science, "Batches & Expiry", Modifier.weight(1f), "mfg_op_batches", onNavigateBatches)
-                }
-            }
-
-            item {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    MfgOperationalChip(Icons.Default.Warning, "Batch Recalls", Modifier.weight(1f), "mfg_op_recalls", onNavigateRecalls)
-                    MfgOperationalChip(Icons.Default.Factory, "Incoming Orders (${uiState.summary.incomingOrdersCount})", Modifier.weight(1f), "mfg_op_orders", onNavigateOrders)
+                val fontScale = LocalDensity.current.fontScale
+                BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+                    val stackChips = maxWidth < 340.dp || fontScale >= 1.45f
+                    if (stackChips) {
+                        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                            MfgOperationalChip(Icons.Default.Inventory, "Real-Time Inventory", Modifier.fillMaxWidth(), "mfg_op_inventory", onNavigateRealTimeInventory)
+                            MfgOperationalChip(Icons.Default.Science, "Batches & Expiry", Modifier.fillMaxWidth(), "mfg_op_batches", onNavigateBatches)
+                            MfgOperationalChip(Icons.Default.Warning, "Batch Recalls", Modifier.fillMaxWidth(), "mfg_op_recalls", onNavigateRecalls)
+                            MfgOperationalChip(Icons.Default.Factory, "Incoming Orders (${uiState.summary.incomingOrdersCount})", Modifier.fillMaxWidth(), "mfg_op_orders", onNavigateOrders)
+                        }
+                    } else {
+                        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth().height(IntrinsicSize.Max),
+                                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
+                                MfgOperationalChip(Icons.Default.Inventory, "Real-Time Inventory", Modifier.weight(1f).fillMaxHeight(), "mfg_op_inventory", onNavigateRealTimeInventory)
+                                MfgOperationalChip(Icons.Default.Science, "Batches & Expiry", Modifier.weight(1f).fillMaxHeight(), "mfg_op_batches", onNavigateBatches)
+                            }
+                            Row(
+                                modifier = Modifier.fillMaxWidth().height(IntrinsicSize.Max),
+                                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
+                                MfgOperationalChip(Icons.Default.Warning, "Batch Recalls", Modifier.weight(1f).fillMaxHeight(), "mfg_op_recalls", onNavigateRecalls)
+                                MfgOperationalChip(Icons.Default.Factory, "Incoming Orders (${uiState.summary.incomingOrdersCount})", Modifier.weight(1f).fillMaxHeight(), "mfg_op_orders", onNavigateOrders)
+                            }
+                        }
+                    }
                 }
             }
 
@@ -329,27 +370,6 @@ fun ManufacturerDashboardContent(
             },
             onDismiss = { showWorkspaceDialog = false }
         )
-    }
-}
-
-@Composable
-private fun MfgKpiCard(
-    title: String,
-    value: String,
-    caption: String,
-    modifier: Modifier = Modifier,
-    onClick: () -> Unit
-) {
-    Card(
-        shape = RoundedCornerShape(16.dp),
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-        modifier = modifier.clickable { onClick() }
-    ) {
-        Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            Text(value, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.ExtraBold, color = MaterialTheme.colorScheme.primary)
-            Text(title, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold)
-            Text(caption, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
     }
 }
 
@@ -416,13 +436,22 @@ private fun MfgOperationalChip(
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             Icon(icon, contentDescription = label, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(20.dp))
-            Text(label, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold)
+            Text(
+                text = label,
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
+            )
         }
     }
 }
 
-@Preview(showBackground = true)
-@Preview(showBackground = true, uiMode = Configuration.UI_MODE_NIGHT_YES)
+@Preview(name = "Mfg Compact 320dp", widthDp = 320, showBackground = true)
+@Preview(name = "Mfg Standard 360dp", widthDp = 360, showBackground = true)
+@Preview(name = "Mfg Large 411dp Font 1.5x", widthDp = 411, fontScale = 1.5f, showBackground = true)
+@Preview(name = "Mfg Accessibility 2.0x Dark", widthDp = 393, fontScale = 2.0f, uiMode = Configuration.UI_MODE_NIGHT_YES, showBackground = true)
+@Preview(name = "Mfg Tablet 840dp", widthDp = 840, showBackground = true)
 @Composable
 private fun ManufacturerDashboardPreview() {
     PharmaOSTheme {

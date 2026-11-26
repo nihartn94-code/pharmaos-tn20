@@ -37,9 +37,14 @@ import com.example.domain.model.RolePermissionMatrix
 import com.example.domain.model.StockistPurchasedInventoryItem
 import com.example.domain.model.UserRole
 
-fun OrganizationMemberEntity.toDomain(): OrganizationMember {
+fun OrganizationMemberEntity.toDomain(isProductionMode: Boolean = false): OrganizationMember {
     val parsedRoles = RolePermissionMatrix.parseRolesCsv(rolesCsv, UserRole.MANUFACTURER)
-    val explicit = PharmaPermission.parseCsv(permissionsCsv)
+    val rawTokens = permissionsCsv.split(",").map { it.trim() }.filter { it.isNotEmpty() }
+    val resolution = RolePermissionMatrix.resolvePermissionState(
+        roles = parsedRoles,
+        rawPermissions = if (permissionsCsv.isBlank()) emptyList() else rawTokens,
+        isProductionMode = isProductionMode
+    )
     return OrganizationMember(
         id = id,
         organizationId = organizationId,
@@ -47,18 +52,19 @@ fun OrganizationMemberEntity.toDomain(): OrganizationMember {
         fullName = fullName,
         email = email,
         roles = parsedRoles,
-        permissions = RolePermissionMatrix.resolvePermissions(parsedRoles, explicit),
+        permissions = resolution.permissions,
         isActive = isActive,
         joinedAtEpochMillis = joinedAtEpochMillis
     )
 }
 
-fun OrganizationMemberDto.toEntity(): OrganizationMemberEntity {
+fun OrganizationMemberDto.toEntity(isProductionMode: Boolean = true): OrganizationMemberEntity {
     val parsedRoles = roles.map { UserRole.fromString(it) }.toSet().ifEmpty { setOf(UserRole.MANUFACTURER) }
-    val explicit = permissions.mapNotNull { raw ->
-        PharmaPermission.entries.firstOrNull { it.name.equals(raw, ignoreCase = true) }
-    }.toSet()
-    val resolved = RolePermissionMatrix.resolvePermissions(parsedRoles, explicit)
+    val resolution = RolePermissionMatrix.resolvePermissionState(
+        roles = parsedRoles,
+        rawPermissions = permissions,
+        isProductionMode = isProductionMode
+    )
     return OrganizationMemberEntity(
         id = id,
         organizationId = organizationId,
@@ -66,7 +72,7 @@ fun OrganizationMemberDto.toEntity(): OrganizationMemberEntity {
         fullName = fullName,
         email = email,
         rolesCsv = RolePermissionMatrix.rolesToCsv(parsedRoles),
-        permissionsCsv = PharmaPermission.toCsv(resolved),
+        permissionsCsv = PharmaPermission.toCsv(resolution.permissions),
         isActive = isActive,
         joinedAtEpochMillis = joinedAtEpochMillis
     )

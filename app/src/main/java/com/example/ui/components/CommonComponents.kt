@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -325,7 +326,8 @@ fun TrustScoreBadge(
                     text = "Insufficient data",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.outline,
-                    fontSize = 10.sp
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
                 )
             }
         }
@@ -344,13 +346,13 @@ fun TrustScoreBadge(
         ) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp)
+                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
             ) {
                 Icon(
                     imageVector = Icons.Default.Shield,
                     contentDescription = "Trust Score",
                     tint = textColor,
-                    modifier = Modifier.size(12.dp)
+                    modifier = Modifier.size(14.dp)
                 )
                 Spacer(modifier = Modifier.width(4.dp))
                 Text(
@@ -358,7 +360,8 @@ fun TrustScoreBadge(
                     style = MaterialTheme.typography.labelSmall,
                     fontWeight = FontWeight.Bold,
                     color = textColor,
-                    fontSize = 11.sp
+                    maxLines = 1,
+                    softWrap = false
                 )
             }
         }
@@ -402,8 +405,9 @@ fun StorageConditionBadge(storageCondition: StorageCondition, modifier: Modifier
             color = Color(storageCondition.badgeColorHex),
             style = MaterialTheme.typography.labelSmall,
             fontWeight = FontWeight.Medium,
-            fontSize = 10.sp,
-            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
         )
     }
 }
@@ -469,15 +473,19 @@ fun QuantityStepper(
             shape = RoundedCornerShape(8.dp),
             color = MaterialTheme.colorScheme.surfaceVariant,
             modifier = Modifier
-                .width(48.dp)
-                .height(32.dp)
+                .defaultMinSize(minWidth = 52.dp, minHeight = 36.dp)
         ) {
-            Box(contentAlignment = Alignment.Center) {
+            Box(
+                contentAlignment = Alignment.Center,
+                modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+            ) {
                 Text(
                     text = "$quantity",
                     style = MaterialTheme.typography.bodyMedium,
                     fontWeight = FontWeight.Bold,
-                    textAlign = TextAlign.Center
+                    textAlign = TextAlign.Center,
+                    maxLines = 1,
+                    softWrap = false
                 )
             }
         }

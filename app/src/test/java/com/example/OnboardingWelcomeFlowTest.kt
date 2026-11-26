@@ -284,7 +284,8 @@ class OnboardingWelcomeFlowTest {
         composeTestRule.onNodeWithText("on Selected Brands").assertDoesNotExist()
 
         // Other promotional sections (Top Deals) remain intact
-        composeTestRule.onNodeWithText("Top Deals").performScrollTo().assertIsDisplayed()
+        composeTestRule.onNodeWithText("Track Your Orders").performScrollTo()
+        composeTestRule.onNodeWithText("Top Deals").assertIsDisplayed()
         composeTestRule.onNodeWithTag("dashboard_deal_paracetamol").performScrollTo().assertIsDisplayed()
     }
 }

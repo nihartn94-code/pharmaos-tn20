@@ -8,13 +8,18 @@ import androidx.compose.material.icons.filled.Medication
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import android.widget.Toast
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
@@ -134,7 +139,7 @@ fun AppNavigation() {
         }
     }
 
-    // Global HTTP 401 session expiration handler
+    // Global HTTP 401 session expiration handler (only 401/refresh failure triggers logout)
     LaunchedEffect(Unit) {
         app.networkModule.sessionExpiredEvents.collect {
             runCatching {
@@ -149,6 +154,33 @@ fun AppNavigation() {
         }
     }
 
+    // Global HTTP 403 permission-denied handler — NEVER logs out or clears tokens
+    LaunchedEffect(Unit) {
+        app.networkModule.permissionDeniedEvents.collect { message ->
+            Toast.makeText(context, message, Toast.LENGTH_LONG).show()
+        }
+    }
+
+    // Foreground resume lifecycle sync: refresh banner clock + re-validate /api/v1/auth/context + active workspace
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                coroutineScope.launch {
+                    app.workspaceRepository.refreshBannerClock()
+                    val currentUser = app.repository.getApiUsersMeFlow().firstOrNull()
+                    if (currentUser != null) {
+                        runCatching { app.workspaceRepository.syncActiveWorkspace() }
+                    }
+                }
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+        }
+    }
+
     NavHost(
         navController = navController,
         startDestination = NavRoutes.SPLASH
@@ -157,7 +189,10 @@ fun AppNavigation() {
         composable(NavRoutes.SPLASH) {
             LaunchedEffect(Unit) {
                 val targetRoute = when (app.repository.resolveLaunchDestination()) {
-                    LaunchDestination.DASHBOARD -> resolveAuthorizedRootRoute()
+                    LaunchDestination.DASHBOARD -> {
+                        runCatching { app.workspaceRepository.syncActiveWorkspace() }
+                        resolveAuthorizedRootRoute()
+                    }
                     LaunchDestination.COMPLIANCE_VERIFICATION -> NavRoutes.COMPLIANCE_VERIFICATION
                     LaunchDestination.LOGIN -> NavRoutes.LOGIN
                     LaunchDestination.WELCOME -> NavRoutes.WELCOME
@@ -198,6 +233,9 @@ fun AppNavigation() {
                     }
                 },
                 onLoginSuccess = {
+                    coroutineScope.launch {
+                        runCatching { app.workspaceRepository.syncActiveWorkspace() }
+                    }
                     navigateToAuthorizedRoot()
                 }
             )

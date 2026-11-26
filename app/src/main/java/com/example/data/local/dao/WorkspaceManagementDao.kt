@@ -166,4 +166,32 @@ interface WorkspaceManagementDao {
 
     @Query("DELETE FROM stockist_purchased_inventory WHERE stockistOrganizationId = :stockistOrgId")
     suspend fun clearStockistInventoryForOrg(stockistOrgId: Long)
+
+    // --- Transactional Remote Sync Pruning Helpers (Scoped strictly by organizationId / feed) ---
+    @Query("DELETE FROM organization_members WHERE organizationId = :orgId")
+    suspend fun deleteMembersByOrganization(orgId: Long)
+
+    @Query("DELETE FROM medicine_submissions WHERE organizationId = :orgId")
+    suspend fun deleteSubmissionsByOrganization(orgId: Long)
+
+    @Query("DELETE FROM approval_audit_logs WHERE submissionId = :submissionId")
+    suspend fun deleteAuditLogsBySubmission(submissionId: Long)
+
+    @Query("DELETE FROM master_data_entries WHERE organizationId = :orgId OR organizationId = 0")
+    suspend fun deleteMasterDataForOrganizationScope(orgId: Long)
+
+    @Query("DELETE FROM offer_banners WHERE organizationId = :orgId")
+    suspend fun deleteBannersByOrganization(orgId: Long)
+
+    @Query("DELETE FROM promotional_campaigns WHERE organizationId = :orgId")
+    suspend fun deleteCampaignsByOrganization(orgId: Long)
+
+    @Query("DELETE FROM medicine_announcements WHERE organizationId = :orgId")
+    suspend fun deleteAnnouncementsByOrganization(orgId: Long)
+
+    @Query("DELETE FROM offer_banners WHERE status IN ('ACTIVE', 'SCHEDULED')")
+    suspend fun deletePublicCandidateBanners()
+
+    @Query("DELETE FROM medicine_announcements WHERE status = 'PUBLISHED'")
+    suspend fun deletePublishedAnnouncements()
 }

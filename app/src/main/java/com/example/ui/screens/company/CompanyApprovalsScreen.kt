@@ -2,6 +2,7 @@ package com.example.ui.screens.company
 
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -9,7 +10,10 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -24,12 +28,12 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.PrimaryScrollableTabRow
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Tab
-import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -42,8 +46,10 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.domain.model.MedicineSubmission
@@ -127,24 +133,33 @@ fun CompanyApprovalsScreen(
                 .fillMaxSize()
                 .padding(padding)
         ) {
-            TabRow(selectedTabIndex = activeTab) {
-                Tab(
+            PrimaryScrollableTabRow(
+                selectedTabIndex = activeTab,
+                edgePadding = 16.dp,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("company_approvals_tab_row")
+            ) {
+                ApprovalTabItem(
+                    label = "Pending",
+                    count = pendingList.size,
                     selected = activeTab == 0,
-                    onClick = { activeTab = 0 },
-                    text = { Text("Pending (${pendingList.size})") },
-                    modifier = Modifier.testTag("approvals_tab_pending")
+                    testTag = "approvals_tab_pending",
+                    onClick = { activeTab = 0 }
                 )
-                Tab(
+                ApprovalTabItem(
+                    label = "Decisions",
+                    count = reviewedList.size,
                     selected = activeTab == 1,
-                    onClick = { activeTab = 1 },
-                    text = { Text("Decisions (${reviewedList.size})") },
-                    modifier = Modifier.testTag("approvals_tab_reviewed")
+                    testTag = "approvals_tab_reviewed",
+                    onClick = { activeTab = 1 }
                 )
-                Tab(
+                ApprovalTabItem(
+                    label = "Audit Log",
+                    count = uiState.auditLogs.size,
                     selected = activeTab == 2,
-                    onClick = { activeTab = 2 },
-                    text = { Text("Audit Log (${uiState.auditLogs.size})") },
-                    modifier = Modifier.testTag("approvals_tab_audit")
+                    testTag = "approvals_tab_audit",
+                    onClick = { activeTab = 2 }
                 )
             }
 
@@ -215,23 +230,68 @@ fun CompanyApprovalsScreen(
                                             color = MaterialTheme.colorScheme.error
                                         )
                                     }
-                                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                                        Button(
-                                            enabled = uiState.canApproveMedicines && !isSelfSubmission && !uiState.isSaving,
-                                            onClick = { approvingSubmission = sub },
-                                            modifier = Modifier.weight(1f).testTag("approve_submission_btn_${sub.id}")
-                                        ) {
-                                            Icon(Icons.Default.CheckCircle, contentDescription = null)
-                                            Text("Approve")
-                                        }
-                                        OutlinedButton(
-                                            enabled = uiState.canRejectMedicines && !uiState.isSaving,
-                                            onClick = { rejectingSubmission = sub },
-                                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.6f)),
-                                            modifier = Modifier.weight(1f).testTag("reject_submission_btn_${sub.id}")
-                                        ) {
-                                            Icon(Icons.Default.Close, contentDescription = null, tint = MaterialTheme.colorScheme.error)
-                                            Text("Reject", color = MaterialTheme.colorScheme.error)
+                                    val fontScale = LocalDensity.current.fontScale
+                                    BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+                                        val stackButtons = maxWidth < 300.dp || fontScale >= 1.45f
+                                        if (stackButtons) {
+                                            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                                Button(
+                                                    enabled = uiState.canApproveMedicines && !isSelfSubmission && !uiState.isSaving,
+                                                    onClick = { approvingSubmission = sub },
+                                                    modifier = Modifier
+                                                        .fillMaxWidth()
+                                                        .heightIn(min = 48.dp)
+                                                        .testTag("approve_submission_btn_${sub.id}")
+                                                ) {
+                                                    Icon(Icons.Default.CheckCircle, contentDescription = null, modifier = Modifier.size(18.dp))
+                                                    Spacer(modifier = Modifier.width(6.dp))
+                                                    Text("Approve", maxLines = 1, softWrap = false)
+                                                }
+                                                OutlinedButton(
+                                                    enabled = uiState.canRejectMedicines && !uiState.isSaving,
+                                                    onClick = { rejectingSubmission = sub },
+                                                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.6f)),
+                                                    modifier = Modifier
+                                                        .fillMaxWidth()
+                                                        .heightIn(min = 48.dp)
+                                                        .testTag("reject_submission_btn_${sub.id}")
+                                                ) {
+                                                    Icon(Icons.Default.Close, contentDescription = null, tint = MaterialTheme.colorScheme.error, modifier = Modifier.size(18.dp))
+                                                    Spacer(modifier = Modifier.width(6.dp))
+                                                    Text("Reject", color = MaterialTheme.colorScheme.error, maxLines = 1, softWrap = false)
+                                                }
+                                            }
+                                        } else {
+                                            Row(
+                                                modifier = Modifier.fillMaxWidth(),
+                                                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                                            ) {
+                                                Button(
+                                                    enabled = uiState.canApproveMedicines && !isSelfSubmission && !uiState.isSaving,
+                                                    onClick = { approvingSubmission = sub },
+                                                    modifier = Modifier
+                                                        .weight(1f)
+                                                        .heightIn(min = 48.dp)
+                                                        .testTag("approve_submission_btn_${sub.id}")
+                                                ) {
+                                                    Icon(Icons.Default.CheckCircle, contentDescription = null, modifier = Modifier.size(18.dp))
+                                                    Spacer(modifier = Modifier.width(6.dp))
+                                                    Text("Approve", maxLines = 1, softWrap = false)
+                                                }
+                                                OutlinedButton(
+                                                    enabled = uiState.canRejectMedicines && !uiState.isSaving,
+                                                    onClick = { rejectingSubmission = sub },
+                                                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.6f)),
+                                                    modifier = Modifier
+                                                        .weight(1f)
+                                                        .heightIn(min = 48.dp)
+                                                        .testTag("reject_submission_btn_${sub.id}")
+                                                ) {
+                                                    Icon(Icons.Default.Close, contentDescription = null, tint = MaterialTheme.colorScheme.error, modifier = Modifier.size(18.dp))
+                                                    Spacer(modifier = Modifier.width(6.dp))
+                                                    Text("Reject", color = MaterialTheme.colorScheme.error, maxLines = 1, softWrap = false)
+                                                }
+                                            }
                                         }
                                     }
                                 }
@@ -252,10 +312,40 @@ fun CompanyApprovalsScreen(
                             border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
                             modifier = Modifier.fillMaxWidth()
                         ) {
-                            Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                                    Text(sub.medicineName, fontWeight = FontWeight.Bold)
-                                    Text(sub.approvalStatus.displayName, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
+                            Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        text = sub.medicineName,
+                                        style = MaterialTheme.typography.titleSmall,
+                                        fontWeight = FontWeight.Bold,
+                                        maxLines = 2,
+                                        overflow = TextOverflow.Ellipsis,
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                    Surface(
+                                        shape = RoundedCornerShape(8.dp),
+                                        color = if (sub.approvalStatus == MedicineSubmissionStatus.APPROVED) {
+                                            MaterialTheme.colorScheme.primaryContainer
+                                        } else {
+                                            MaterialTheme.colorScheme.errorContainer
+                                        }
+                                    ) {
+                                        Text(
+                                            text = sub.approvalStatus.displayName,
+                                            style = MaterialTheme.typography.labelSmall,
+                                            fontWeight = FontWeight.Bold,
+                                            color = if (sub.approvalStatus == MedicineSubmissionStatus.APPROVED) {
+                                                MaterialTheme.colorScheme.onPrimaryContainer
+                                            } else {
+                                                MaterialTheme.colorScheme.onErrorContainer
+                                            },
+                                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                        )
+                                    }
                                 }
                                 Text("${sub.brandName} • ${sub.saltComposition}", style = MaterialTheme.typography.bodySmall)
                                 sub.reviewedByName?.let { reviewer ->
@@ -281,9 +371,24 @@ fun CompanyApprovalsScreen(
                             modifier = Modifier.fillMaxWidth()
                         ) {
                             Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                                    Text("${log.action} (${log.fromStatus} → ${log.toStatus})", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.labelLarge)
-                                    Text(Formatters.formatDate(log.timestampEpochMillis), style = MaterialTheme.typography.labelSmall)
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        text = "${log.action} (${log.fromStatus} → ${log.toStatus})",
+                                        fontWeight = FontWeight.Bold,
+                                        style = MaterialTheme.typography.labelLarge,
+                                        maxLines = 2,
+                                        overflow = TextOverflow.Ellipsis,
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                    Text(
+                                        text = Formatters.formatDate(log.timestampEpochMillis),
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
                                 }
                                 Text("Actor: ${log.actorName}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
                                 Text(log.notes, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -349,4 +454,55 @@ fun CompanyApprovalsScreen(
             dismissButton = { TextButton(onClick = { rejectingSubmission = null }) { Text("Cancel") } }
         )
     }
+}
+
+@Composable
+private fun ApprovalTabItem(
+    label: String,
+    count: Int,
+    selected: Boolean,
+    testTag: String,
+    onClick: () -> Unit
+) {
+    val badgeText = if (count > 99) "99+" else count.toString()
+    Tab(
+        selected = selected,
+        onClick = onClick,
+        modifier = Modifier.testTag(testTag),
+        text = {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                Text(
+                    text = label,
+                    style = MaterialTheme.typography.labelLarge,
+                    maxLines = 1,
+                    softWrap = false
+                )
+                Surface(
+                    shape = RoundedCornerShape(10.dp),
+                    color = if (selected) {
+                        MaterialTheme.colorScheme.primaryContainer
+                    } else {
+                        MaterialTheme.colorScheme.surfaceVariant
+                    }
+                ) {
+                    Text(
+                        text = badgeText,
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = if (selected) {
+                            MaterialTheme.colorScheme.onPrimaryContainer
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        },
+                        maxLines = 1,
+                        softWrap = false,
+                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                    )
+                }
+            }
+        }
+    )
 }

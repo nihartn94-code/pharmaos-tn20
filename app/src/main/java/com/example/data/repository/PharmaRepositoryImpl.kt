@@ -194,7 +194,10 @@ class PharmaRepositoryImpl(
         return dataStoreManager.authExecutionModeFlow.first() == AuthExecutionMode.PRODUCTION_BACKEND_HTTP
     }
 
-    private suspend fun upsertCachedUser(remoteUser: UserEntity): Long {
+    private suspend fun upsertCachedUser(
+        remoteUser: UserEntity,
+        isProductionMode: Boolean = true
+    ): Long {
         val existing = userDao.getUserById(remoteUser.id)
             ?: userDao.getUserByEmail(remoteUser.email.lowercase())
         return if (existing != null) {
@@ -211,11 +214,13 @@ class PharmaRepositoryImpl(
                     emailVerified = remoteUser.emailVerified,
                     phoneVerified = remoteUser.phoneVerified,
                     profileBio = remoteUser.profileBio,
-                    organizationId = if (remoteUser.organizationId > 0L) remoteUser.organizationId else existing.organizationId,
-                    organizationType = remoteUser.organizationType.ifBlank { existing.organizationType },
-                    organizationName = remoteUser.organizationName.ifBlank { existing.organizationName },
-                    assignedRolesCsv = remoteUser.assignedRolesCsv.ifBlank { existing.assignedRolesCsv },
-                    permissionsCsv = remoteUser.permissionsCsv.ifBlank { existing.permissionsCsv }
+                    // In production mode, overwrite authoritative org/role/permission fields verbatim
+                    // so revoked backend permissions or missing orgId are never masked by stale local cache.
+                    organizationId = if (isProductionMode) remoteUser.organizationId else (if (remoteUser.organizationId > 0L) remoteUser.organizationId else existing.organizationId),
+                    organizationType = if (isProductionMode) remoteUser.organizationType else remoteUser.organizationType.ifBlank { existing.organizationType },
+                    organizationName = if (isProductionMode) remoteUser.organizationName else remoteUser.organizationName.ifBlank { existing.organizationName },
+                    assignedRolesCsv = if (isProductionMode) remoteUser.assignedRolesCsv else remoteUser.assignedRolesCsv.ifBlank { existing.assignedRolesCsv },
+                    permissionsCsv = if (isProductionMode) remoteUser.permissionsCsv else remoteUser.permissionsCsv.ifBlank { existing.permissionsCsv }
                 )
             )
             existing.id
@@ -445,6 +450,11 @@ class PharmaRepositoryImpl(
         role: UserRole
     ): Result<AuthUser> {
         if (isProductionHttpMode()) {
+            if (role == UserRole.ADMIN) {
+                return Result.failure(
+                    SecurityException("Administrator accounts cannot be self-registered. Contact platform administration.")
+                )
+            }
             val remote = authRemoteDataSource
                 ?: return Result.failure(IllegalStateException("HTTP registration service is not initialized."))
             val request = RegisterRequestDto(
@@ -461,9 +471,9 @@ class PharmaRepositoryImpl(
                 is NetworkResult.Success -> {
                     val payload = result.data
                     dataStoreManager.setAuthTokens(payload.accessToken, payload.refreshToken)
-                    val cachedUserId = upsertCachedUser(payload.user.toUserEntityCache())
+                    val cachedUserId = upsertCachedUser(payload.user.toUserEntityCache(isProductionMode = true), isProductionMode = true)
                     dataStoreManager.setLoggedInUserId(cachedUserId)
-                    val registeredUser = payload.user.toAuthUser().copy(id = cachedUserId)
+                    val registeredUser = payload.user.toAuthUser(isProductionMode = true).copy(id = cachedUserId)
                     if (registeredUser.role == UserRole.ADMIN) {
                         dataStoreManager.setOnboardingCompleted(true)
                     }
@@ -539,16 +549,30 @@ class PharmaRepositoryImpl(
         )
     }
 
-    private fun UserEntity.toDomainAuthUser(): AuthUser {
+    private fun UserEntity.toDomainAuthUser(isProductionMode: Boolean = false): AuthUser {
         val parsedRole = try { UserRole.valueOf(role) } catch (_: Exception) { UserRole.STOCKIST }
         val parsedStatus = try { AccountStatus.valueOf(status) } catch (_: Exception) { AccountStatus.ACTIVE }
         val parsedRoles = com.example.domain.model.RolePermissionMatrix.parseRolesCsv(assignedRolesCsv, parsedRole)
-        val explicitPerms = com.example.domain.model.PharmaPermission.parseCsv(permissionsCsv)
+        val rawTokens = permissionsCsv.split(",").map { it.trim() }.filter { it.isNotEmpty() }
+        val resolution = com.example.domain.model.RolePermissionMatrix.resolvePermissionState(
+            roles = parsedRoles,
+            rawPermissions = if (permissionsCsv.isBlank()) {
+                if (isProductionMode) emptyList() else null
+            } else {
+                rawTokens
+            },
+            isProductionMode = isProductionMode
+        )
         val resolvedOrgType = com.example.domain.model.OrganizationType.fromString(
             organizationType.takeIf { it.isNotBlank() },
             parsedRole
         )
-        val resolvedOrgId = if (organizationId > 0L) organizationId else id
+        // Never substitute userId for missing organizationId in production mode!
+        val resolvedOrgId = when {
+            organizationId > 0L -> organizationId
+            isProductionMode -> 0L
+            else -> id
+        }
         return AuthUser(
             id = id,
             fullName = fullName,
@@ -566,10 +590,9 @@ class PharmaRepositoryImpl(
             organizationType = resolvedOrgType,
             organizationName = organizationName.ifBlank { businessName },
             assignedRoles = parsedRoles,
-            permissions = com.example.domain.model.RolePermissionMatrix.resolvePermissions(
-                roles = parsedRoles,
-                explicitPermissions = explicitPerms
-            )
+            permissions = resolution.permissions,
+            permissionStatus = resolution.status,
+            isProductionContext = isProductionMode
         )
     }
 
@@ -686,12 +709,17 @@ class PharmaRepositoryImpl(
 
     @OptIn(ExperimentalCoroutinesApi::class)
     override fun getApiUsersMeFlow(): Flow<AuthUser?> {
-        return dataStoreManager.loggedInUserIdFlow.flatMapLatest { userId ->
+        return combine(
+            dataStoreManager.loggedInUserIdFlow,
+            dataStoreManager.authExecutionModeFlow
+        ) { userId, mode ->
+            userId to (mode == AuthExecutionMode.PRODUCTION_BACKEND_HTTP)
+        }.flatMapLatest { (userId, isProd) ->
             if (userId == null) {
                 flowOf(null)
             } else {
                 userDao.getUserByIdFlow(userId).map { entity ->
-                    entity?.toDomainAuthUser()
+                    entity?.toDomainAuthUser(isProductionMode = isProd)
                 }
             }
         }
@@ -700,23 +728,24 @@ class PharmaRepositoryImpl(
     override suspend fun getApiUsersMe(): AuthUser? {
         val userId = dataStoreManager.loggedInUserIdFlow.firstOrNull()
         val cachedUser = if (userId != null) userDao.getUserById(userId) else null
+        val isProd = isProductionHttpMode()
 
-        if (isProductionHttpMode()) {
+        if (isProd) {
             if (cachedUser != null) {
-                return cachedUser.toDomainAuthUser()
+                return cachedUser.toDomainAuthUser(isProductionMode = true)
             }
             if (!dataStoreManager.getAccessToken().isNullOrBlank() && isBackendConfigured()) {
                 val remoteRes = pharmaRemoteDataSource?.fetchCurrentUser()
                 if (remoteRes is NetworkResult.Success) {
-                    val savedId = upsertCachedUser(remoteRes.data.toUserEntityCache())
+                    val savedId = upsertCachedUser(remoteRes.data.toUserEntityCache(isProductionMode = true), isProductionMode = true)
                     dataStoreManager.setLoggedInUserId(savedId)
-                    return remoteRes.data.toAuthUser().copy(id = savedId)
+                    return remoteRes.data.toAuthUser(isProductionMode = true).copy(id = savedId)
                 }
             }
             return null
         }
 
-        return cachedUser?.toDomainAuthUser()
+        return cachedUser?.toDomainAuthUser(isProductionMode = false)
     }
 
     override suspend fun refreshCurrentUserProfile(): Result<AuthUser> {
@@ -726,10 +755,10 @@ class PharmaRepositoryImpl(
                 ?: return Result.failure(IllegalStateException("Remote API is not initialized."))
             return when (val res = remote.fetchCurrentUser()) {
                 is NetworkResult.Success -> {
-                    val savedId = upsertCachedUser(res.data.toUserEntityCache())
+                    val savedId = upsertCachedUser(res.data.toUserEntityCache(isProductionMode = true), isProductionMode = true)
                     dataStoreManager.setLoggedInUserId(savedId)
-                    val fresh = userDao.getUserById(savedId)?.toDomainAuthUser()
-                        ?: res.data.toAuthUser().copy(id = savedId)
+                    val fresh = userDao.getUserById(savedId)?.toDomainAuthUser(isProductionMode = true)
+                        ?: res.data.toAuthUser(isProductionMode = true).copy(id = savedId)
                     Result.success(fresh)
                 }
                 else -> Result.failure(res.toException())
@@ -737,7 +766,7 @@ class PharmaRepositoryImpl(
         }
         val local = currentUserId?.let { userDao.getUserById(it) }
             ?: return Result.failure(IllegalStateException("No active user session found."))
-        return Result.success(local.toDomainAuthUser())
+        return Result.success(local.toDomainAuthUser(isProductionMode = false))
     }
 
     override suspend fun putApiUserProfile(
@@ -780,15 +809,15 @@ class PharmaRepositoryImpl(
             )
             return when (val res = remote.updateCurrentUserProfile(req)) {
                 is NetworkResult.Success -> {
-                    val savedId = upsertCachedUser(res.data.toUserEntityCache())
+                    val savedId = upsertCachedUser(res.data.toUserEntityCache(isProductionMode = true), isProductionMode = true)
                     dataStoreManager.setLoggedInUserId(savedId)
                     // Refresh profile from backend after successful update to guarantee parity
                     val refreshed = remote.fetchCurrentUser()
                     if (refreshed is NetworkResult.Success) {
-                        upsertCachedUser(refreshed.data.toUserEntityCache())
+                        upsertCachedUser(refreshed.data.toUserEntityCache(isProductionMode = true), isProductionMode = true)
                     }
-                    val latest = userDao.getUserById(savedId)?.toDomainAuthUser()
-                        ?: res.data.toAuthUser().copy(id = savedId)
+                    val latest = userDao.getUserById(savedId)?.toDomainAuthUser(isProductionMode = true)
+                        ?: res.data.toAuthUser(isProductionMode = true).copy(id = savedId)
                     Result.success(latest)
                 }
                 else -> Result.failure(res.toException())
@@ -2732,8 +2761,16 @@ class PharmaRepositoryImpl(
             return Result.failure(IllegalArgumentException("Quantity must be greater than 0."))
         }
         val product = productDao.getProductById(productId)
-        if (product != null && !product.isActive) {
-            return Result.failure(IllegalStateException("This product is currently inactive and cannot be added."))
+        if (product != null) {
+            if (!product.isActive) {
+                return Result.failure(IllegalStateException("This product is currently inactive and cannot be added."))
+            }
+            if (!product.approvalStatus.equals(com.example.domain.model.MedicineSubmissionStatus.APPROVED.name, ignoreCase = true)) {
+                return Result.failure(IllegalStateException("This medicine is not yet approved for commercial trading."))
+            }
+            if (!product.catalogueStatus.equals(com.example.domain.model.CataloguePublicationStatus.ACTIVE.name, ignoreCase = true)) {
+                return Result.failure(IllegalStateException("This medicine is not commercially active in the catalogue (${product.catalogueStatus})."))
+            }
         }
 
         val now = System.currentTimeMillis()
@@ -3602,6 +3639,26 @@ class PharmaRepositoryImpl(
         val activeItems = if (activeBasket != null) basketDao.getBasketItems(activeBasket.id) else emptyList()
         if (activeItems.isEmpty()) {
             return Result.failure(IllegalStateException("Cannot place order with empty basket."))
+        }
+        // Commercial availability validation: every product in basket must be APPROVED + ACTIVE catalogue + active offer with stock
+        for (item in activeItems) {
+            val prod = productDao.getProductById(item.productId)
+            if (prod != null) {
+                if (!prod.isActive ||
+                    !prod.approvalStatus.equals(com.example.domain.model.MedicineSubmissionStatus.APPROVED.name, ignoreCase = true) ||
+                    !prod.catalogueStatus.equals(com.example.domain.model.CataloguePublicationStatus.ACTIVE.name, ignoreCase = true)
+                ) {
+                    return Result.failure(
+                        IllegalStateException("'${prod.name}' is not commercially available for purchase (status: ${prod.approvalStatus}/${prod.catalogueStatus}).")
+                    )
+                }
+            }
+            val offer = offerDao.getOfferById(item.offerId)
+            if (offer != null && (!offer.isActive || offer.availableQuantity < item.quantity)) {
+                return Result.failure(
+                    IllegalStateException("Supplier offer #${offer.id} does not have sufficient active stock (${offer.availableQuantity}) for requested quantity (${item.quantity}).")
+                )
+            }
         }
         val basketSignature = activeItems.joinToString(",") { "${it.productId}:${it.offerId}:${it.quantity}" }
         val submissionKey = buildOrderIdempotencyKey(buyer.id, trimmedAddress, notes.trim(), basketSignature)

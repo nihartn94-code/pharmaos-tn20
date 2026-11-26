@@ -53,7 +53,10 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.ui.Alignment
 import com.example.data.local.entity.ProductEntity
+import com.example.data.remote.upload.MediaUploadState
 import com.example.domain.model.BannerOfferType
 import com.example.domain.model.BannerStatus
 import com.example.domain.model.BannerTargetAudience
@@ -80,6 +83,7 @@ fun ManufacturerBannersScreen(
     onReturnToAuthorizedWorkspace: () -> Unit
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+    val uploadState by viewModel.mediaUploadState.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
     var selectedStatusFilter by remember { mutableStateOf<BannerStatus?>(null) }
     var editingBanner by remember { mutableStateOf<OfferBanner?>(null) }
@@ -102,7 +106,7 @@ fun ManufacturerBannersScreen(
     }
 
     val filteredBanners = uiState.banners.filter { banner ->
-        selectedStatusFilter == null || banner.effectiveStatus() == selectedStatusFilter
+        selectedStatusFilter == null || banner.effectiveStatus(uiState.currentTimeMillis) == selectedStatusFilter
     }
 
     Scaffold(
@@ -193,7 +197,7 @@ fun ManufacturerBannersScreen(
                 }
             } else {
                 items(filteredBanners, key = { it.id }) { banner ->
-                    val effective = banner.effectiveStatus()
+                    val effective = banner.effectiveStatus(uiState.currentTimeMillis)
                     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                         OfferBannerShowcaseCard(
                             banner = banner,
@@ -271,7 +275,14 @@ fun ManufacturerBannersScreen(
             initial = editingBanner,
             organizationName = uiState.summary.organizationName,
             approvedProducts = uiState.approvedProducts,
-            onDismiss = { showCreateDialog = false },
+            uploadState = uploadState,
+            onUploadImage = { uri, onUploaded -> viewModel.uploadBannerImage(uri, onUploaded) },
+            onRetryUpload = { onUploaded -> viewModel.retryBannerImageUpload(onUploaded) },
+            onCancelUpload = { viewModel.cancelBannerImageUpload() },
+            onDismiss = {
+                viewModel.resetMediaUploadState()
+                showCreateDialog = false
+            },
             onSave = { banner ->
                 viewModel.saveBanner(banner) { showCreateDialog = false }
             }
@@ -284,6 +295,10 @@ private fun OfferBannerEditorDialog(
     initial: OfferBanner?,
     organizationName: String,
     approvedProducts: List<ProductEntity>,
+    uploadState: MediaUploadState,
+    onUploadImage: (android.net.Uri, (String) -> Unit) -> Unit,
+    onRetryUpload: ((String) -> Unit) -> Unit,
+    onCancelUpload: () -> Unit,
     onDismiss: () -> Unit,
     onSave: (OfferBanner) -> Unit
 ) {
@@ -302,14 +317,22 @@ private fun OfferBannerEditorDialog(
     var selectedProduct by remember {
         mutableStateOf(approvedProducts.firstOrNull { it.id == initial?.linkedProductId } ?: approvedProducts.firstOrNull())
     }
-    var imageUri by remember { mutableStateOf(initial?.imageUrl) }
+    var persistedImageUrl by remember { mutableStateOf(initial?.imageUrl) }
+    var localPreviewUri by remember { mutableStateOf(initial?.imageUrl) }
 
-    // Zero-permission Android Photo Picker (Play policy compliant)
+    // Zero-permission Android Photo Picker (Play policy compliant) -> immediate validated upload
     val photoPickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.PickVisualMedia()
     ) { uri ->
-        if (uri != null) imageUri = uri.toString()
+        if (uri != null) {
+            localPreviewUri = uri.toString()
+            onUploadImage(uri) { remoteUrl ->
+                persistedImageUrl = remoteUrl
+            }
+        }
     }
+
+    val isUploadInFlight = uploadState is MediaUploadState.Validating || uploadState is MediaUploadState.Uploading
 
     val startEpoch = now + ((startDelayDaysText.toLongOrNull() ?: 0L) * dayMs)
     val endEpoch = startEpoch + ((durationDaysText.toLongOrNull()?.coerceAtLeast(1L) ?: 14L) * dayMs)
@@ -320,7 +343,7 @@ private fun OfferBannerEditorDialog(
         organizationName = organizationName.ifBlank { "Your Pharmaceutical Organization" },
         title = title.ifBlank { "Offer Banner Title Preview" },
         subtitle = subtitle.ifBlank { "Subtitle displayed to eligible Stockists" },
-        imageUrl = imageUri,
+        imageUrl = localPreviewUri ?: persistedImageUrl,
         offerType = offerType,
         discountOrOfferSummary = discountSummary.ifBlank { "10% Trade Discount + Priority Dispatch" },
         linkedProductId = selectedProduct?.id,
@@ -375,15 +398,87 @@ private fun OfferBannerEditorDialog(
                 )
 
                 OutlinedButton(
+                    enabled = !isUploadInFlight,
                     onClick = {
                         photoPickerLauncher.launch(
                             PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
                         )
                     },
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier.fillMaxWidth().testTag("banner_pick_image_btn")
                 ) {
                     Icon(Icons.Default.Image, contentDescription = null)
-                    Text(if (imageUri == null) "Select Banner Artwork (Photo Picker)" else "Change Selected Artwork")
+                    Text(
+                        text = if (persistedImageUrl == null && localPreviewUri == null) {
+                            "Select Banner Artwork (Photo Picker)"
+                        } else {
+                            "Change Selected Artwork"
+                        },
+                        modifier = Modifier.padding(start = 6.dp)
+                    )
+                }
+
+                when (uploadState) {
+                    is MediaUploadState.Validating -> {
+                        Text(
+                            text = "Validating image type & size...",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                    }
+                    is MediaUploadState.Uploading -> {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "Uploading ${uploadState.fileName} (${(uploadState.progress * 100).toInt()}%)",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.weight(1f)
+                            )
+                            TextButton(onClick = onCancelUpload) { Text("Cancel") }
+                        }
+                        LinearProgressIndicator(
+                            progress = { uploadState.progress },
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+                    is MediaUploadState.Success -> {
+                        Text(
+                            text = "Artwork uploaded (${uploadState.contentType})",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                    is MediaUploadState.Failed -> {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = uploadState.message,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.error,
+                                modifier = Modifier.weight(1f)
+                            )
+                            if (uploadState.retryable) {
+                                TextButton(onClick = { onRetryUpload { persistedImageUrl = it } }) {
+                                    Text("Retry")
+                                }
+                            }
+                        }
+                    }
+                    MediaUploadState.Cancelled -> {
+                        Text(
+                            text = "Upload cancelled.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    MediaUploadState.Idle -> Unit
                 }
 
                 Text("Offer Type", style = MaterialTheme.typography.labelMedium)
@@ -468,18 +563,20 @@ private fun OfferBannerEditorDialog(
         confirmButton = {
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 TextButton(
-                    onClick = { onSave(previewBanner.copy(status = BannerStatus.DRAFT)) }
+                    enabled = !isUploadInFlight,
+                    onClick = { onSave(previewBanner.copy(imageUrl = persistedImageUrl, status = BannerStatus.DRAFT)) }
                 ) {
                     Text("Save Draft")
                 }
                 Button(
+                    enabled = !isUploadInFlight,
                     onClick = {
                         val targetStatus = if ((startDelayDaysText.toLongOrNull() ?: 0L) > 0L) {
                             BannerStatus.SCHEDULED
                         } else {
                             BannerStatus.ACTIVE
                         }
-                        onSave(previewBanner.copy(status = targetStatus))
+                        onSave(previewBanner.copy(imageUrl = persistedImageUrl, status = targetStatus))
                     },
                     modifier = Modifier.testTag("banner_publish_btn")
                 ) {

@@ -1,9 +1,11 @@
 package com.example.data.remote.source
 
+import com.example.data.remote.dto.ApprovalAuditEntryDto
 import com.example.data.remote.dto.ApprovalDecisionRequestDto
 import com.example.data.remote.dto.AssignMemberRolesRequestDto
 import com.example.data.remote.dto.AuthContextDto
 import com.example.data.remote.dto.MasterDataDto
+import com.example.data.remote.dto.MediaUploadResponseDto
 import com.example.data.remote.dto.MedicineAnnouncementDto
 import com.example.data.remote.dto.MedicineSubmissionDto
 import com.example.data.remote.dto.OfferBannerDto
@@ -17,10 +19,14 @@ import com.example.data.remote.util.NetworkResult
 import com.example.data.remote.util.safeApiCall
 import com.example.data.remote.util.safeApiEnvelopeCall
 import com.example.di.NetworkModule
+import okhttp3.MultipartBody
 import java.util.UUID
 
 /**
  * Stateless HTTP remote data source for all PharmaOS Role-Based Workspace modules.
+ *
+ * Implements full remote READ synchronization, edit-before-resubmit mutations,
+ * multipart media uploads, and caller-supplied operation-scoped idempotency keys.
  * Strictly fails when backend URL is unconfigured or HTTP returns an error (400/401/403/404/409/500).
  */
 class WorkspaceRemoteDataSource(
@@ -30,12 +36,24 @@ class WorkspaceRemoteDataSource(
         "Spring Boot backend URL is not configured (${networkModule.getCurrentBaseUrl()})."
     )
 
-    private fun newIdempotencyKey(prefix: String): String = "$prefix-${UUID.randomUUID()}"
+    private fun resolveIdempotencyKey(provided: String?, prefix: String): String =
+        provided?.takeIf { it.isNotBlank() } ?: "$prefix-${UUID.randomUUID()}"
+
+    // =========================================================================
+    // 1. Auth Context & Organization Members
+    // =========================================================================
 
     suspend fun fetchAuthContext(): NetworkResult<AuthContextDto> {
         if (!networkModule.isBackendConfigured()) return notConfigured()
         return safeApiEnvelopeCall(networkModule.moshi) {
             networkModule.workspaceApiService().getAuthContext()
+        }
+    }
+
+    suspend fun fetchOrganizationMembers(organizationId: Long): NetworkResult<List<OrganizationMemberDto>> {
+        if (!networkModule.isBackendConfigured()) return notConfigured()
+        return safeApiEnvelopeCall(networkModule.moshi) {
+            networkModule.workspaceApiService().getOrganizationMembers(organizationId)
         }
     }
 
@@ -55,21 +73,58 @@ class WorkspaceRemoteDataSource(
         }
     }
 
-    suspend fun createMedicineSubmission(dto: MedicineSubmissionDto): NetworkResult<MedicineSubmissionDto> {
+    // =========================================================================
+    // 2. Medicine Submissions, Edit-Before-Resubmit & Audit Logs
+    // =========================================================================
+
+    suspend fun fetchMedicineSubmissions(status: String? = null): NetworkResult<List<MedicineSubmissionDto>> {
+        if (!networkModule.isBackendConfigured()) return notConfigured()
+        return safeApiEnvelopeCall(networkModule.moshi) {
+            networkModule.workspaceApiService().getMedicineSubmissions(status = status)
+        }
+    }
+
+    suspend fun fetchSubmissionAuditLogs(submissionId: Long): NetworkResult<List<ApprovalAuditEntryDto>> {
+        if (!networkModule.isBackendConfigured()) return notConfigured()
+        return safeApiEnvelopeCall(networkModule.moshi) {
+            networkModule.workspaceApiService().getSubmissionAuditLogs(submissionId)
+        }
+    }
+
+    suspend fun createMedicineSubmission(
+        dto: MedicineSubmissionDto,
+        idempotencyKey: String? = null
+    ): NetworkResult<MedicineSubmissionDto> {
         if (!networkModule.isBackendConfigured()) return notConfigured()
         return safeApiEnvelopeCall(networkModule.moshi) {
             networkModule.workspaceApiService().createMedicineSubmission(
-                idempotencyKey = newIdempotencyKey("med-sub"),
+                idempotencyKey = resolveIdempotencyKey(idempotencyKey, "med-sub"),
                 submission = dto
             )
         }
     }
 
-    suspend fun submitMedicineForApproval(submissionId: Long): NetworkResult<MedicineSubmissionDto> {
+    suspend fun updateMedicineSubmission(
+        submissionId: Long,
+        dto: MedicineSubmissionDto
+    ): NetworkResult<MedicineSubmissionDto> {
+        if (!networkModule.isBackendConfigured()) return notConfigured()
+        return safeApiEnvelopeCall(networkModule.moshi) {
+            networkModule.workspaceApiService().updateMedicineSubmission(
+                submissionId = submissionId,
+                submission = dto
+            )
+        }
+    }
+
+    suspend fun submitMedicineForApproval(
+        submissionId: Long,
+        idempotencyKey: String? = null
+    ): NetworkResult<MedicineSubmissionDto> {
         if (!networkModule.isBackendConfigured()) return notConfigured()
         return safeApiEnvelopeCall(networkModule.moshi) {
             networkModule.workspaceApiService().submitMedicineForApproval(
-                idempotencyKey = newIdempotencyKey("med-submit-$submissionId"),
+                idempotencyKey = resolveIdempotencyKey(idempotencyKey, "med-submit-$submissionId"),
                 submissionId = submissionId
             )
         }
@@ -77,12 +132,13 @@ class WorkspaceRemoteDataSource(
 
     suspend fun approveMedicineSubmission(
         submissionId: Long,
-        notes: String
+        notes: String,
+        idempotencyKey: String? = null
     ): NetworkResult<MedicineSubmissionDto> {
         if (!networkModule.isBackendConfigured()) return notConfigured()
         return safeApiEnvelopeCall(networkModule.moshi) {
             networkModule.workspaceApiService().approveMedicineSubmission(
-                idempotencyKey = newIdempotencyKey("med-approve-$submissionId"),
+                idempotencyKey = resolveIdempotencyKey(idempotencyKey, "med-approve-$submissionId"),
                 submissionId = submissionId,
                 request = ApprovalDecisionRequestDto(notes = notes)
             )
@@ -91,12 +147,13 @@ class WorkspaceRemoteDataSource(
 
     suspend fun rejectMedicineSubmission(
         submissionId: Long,
-        reason: String
+        reason: String,
+        idempotencyKey: String? = null
     ): NetworkResult<MedicineSubmissionDto> {
         if (!networkModule.isBackendConfigured()) return notConfigured()
         return safeApiEnvelopeCall(networkModule.moshi) {
             networkModule.workspaceApiService().rejectMedicineSubmission(
-                idempotencyKey = newIdempotencyKey("med-reject-$submissionId"),
+                idempotencyKey = resolveIdempotencyKey(idempotencyKey, "med-reject-$submissionId"),
                 submissionId = submissionId,
                 request = ApprovalDecisionRequestDto(reason = reason)
             )
@@ -110,6 +167,23 @@ class WorkspaceRemoteDataSource(
         }
     }
 
+    // =========================================================================
+    // 3. Company Catalogue & Master Data
+    // =========================================================================
+
+    suspend fun fetchCompanyCatalogue(
+        status: String? = null,
+        query: String? = null
+    ): NetworkResult<List<ProductDto>> {
+        if (!networkModule.isBackendConfigured()) return notConfigured()
+        return safeApiEnvelopeCall(networkModule.moshi) {
+            networkModule.workspaceApiService().getCompanyCatalogue(
+                catalogueStatus = status,
+                query = query
+            )
+        }
+    }
+
     suspend fun updateCatalogueStatus(productId: Long, status: String): NetworkResult<ProductDto> {
         if (!networkModule.isBackendConfigured()) return notConfigured()
         return safeApiEnvelopeCall(networkModule.moshi) {
@@ -120,24 +194,48 @@ class WorkspaceRemoteDataSource(
         }
     }
 
-    suspend fun createMasterData(dto: MasterDataDto): NetworkResult<MasterDataDto> {
+    suspend fun fetchMasterData(type: String? = null): NetworkResult<List<MasterDataDto>> {
+        if (!networkModule.isBackendConfigured()) return notConfigured()
+        return safeApiEnvelopeCall(networkModule.moshi) {
+            networkModule.workspaceApiService().getMasterData(type = type)
+        }
+    }
+
+    suspend fun createMasterData(
+        dto: MasterDataDto,
+        idempotencyKey: String? = null
+    ): NetworkResult<MasterDataDto> {
         if (!networkModule.isBackendConfigured()) return notConfigured()
         return safeApiEnvelopeCall(networkModule.moshi) {
             networkModule.workspaceApiService().createMasterData(
-                idempotencyKey = newIdempotencyKey("master-data"),
+                idempotencyKey = resolveIdempotencyKey(idempotencyKey, "master-data"),
                 item = dto
             )
         }
     }
 
-    suspend fun saveOfferBanner(dto: OfferBannerDto): NetworkResult<OfferBannerDto> {
+    // =========================================================================
+    // 4. Manufacturer Offer Banners, Campaigns & Announcements
+    // =========================================================================
+
+    suspend fun fetchManufacturerBanners(): NetworkResult<List<OfferBannerDto>> {
+        if (!networkModule.isBackendConfigured()) return notConfigured()
+        return safeApiEnvelopeCall(networkModule.moshi) {
+            networkModule.workspaceApiService().getManufacturerBanners()
+        }
+    }
+
+    suspend fun saveOfferBanner(
+        dto: OfferBannerDto,
+        idempotencyKey: String? = null
+    ): NetworkResult<OfferBannerDto> {
         if (!networkModule.isBackendConfigured()) return notConfigured()
         return safeApiEnvelopeCall(networkModule.moshi) {
             if (dto.id > 0L) {
                 networkModule.workspaceApiService().updateOfferBanner(dto.id, dto)
             } else {
                 networkModule.workspaceApiService().createOfferBanner(
-                    idempotencyKey = newIdempotencyKey("banner"),
+                    idempotencyKey = resolveIdempotencyKey(idempotencyKey, "banner"),
                     banner = dto
                 )
             }
@@ -161,41 +259,87 @@ class WorkspaceRemoteDataSource(
         }
     }
 
-    suspend fun savePromotionalCampaign(dto: PromotionalCampaignDto): NetworkResult<PromotionalCampaignDto> {
+    suspend fun fetchManufacturerCampaigns(): NetworkResult<List<PromotionalCampaignDto>> {
+        if (!networkModule.isBackendConfigured()) return notConfigured()
+        return safeApiEnvelopeCall(networkModule.moshi) {
+            networkModule.workspaceApiService().getManufacturerCampaigns()
+        }
+    }
+
+    suspend fun savePromotionalCampaign(
+        dto: PromotionalCampaignDto,
+        idempotencyKey: String? = null
+    ): NetworkResult<PromotionalCampaignDto> {
         if (!networkModule.isBackendConfigured()) return notConfigured()
         return safeApiEnvelopeCall(networkModule.moshi) {
             if (dto.id > 0L) {
                 networkModule.workspaceApiService().updatePromotionalCampaign(dto.id, dto)
             } else {
                 networkModule.workspaceApiService().createPromotionalCampaign(
-                    idempotencyKey = newIdempotencyKey("campaign"),
+                    idempotencyKey = resolveIdempotencyKey(idempotencyKey, "campaign"),
                     campaign = dto
                 )
             }
         }
     }
 
-    suspend fun saveMedicineAnnouncement(dto: MedicineAnnouncementDto): NetworkResult<MedicineAnnouncementDto> {
+    suspend fun fetchManufacturerAnnouncements(): NetworkResult<List<MedicineAnnouncementDto>> {
+        if (!networkModule.isBackendConfigured()) return notConfigured()
+        return safeApiEnvelopeCall(networkModule.moshi) {
+            networkModule.workspaceApiService().getManufacturerAnnouncements()
+        }
+    }
+
+    suspend fun saveMedicineAnnouncement(
+        dto: MedicineAnnouncementDto,
+        idempotencyKey: String? = null
+    ): NetworkResult<MedicineAnnouncementDto> {
         if (!networkModule.isBackendConfigured()) return notConfigured()
         return safeApiEnvelopeCall(networkModule.moshi) {
             if (dto.id > 0L) {
                 networkModule.workspaceApiService().updateMedicineAnnouncement(dto.id, dto)
             } else {
                 networkModule.workspaceApiService().createMedicineAnnouncement(
-                    idempotencyKey = newIdempotencyKey("announcement"),
+                    idempotencyKey = resolveIdempotencyKey(idempotencyKey, "announcement"),
                     announcement = dto
                 )
             }
         }
     }
 
+    // =========================================================================
+    // 5. Stockist Feed & Strictly Isolated Purchased Inventory
+    // =========================================================================
+
+    suspend fun fetchStockistActiveBanners(): NetworkResult<List<OfferBannerDto>> {
+        if (!networkModule.isBackendConfigured()) return notConfigured()
+        return safeApiEnvelopeCall(networkModule.moshi) {
+            networkModule.workspaceApiService().getStockistActiveBanners()
+        }
+    }
+
+    suspend fun fetchStockistPublishedAnnouncements(): NetworkResult<List<MedicineAnnouncementDto>> {
+        if (!networkModule.isBackendConfigured()) return notConfigured()
+        return safeApiEnvelopeCall(networkModule.moshi) {
+            networkModule.workspaceApiService().getStockistPublishedAnnouncements()
+        }
+    }
+
+    suspend fun fetchStockistPurchasedInventory(): NetworkResult<List<StockistPurchasedInventoryDto>> {
+        if (!networkModule.isBackendConfigured()) return notConfigured()
+        return safeApiEnvelopeCall(networkModule.moshi) {
+            networkModule.workspaceApiService().getStockistPurchasedInventory()
+        }
+    }
+
     suspend fun upsertStockistPurchasedInventory(
-        dto: StockistPurchasedInventoryDto
+        dto: StockistPurchasedInventoryDto,
+        idempotencyKey: String? = null
     ): NetworkResult<StockistPurchasedInventoryDto> {
         if (!networkModule.isBackendConfigured()) return notConfigured()
         return safeApiEnvelopeCall(networkModule.moshi) {
             networkModule.workspaceApiService().upsertStockistPurchasedInventory(
-                idempotencyKey = newIdempotencyKey("stockist-inv"),
+                idempotencyKey = resolveIdempotencyKey(idempotencyKey, "stockist-inv"),
                 item = dto
             )
         }
@@ -205,6 +349,17 @@ class WorkspaceRemoteDataSource(
         if (!networkModule.isBackendConfigured()) return notConfigured()
         return safeApiCall(networkModule.moshi) {
             networkModule.workspaceApiService().deleteStockistPurchasedInventory(itemId)
+        }
+    }
+
+    // =========================================================================
+    // 6. Media Upload (Multipart)
+    // =========================================================================
+
+    suspend fun uploadMediaAsset(filePart: MultipartBody.Part): NetworkResult<MediaUploadResponseDto> {
+        if (!networkModule.isBackendConfigured()) return notConfigured()
+        return safeApiEnvelopeCall(networkModule.moshi) {
+            networkModule.workspaceApiService().uploadMediaAsset(filePart)
         }
     }
 }

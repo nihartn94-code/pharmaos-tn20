@@ -121,4 +121,21 @@ interface WorkspaceRepository {
 
     // Cache isolation helper called on logout/account switch
     suspend fun clearSensitiveLocalSessionCaches(previousUser: AuthUser?)
+
+    // =========================================================================
+    // Remote Read Synchronization (Stateless Spring Boot -> Local Room Cache)
+    // =========================================================================
+    suspend fun syncAuthContext(): Result<AuthUser>
+    suspend fun syncOrganizationMembers(): Result<Unit>
+    suspend fun syncMedicineSubmissions(): Result<Unit>
+    suspend fun syncApprovalAuditLogs(submissionId: Long? = null): Result<Unit>
+    suspend fun syncCompanyCatalogue(): Result<Unit>
+    suspend fun syncMasterData(): Result<Unit>
+    suspend fun syncManufacturerBanners(): Result<Unit>
+    suspend fun syncPromotionalCampaigns(): Result<Unit>
+    suspend fun syncManufacturerAnnouncements(): Result<Unit>
+    suspend fun syncStockistFeed(): Result<Unit>
+    suspend fun syncStockistPurchasedInventory(): Result<Unit>
+    suspend fun syncActiveWorkspace(): Result<Unit>
+    fun refreshBannerClock(nowEpochMillis: Long = System.currentTimeMillis())
 }

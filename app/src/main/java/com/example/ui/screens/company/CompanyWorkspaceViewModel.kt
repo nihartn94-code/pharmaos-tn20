@@ -1,8 +1,12 @@
 package com.example.ui.screens.company
 
+import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.data.local.entity.ProductEntity
+import com.example.data.remote.upload.MediaUploadKind
+import com.example.data.remote.upload.MediaUploadManager
+import com.example.data.remote.upload.MediaUploadState
 import com.example.domain.model.AccessControlPolicy
 import com.example.domain.model.ApprovalAuditEntry
 import com.example.domain.model.AuthUser
@@ -18,9 +22,11 @@ import com.example.domain.model.UserRole
 import com.example.domain.model.WorkspaceType
 import com.example.domain.repository.PharmaRepository
 import com.example.domain.repository.WorkspaceRepository
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
@@ -49,13 +55,20 @@ data class CompanyWorkspaceUiState(
 
 class CompanyWorkspaceViewModel(
     private val pharmaRepository: PharmaRepository,
-    private val workspaceRepository: WorkspaceRepository
+    private val workspaceRepository: WorkspaceRepository,
+    private val mediaUploadManager: MediaUploadManager? = null
 ) : ViewModel() {
 
     private val isSaving = MutableStateFlow(false)
     private val statusMessage = MutableStateFlow<String?>(null)
     private val errorMessage = MutableStateFlow<String?>(null)
     private val duplicateCandidates = MutableStateFlow<List<MedicineDuplicateCandidate>>(emptyList())
+
+    private val _mediaUploadState = MutableStateFlow<MediaUploadState>(MediaUploadState.Idle)
+    val mediaUploadState: StateFlow<MediaUploadState> = _mediaUploadState.asStateFlow()
+    private var activeUploadJob: Job? = null
+    private var lastUploadUri: Uri? = null
+    private var lastUploadKind: MediaUploadKind = MediaUploadKind.IMAGE
 
     private val primaryFlow = combine(
         pharmaRepository.getApiUsersMeFlow(),
@@ -96,7 +109,7 @@ class CompanyWorkspaceViewModel(
             canManageMasterData = user?.hasPermission(PharmaPermission.COMPOSITION_MANAGE) == true ||
                 user?.hasPermission(PharmaPermission.DOSAGE_FORM_MANAGE) == true ||
                 user?.hasPermission(PharmaPermission.BRAND_MANAGE) == true,
-            canAssignRoles = user?.hasPermission(PharmaPermission.ROLE_ASSIGN) == true,
+            canAssignRoles = user != null && AccessControlPolicy.canManageOrganizationRoles(user, user.organizationId).isSuccess,
             summary = primary.summary,
             catalogueProducts = primary.catalogue,
             submissions = primary.submissions,
@@ -118,7 +131,59 @@ class CompanyWorkspaceViewModel(
     init {
         viewModelScope.launch {
             workspaceRepository.ensureWorkspaceSeededForLocalDev()
+            runCatching { workspaceRepository.syncActiveWorkspace() }
         }
+    }
+
+    fun refreshWorkspace() {
+        viewModelScope.launch {
+            workspaceRepository.syncActiveWorkspace()
+                .onFailure { errorMessage.value = it.message }
+        }
+    }
+
+    fun uploadMedicineMedia(
+        uri: Uri,
+        kind: MediaUploadKind = MediaUploadKind.IMAGE,
+        onUploaded: (String) -> Unit
+    ) {
+        val uploader = mediaUploadManager
+        if (uploader == null) {
+            _mediaUploadState.value = MediaUploadState.Failed(
+                message = "Media upload service is not initialized.",
+                localPreviewUri = uri.toString(),
+                retryable = false
+            )
+            return
+        }
+        lastUploadUri = uri
+        lastUploadKind = kind
+        activeUploadJob?.cancel()
+        activeUploadJob = viewModelScope.launch {
+            uploader.uploadUri(uri, kind) { state ->
+                _mediaUploadState.value = state
+            }.onSuccess { remoteUrl ->
+                onUploaded(remoteUrl)
+            }
+        }
+    }
+
+    fun retryMedicineMediaUpload(onUploaded: (String) -> Unit) {
+        val uri = lastUploadUri ?: return
+        uploadMedicineMedia(uri, lastUploadKind, onUploaded)
+    }
+
+    fun cancelMedicineMediaUpload() {
+        activeUploadJob?.cancel()
+        activeUploadJob = null
+        _mediaUploadState.value = MediaUploadState.Cancelled
+    }
+
+    fun resetMediaUploadState() {
+        activeUploadJob?.cancel()
+        activeUploadJob = null
+        lastUploadUri = null
+        _mediaUploadState.value = MediaUploadState.Idle
     }
 
     fun switchToManufacturerWorkspace(onSwitched: () -> Unit) {
@@ -150,6 +215,7 @@ class CompanyWorkspaceViewModel(
             workspaceRepository.saveMedicineDraft(submission)
                 .onSuccess {
                     statusMessage.value = "Draft '${it.medicineName}' saved."
+                    resetMediaUploadState()
                     onSuccess()
                 }
                 .onFailure { errorMessage.value = it.message }
@@ -164,6 +230,7 @@ class CompanyWorkspaceViewModel(
             workspaceRepository.submitMedicineForApproval(submission)
                 .onSuccess {
                     statusMessage.value = "'${it.medicineName}' queued for mandatory approval."
+                    resetMediaUploadState()
                     onSuccess()
                 }
                 .onFailure { errorMessage.value = it.message }

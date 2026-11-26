@@ -75,6 +75,18 @@ class ProductDetailsQuotationTest {
     private lateinit var db: AppDatabase
     private lateinit var dataStoreManager: DataStoreManager
     private lateinit var repository: PharmaRepositoryImpl
+    private var viewModelStore: androidx.lifecycle.ViewModelStore? = null
+
+    private fun createCatalogueViewModel(repo: PharmaRepositoryImpl = repository): CatalogueViewModel {
+        val store = viewModelStore ?: androidx.lifecycle.ViewModelStore().also { viewModelStore = it }
+        val factory = object : androidx.lifecycle.ViewModelProvider.Factory {
+            @Suppress("UNCHECKED_CAST")
+            override fun <T : androidx.lifecycle.ViewModel> create(modelClass: Class<T>): T {
+                return CatalogueViewModel(repo) as T
+            }
+        }
+        return androidx.lifecycle.ViewModelProvider(store, factory)["vm_${System.nanoTime()}", CatalogueViewModel::class.java]
+    }
 
     private val futureExpiry = System.currentTimeMillis() + 180L * 24 * 3600 * 1000
     private val pastExpiry = System.currentTimeMillis() - 10L * 24 * 3600 * 1000
@@ -101,6 +113,8 @@ class ProductDetailsQuotationTest {
     @After
     fun tearDown() {
         runBlocking {
+            viewModelStore?.clear()
+            viewModelStore = null
             dataStoreManager.clearAuthSession()
             dataStoreManager.setAuthExecutionMode(AuthExecutionMode.DEVELOPMENT_LOCAL_MODE)
             db.close()
@@ -225,7 +239,7 @@ class ProductDetailsQuotationTest {
             assertTrue(db.offerDao().getAllOffersForProduct(noOfferProductId).isEmpty())
         }
 
-        val viewModel = CatalogueViewModel(repository)
+        val viewModel = createCatalogueViewModel(repository)
 
         composeTestRule.setContent {
             PharmaOSTheme {
@@ -371,7 +385,7 @@ class ProductDetailsQuotationTest {
             assertEquals(110, summary.totalQuotedAvailableStock)
         }
 
-        val viewModel = CatalogueViewModel(repository)
+        val viewModel = createCatalogueViewModel(repository)
         composeTestRule.setContent {
             PharmaOSTheme {
                 MedicineDetailsScreen(
@@ -531,7 +545,7 @@ class ProductDetailsQuotationTest {
             assertTrue(unavailableItem.unavailabilityReason!!.contains("below MOQ"))
         }
 
-        val viewModel = CatalogueViewModel(repository)
+        val viewModel = createCatalogueViewModel(repository)
         composeTestRule.setContent {
             PharmaOSTheme {
                 MedicineDetailsScreen(
@@ -632,7 +646,7 @@ class ProductDetailsQuotationTest {
             assertNull(summary.verifiedAvailableStock)
         }
 
-        val viewModel = CatalogueViewModel(repository)
+        val viewModel = createCatalogueViewModel(repository)
         composeTestRule.setContent {
             PharmaOSTheme {
                 MedicineDetailsScreen(
@@ -768,7 +782,7 @@ class ProductDetailsQuotationTest {
         }
 
         var clickedAltId: Long? = null
-        val viewModel = CatalogueViewModel(repository)
+        val viewModel = createCatalogueViewModel(repository)
         composeTestRule.setContent {
             PharmaOSTheme {
                 MedicineDetailsScreen(

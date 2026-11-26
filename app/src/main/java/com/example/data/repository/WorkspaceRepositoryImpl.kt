@@ -21,7 +21,10 @@ import com.example.data.remote.mapper.toDomain
 import com.example.data.remote.mapper.toDto
 import com.example.data.remote.mapper.toEntity
 import com.example.data.remote.source.WorkspaceRemoteDataSource
+import com.example.data.remote.upload.MediaUploadManager
 import com.example.data.remote.util.NetworkResult
+import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
 import com.example.domain.model.AccessControlPolicy
 import com.example.domain.model.AnnouncementCategory
 import com.example.domain.model.AnnouncementStatus
@@ -55,6 +58,7 @@ import com.example.domain.repository.WorkspaceRepository
 import com.example.util.PasswordHasher
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
@@ -77,6 +81,26 @@ class WorkspaceRepositoryImpl(
     private val orderDao = db.orderDao()
     private val notificationDao = db.notificationDao()
     private val seedMutex = Mutex()
+    /**
+     * Operation-scoped idempotency key store: retries of the same logical mutation reuse the
+     * exact same Idempotency-Key header until the operation reaches a terminal success or
+     * non-retryable validation error.
+     */
+    private val operationIdempotencyKeys = ConcurrentHashMap<String, String>()
+    private val bannerClockMillisFlow = MutableStateFlow(System.currentTimeMillis())
+
+    override fun refreshBannerClock(nowEpochMillis: Long) {
+        bannerClockMillisFlow.value = nowEpochMillis
+    }
+
+    internal fun obtainIdempotencyKey(operationScope: String): String =
+        operationIdempotencyKeys.computeIfAbsent(operationScope) {
+            "$operationScope-${UUID.randomUUID()}"
+        }
+
+    internal fun releaseIdempotencyKey(operationScope: String) {
+        operationIdempotencyKeys.remove(operationScope)
+    }
 
     private suspend fun isProductionHttpMode(): Boolean =
         dataStoreManager.authExecutionModeFlow.first() == AuthExecutionMode.PRODUCTION_BACKEND_HTTP
@@ -87,6 +111,9 @@ class WorkspaceRepositoryImpl(
 
     private suspend fun requirePermission(permission: PharmaPermission): AuthUser {
         val user = requireAuthenticatedUser()
+        if (!user.hasValidOrganizationContext()) {
+            throw SecurityException("Access denied: Valid organization context is missing for this account.")
+        }
         if (!user.hasPermission(permission)) {
             throw SecurityException("Access denied: Missing required permission ${permission.name}.")
         }
@@ -187,7 +214,8 @@ class WorkspaceRepositoryImpl(
                 primaryRole = UserRole.PHARMA_COMPANY,
                 assignedRoles = setOf(UserRole.PHARMA_COMPANY),
                 organizationId = pharmaOrgId,
-                organizationType = OrganizationType.PHARMACEUTICAL_ORGANIZATION
+                organizationType = OrganizationType.PHARMACEUTICAL_ORGANIZATION,
+                explicitExtraPermissions = RolePermissionMatrix.companyOrgAdminPermissions
             )
 
             val dualUser = ensureLocalDevUser(
@@ -219,7 +247,8 @@ class WorkspaceRepositoryImpl(
             // Sync organization members for Bharat Bio-Pharma
             listOf(mfgUser, companyUser, dualUser).forEach { u ->
                 val roles = RolePermissionMatrix.parseRolesCsv(u.assignedRolesCsv, UserRole.fromString(u.role))
-                val perms = RolePermissionMatrix.resolvePermissions(roles)
+                val explicitPerms = PharmaPermission.parseCsv(u.permissionsCsv)
+                val perms = if (explicitPerms.isNotEmpty()) explicitPerms else RolePermissionMatrix.resolvePermissions(roles)
                 workspaceDao.upsertMember(
                     OrganizationMemberEntity(
                         id = u.id,
@@ -463,9 +492,10 @@ class WorkspaceRepositoryImpl(
         primaryRole: UserRole,
         assignedRoles: Set<UserRole>,
         organizationId: Long,
-        organizationType: OrganizationType
+        organizationType: OrganizationType,
+        explicitExtraPermissions: Set<PharmaPermission> = emptySet()
     ): UserEntity {
-        val perms = RolePermissionMatrix.resolvePermissions(assignedRoles)
+        val perms = RolePermissionMatrix.resolvePermissions(assignedRoles) + explicitExtraPermissions
         val existing = userDao.getUserByEmail(email.lowercase())
         if (existing != null) {
             val updated = existing.copy(
@@ -519,19 +549,23 @@ class WorkspaceRepositoryImpl(
         roles: Set<UserRole>
     ): Result<OrganizationMember> {
         return runCatching {
-            val actor = requirePermission(PharmaPermission.ROLE_ASSIGN)
+            val actor = requireAuthenticatedUser()
+            AccessControlPolicy.canManageOrganizationRoles(actor, actor.organizationId).getOrThrow()
             if (roles.isEmpty()) throw IllegalArgumentException("At least one role must be assigned.")
             if (actor.organizationType == OrganizationType.PHARMACEUTICAL_ORGANIZATION && roles.contains(UserRole.STOCKIST)) {
                 throw SecurityException("Stockist role cannot be assigned inside a Pharmaceutical Organization.")
+            }
+            if (roles.contains(UserRole.ADMIN) && actor.role != UserRole.ADMIN) {
+                throw SecurityException("Platform Admin role cannot be assigned by organization administrators.")
             }
             if (isProductionHttpMode()) {
                 val remote = remoteDataSource
                     ?: throw IllegalStateException("Remote workspace API is not initialized.")
                 when (val res = remote.assignMemberRoles(actor.organizationId, memberId, roles.map { it.name })) {
                     is NetworkResult.Success -> {
-                        val entity = res.data.toEntity()
+                        val entity = res.data.toEntity(isProductionMode = true)
                         workspaceDao.upsertMember(entity)
-                        return@runCatching entity.toDomain()
+                        return@runCatching entity.toDomain(isProductionMode = true)
                     }
                     else -> throw res.toException()
                 }
@@ -705,18 +739,34 @@ class WorkspaceRepositoryImpl(
         }
     }
 
-    private fun validateMedicineSubmission(submission: MedicineSubmission) {
+    private fun validateMedicineSubmission(submission: MedicineSubmission, isProduction: Boolean) {
         if (submission.medicineName.isBlank()) throw IllegalArgumentException("Medicine name is required.")
         if (submission.brandName.isBlank()) throw IllegalArgumentException("Brand name is required.")
         if (submission.saltComposition.isBlank()) throw IllegalArgumentException("Salt composition is required.")
         if (submission.dosageForm.isBlank()) throw IllegalArgumentException("Dosage form is required.")
         if (submission.strength.isBlank()) throw IllegalArgumentException("Strength is required.")
         if (submission.packSize.isBlank()) throw IllegalArgumentException("Pack size is required.")
+        val hsnDigits = submission.hsnCode.trim()
+        if (hsnDigits.length !in 4..8 || !hsnDigits.all(Char::isDigit)) {
+            throw IllegalArgumentException("Valid 4 to 8 digit HSN code is required (no silent defaults).")
+        }
+        val validGstRates = setOf(0.0, 5.0, 12.0, 18.0, 28.0)
+        if (submission.gstRatePercent !in validGstRates) {
+            throw IllegalArgumentException("Explicit GST rate is required (0%, 5%, 12%, 18%, or 28%).")
+        }
         if (submission.mrp < 0.0 || submission.wholesaleRatePtr < 0.0) {
             throw IllegalArgumentException("Prices cannot be negative.")
         }
         if (submission.mrp > 0.0 && submission.wholesaleRatePtr > submission.mrp) {
             throw IllegalArgumentException("Wholesale PTR rate cannot exceed MRP.")
+        }
+        if (isProduction) {
+            if (!MediaUploadManager.isPersistableProductionMediaUrl(submission.imageUrl)) {
+                throw IllegalArgumentException("Upload medicine pack image to server before saving in production mode.")
+            }
+            if (!MediaUploadManager.isPersistableProductionMediaUrl(submission.supportingDocUri)) {
+                throw IllegalArgumentException("Upload supporting regulatory document to server before saving in production mode.")
+            }
         }
     }
 
@@ -729,6 +779,20 @@ class WorkspaceRepositoryImpl(
             if (submission.medicineName.isBlank()) {
                 throw IllegalArgumentException("Enter at least a medicine name before saving draft.")
             }
+            val isProd = isProductionHttpMode()
+            if (isProd) {
+                if (!MediaUploadManager.isPersistableProductionMediaUrl(submission.imageUrl) ||
+                    !MediaUploadManager.isPersistableProductionMediaUrl(submission.supportingDocUri)
+                ) {
+                    throw IllegalArgumentException("Attached media must be uploaded before saving draft in production mode.")
+                }
+            }
+            if (submission.id > 0L) {
+                val existing = workspaceDao.getSubmissionById(submission.id)?.toDomain()
+                if (existing != null) {
+                    AccessControlPolicy.canEditMedicineSubmission(actor, existing).getOrThrow()
+                }
+            }
             val now = System.currentTimeMillis()
             val prepared = submission.copy(
                 organizationId = actor.organizationId,
@@ -740,11 +804,21 @@ class WorkspaceRepositoryImpl(
                 catalogueStatus = CataloguePublicationStatus.INACTIVE,
                 updatedAtEpochMillis = now
             )
-            if (isProductionHttpMode()) {
+            if (isProd) {
                 val remote = remoteDataSource
                     ?: throw IllegalStateException("Remote workspace API is not initialized.")
-                when (val res = remote.createMedicineSubmission(prepared.toDto())) {
+                val opScope = "med-draft-${actor.organizationId}-${prepared.id}-${prepared.medicineName.trim().lowercase()}"
+                val res = if (prepared.id > 0L) {
+                    remote.updateMedicineSubmission(prepared.id, prepared.toDto())
+                } else {
+                    remote.createMedicineSubmission(
+                        dto = prepared.toDto(),
+                        idempotencyKey = obtainIdempotencyKey(opScope)
+                    )
+                }
+                when (res) {
                     is NetworkResult.Success -> {
+                        releaseIdempotencyKey(opScope)
                         val saved = res.data.toEntity()
                         workspaceDao.insertSubmission(saved)
                         return@runCatching saved.toDomain()
@@ -763,7 +837,14 @@ class WorkspaceRepositoryImpl(
             if (actor.organizationType != OrganizationType.PHARMACEUTICAL_ORGANIZATION && actor.role != UserRole.ADMIN) {
                 throw SecurityException("Stockists are prohibited from submitting medicines.")
             }
-            validateMedicineSubmission(submission)
+            val isProd = isProductionHttpMode()
+            validateMedicineSubmission(submission, isProduction = isProd)
+            if (submission.id > 0L) {
+                val existing = workspaceDao.getSubmissionById(submission.id)?.toDomain()
+                if (existing != null) {
+                    AccessControlPolicy.canEditMedicineSubmission(actor, existing).getOrThrow()
+                }
+            }
             val now = System.currentTimeMillis()
             val prepared = submission.copy(
                 organizationId = actor.organizationId,
@@ -778,24 +859,47 @@ class WorkspaceRepositoryImpl(
                 updatedAtEpochMillis = now
             )
 
-            if (isProductionHttpMode()) {
+            if (isProd) {
                 val remote = remoteDataSource
                     ?: throw IllegalStateException("Remote workspace API is not initialized.")
-                val createdRes = if (prepared.id > 0L) {
-                    remote.submitMedicineForApproval(prepared.id)
+                val createScope = "med-create-${actor.organizationId}-${prepared.medicineName.trim().lowercase()}-${prepared.strength.trim().lowercase()}"
+                val submitScope = "med-submit-${actor.organizationId}-${prepared.id}-${prepared.medicineName.trim().lowercase()}"
+                val submittedRes = if (prepared.id > 0L) {
+                    // Always persist edited draft/rejected fields via PUT before transitioning via POST /submit
+                    when (val updated = remote.updateMedicineSubmission(prepared.id, prepared.toDto())) {
+                        is NetworkResult.Success -> remote.submitMedicineForApproval(
+                            submissionId = updated.data.id,
+                            idempotencyKey = obtainIdempotencyKey(submitScope)
+                        )
+                        else -> updated
+                    }
                 } else {
-                    when (val c = remote.createMedicineSubmission(prepared.toDto())) {
-                        is NetworkResult.Success -> remote.submitMedicineForApproval(c.data.id)
-                        else -> c
+                    when (
+                        val created = remote.createMedicineSubmission(
+                            dto = prepared.toDto(),
+                            idempotencyKey = obtainIdempotencyKey(createScope)
+                        )
+                    ) {
+                        is NetworkResult.Success -> {
+                            releaseIdempotencyKey(createScope)
+                            remote.submitMedicineForApproval(
+                                submissionId = created.data.id,
+                                idempotencyKey = obtainIdempotencyKey("med-submit-${created.data.id}")
+                            )
+                        }
+                        else -> created
                     }
                 }
-                when (createdRes) {
+                when (submittedRes) {
                     is NetworkResult.Success -> {
-                        val saved = createdRes.data.toEntity()
+                        releaseIdempotencyKey(submitScope)
+                        releaseIdempotencyKey("med-submit-${submittedRes.data.id}")
+                        val saved = submittedRes.data.toEntity()
                         workspaceDao.insertSubmission(saved)
+                        runCatching { syncApprovalAuditLogs(saved.id) }
                         return@runCatching saved.toDomain()
                     }
-                    else -> throw createdRes.toException()
+                    else -> throw submittedRes.toException()
                 }
             }
 
@@ -905,14 +1009,29 @@ class WorkspaceRepositoryImpl(
             if (isProductionHttpMode()) {
                 val remote = remoteDataSource
                     ?: throw IllegalStateException("Remote workspace API is not initialized.")
-                when (val res = remote.approveMedicineSubmission(submissionId, reviewNotes)) {
+                val approveScope = "med-approve-$submissionId"
+                when (
+                    val res = remote.approveMedicineSubmission(
+                        submissionId = submissionId,
+                        notes = reviewNotes,
+                        idempotencyKey = obtainIdempotencyKey(approveScope)
+                    )
+                ) {
                     is NetworkResult.Success -> {
+                        releaseIdempotencyKey(approveScope)
                         val saved = res.data.toEntity()
                         workspaceDao.insertSubmission(saved)
+                        // Immediately sync live approved catalogue and audit trail from backend
+                        runCatching { syncCompanyCatalogue() }
+                        runCatching { syncApprovalAuditLogs(submissionId) }
                         return@runCatching saved.toDomain()
                     }
                     else -> throw res.toException()
                 }
+            }
+
+            if (existing.hsnCode.isBlank()) {
+                throw IllegalStateException("Cannot approve submission #$submissionId without an explicit HSN code.")
             }
 
             val now = System.currentTimeMillis()
@@ -927,7 +1046,7 @@ class WorkspaceRepositoryImpl(
                     therapeuticCategory = existing.therapeuticCategory.ifBlank { "General Medicine" },
                     manufacturerName = existing.organizationName,
                     packSize = existing.packSize,
-                    hsnCode = existing.hsnCode.ifBlank { "30049099" },
+                    hsnCode = existing.hsnCode.trim(),
                     gstRatePercent = existing.gstRatePercent,
                     storageCondition = existing.storageCondition,
                     isRx = existing.isRx,
@@ -1008,10 +1127,19 @@ class WorkspaceRepositoryImpl(
             if (isProductionHttpMode()) {
                 val remote = remoteDataSource
                     ?: throw IllegalStateException("Remote workspace API is not initialized.")
-                when (val res = remote.rejectMedicineSubmission(submissionId, rejectionReason.trim())) {
+                val rejectScope = "med-reject-$submissionId"
+                when (
+                    val res = remote.rejectMedicineSubmission(
+                        submissionId = submissionId,
+                        reason = rejectionReason.trim(),
+                        idempotencyKey = obtainIdempotencyKey(rejectScope)
+                    )
+                ) {
                     is NetworkResult.Success -> {
+                        releaseIdempotencyKey(rejectScope)
                         val saved = res.data.toEntity()
                         workspaceDao.insertSubmission(saved)
+                        runCatching { syncApprovalAuditLogs(submissionId) }
                         return@runCatching saved.toDomain()
                     }
                     else -> throw res.toException()
@@ -1077,10 +1205,8 @@ class WorkspaceRepositoryImpl(
 
     override suspend fun updateCompanyCatalogueProduct(product: ProductEntity): Result<Unit> {
         return runCatching {
-            val actor = requirePermission(PharmaPermission.MEDICINE_EDIT)
-            if (!AccessControlPolicy.canOperateOnOrganization(actor, product.organizationId)) {
-                throw SecurityException("Cross-organization catalogue edit denied.")
-            }
+            val actor = requireAuthenticatedUser()
+            AccessControlPolicy.canEditApprovedCatalogueProduct(actor, product.organizationId).getOrThrow()
             pharmaRepository.putApiProducts(product).getOrThrow()
         }
     }
@@ -1251,6 +1377,10 @@ class WorkspaceRepositoryImpl(
                 }
             }
 
+            val isProd = isProductionHttpMode()
+            if (isProd && !MediaUploadManager.isPersistableProductionMediaUrl(banner.imageUrl)) {
+                throw IllegalArgumentException("Upload banner creative to the server before publishing in production mode.")
+            }
             val now = System.currentTimeMillis()
             val prepared = banner.copy(
                 organizationId = actor.organizationId,
@@ -1262,11 +1392,18 @@ class WorkspaceRepositoryImpl(
                 updatedAtEpochMillis = now
             )
 
-            if (isProductionHttpMode()) {
+            if (isProd) {
                 val remote = remoteDataSource
                     ?: throw IllegalStateException("Remote workspace API is not initialized.")
-                when (val res = remote.saveOfferBanner(prepared.toDto())) {
+                val opScope = "banner-save-${actor.organizationId}-${prepared.id}-${prepared.title.trim().lowercase()}"
+                when (
+                    val res = remote.saveOfferBanner(
+                        dto = prepared.toDto(),
+                        idempotencyKey = obtainIdempotencyKey(opScope)
+                    )
+                ) {
                     is NetworkResult.Success -> {
+                        releaseIdempotencyKey(opScope)
                         val saved = res.data.toEntity()
                         workspaceDao.insertBanner(saved)
                         return@runCatching saved.toDomain()
@@ -1466,6 +1603,10 @@ class WorkspaceRepositoryImpl(
             if (!AccessControlPolicy.canOperateOnOrganization(actor, linked.organizationId) && linked.organizationId > 0L) {
                 throw SecurityException("Cannot announce medicines belonging to another organization.")
             }
+            val isProd = isProductionHttpMode()
+            if (isProd && !MediaUploadManager.isPersistableProductionMediaUrl(announcement.imageUrl)) {
+                throw IllegalArgumentException("Upload announcement artwork to the server before publishing in production mode.")
+            }
             val now = System.currentTimeMillis()
             val prepared = announcement.copy(
                 organizationId = actor.organizationId,
@@ -1476,11 +1617,18 @@ class WorkspaceRepositoryImpl(
                     announcement.publishedAtEpochMillis ?: now
                 } else null
             )
-            if (isProductionHttpMode()) {
+            if (isProd) {
                 val remote = remoteDataSource
                     ?: throw IllegalStateException("Remote workspace API is not initialized.")
-                when (val res = remote.saveMedicineAnnouncement(prepared.toDto())) {
+                val opScope = "announcement-save-${actor.organizationId}-${prepared.id}-${prepared.title.trim().lowercase()}"
+                when (
+                    val res = remote.saveMedicineAnnouncement(
+                        dto = prepared.toDto(),
+                        idempotencyKey = obtainIdempotencyKey(opScope)
+                    )
+                ) {
                     is NetworkResult.Success -> {
+                        releaseIdempotencyKey(opScope)
                         val entity = res.data.toEntity()
                         workspaceDao.insertAnnouncement(entity)
                         return@runCatching entity.toDomain()
@@ -1548,8 +1696,10 @@ class WorkspaceRepositoryImpl(
     // =========================================================================
 
     override fun getStockistActiveBannersFlow(): Flow<List<OfferBanner>> {
-        return workspaceDao.getCandidatePublicBannersFlow().map { entities ->
-            val now = System.currentTimeMillis()
+        return combine(
+            workspaceDao.getCandidatePublicBannersFlow(),
+            bannerClockMillisFlow
+        ) { entities, now ->
             entities.map { it.toDomain() }
                 .filter { it.isEligibleForStockist(now) }
                 .sortedWith(compareBy<OfferBanner> { it.priorityOrder }.thenByDescending { it.updatedAtEpochMillis })
@@ -1704,6 +1854,368 @@ class WorkspaceRepositoryImpl(
                     createdAtEpochMillis = now
                 )
             )
+        }
+    }
+
+    // =========================================================================
+    // Remote Read Synchronization (All 12 Datasets — Strictly Organization Scoped)
+    // =========================================================================
+
+    override suspend fun syncAuthContext(): Result<AuthUser> {
+        return runCatching {
+            if (!isProductionHttpMode()) {
+                return@runCatching requireAuthenticatedUser()
+            }
+            val remote = remoteDataSource
+                ?: throw IllegalStateException("Remote workspace API is not initialized.")
+            when (val res = remote.fetchAuthContext()) {
+                is NetworkResult.Success -> {
+                    val ctx = res.data
+                    val orgDto = ctx.organization
+                    val enrichedUserDto = ctx.user.copy(
+                        organizationId = if (orgDto.id > 0L) orgDto.id else ctx.user.organizationId,
+                        organizationType = orgDto.type.ifBlank { ctx.user.organizationType ?: "" },
+                        organizationName = orgDto.name.ifBlank { ctx.user.organizationName ?: "" },
+                        roles = ctx.roles.ifEmpty { ctx.user.roles },
+                        permissions = ctx.permissions
+                    )
+                    val userEntity = enrichedUserDto.toUserEntityCache(isProductionMode = true)
+                    val savedId = db.withTransaction {
+                        if (orgDto.id > 0L) {
+                            workspaceDao.upsertOrganization(
+                                OrganizationEntity(
+                                    id = orgDto.id,
+                                    name = orgDto.name,
+                                    type = orgDto.type,
+                                    gstin = orgDto.gstin,
+                                    drugLicenseNumber = orgDto.drugLicenseNumber,
+                                    address = orgDto.address,
+                                    isActive = orgDto.isActive,
+                                    createdAtEpochMillis = orgDto.createdAtEpochMillis
+                                )
+                            )
+                        }
+                        val existing = userDao.getUserById(userEntity.id)
+                            ?: userDao.getUserByEmail(userEntity.email.lowercase())
+                        if (existing != null) {
+                            userDao.updateUser(
+                                existing.copy(
+                                    fullName = userEntity.fullName,
+                                    businessName = userEntity.businessName,
+                                    email = userEntity.email,
+                                    phone = userEntity.phone,
+                                    gstin = userEntity.gstin,
+                                    address = userEntity.address,
+                                    role = userEntity.role,
+                                    status = userEntity.status,
+                                    emailVerified = userEntity.emailVerified,
+                                    phoneVerified = userEntity.phoneVerified,
+                                    profileBio = userEntity.profileBio,
+                                    organizationId = userEntity.organizationId,
+                                    organizationType = userEntity.organizationType,
+                                    organizationName = userEntity.organizationName,
+                                    assignedRolesCsv = userEntity.assignedRolesCsv,
+                                    permissionsCsv = userEntity.permissionsCsv
+                                )
+                            )
+                            existing.id
+                        } else {
+                            userDao.insertUser(userEntity)
+                        }
+                    }
+                    dataStoreManager.setLoggedInUserId(savedId)
+                    enrichedUserDto.toAuthUser(isProductionMode = true).copy(id = savedId)
+                }
+                else -> throw res.toException()
+            }
+        }
+    }
+
+    override suspend fun syncOrganizationMembers(): Result<Unit> {
+        return runCatching {
+            if (!isProductionHttpMode()) return@runCatching
+            val actor = requireAuthenticatedUser()
+            if (!actor.hasValidOrganizationContext()) return@runCatching
+            val remote = remoteDataSource
+                ?: throw IllegalStateException("Remote workspace API is not initialized.")
+            when (val res = remote.fetchOrganizationMembers(actor.organizationId)) {
+                is NetworkResult.Success -> {
+                    val scoped = res.data
+                        .filter { it.organizationId == actor.organizationId || actor.role == UserRole.ADMIN }
+                        .map { it.toEntity(isProductionMode = true) }
+                    db.withTransaction {
+                        workspaceDao.deleteMembersByOrganization(actor.organizationId)
+                        scoped.forEach { workspaceDao.upsertMember(it) }
+                    }
+                }
+                else -> throw res.toException()
+            }
+        }
+    }
+
+    override suspend fun syncMedicineSubmissions(): Result<Unit> {
+        return runCatching {
+            if (!isProductionHttpMode()) return@runCatching
+            val actor = requireAuthenticatedUser()
+            if (actor.organizationType == OrganizationType.STOCKIST || !actor.hasValidOrganizationContext()) {
+                return@runCatching
+            }
+            val remote = remoteDataSource
+                ?: throw IllegalStateException("Remote workspace API is not initialized.")
+            when (val res = remote.fetchMedicineSubmissions()) {
+                is NetworkResult.Success -> {
+                    val scoped = res.data
+                        .filter { it.organizationId == actor.organizationId || actor.role == UserRole.ADMIN }
+                        .map { it.toEntity() }
+                    db.withTransaction {
+                        workspaceDao.deleteSubmissionsByOrganization(actor.organizationId)
+                        scoped.forEach { workspaceDao.insertSubmission(it) }
+                    }
+                }
+                else -> throw res.toException()
+            }
+        }
+    }
+
+    override suspend fun syncApprovalAuditLogs(submissionId: Long?): Result<Unit> {
+        return runCatching {
+            if (!isProductionHttpMode()) return@runCatching
+            val actor = requireAuthenticatedUser()
+            if (actor.organizationType == OrganizationType.STOCKIST || !actor.hasValidOrganizationContext()) {
+                return@runCatching
+            }
+            val remote = remoteDataSource
+                ?: throw IllegalStateException("Remote workspace API is not initialized.")
+            val targetIds = if (submissionId != null) {
+                listOf(submissionId)
+            } else {
+                workspaceDao.getSubmissionsByOrganization(actor.organizationId).map { it.id }
+            }
+            for (subId in targetIds) {
+                when (val res = remote.fetchSubmissionAuditLogs(subId)) {
+                    is NetworkResult.Success -> {
+                        val entries = res.data
+                            .filter { it.organizationId == actor.organizationId || actor.role == UserRole.ADMIN }
+                            .map { it.toEntity() }
+                        db.withTransaction {
+                            workspaceDao.deleteAuditLogsBySubmission(subId)
+                            entries.forEach { workspaceDao.insertAuditLog(it) }
+                        }
+                    }
+                    else -> if (submissionId != null) throw res.toException()
+                }
+            }
+        }
+    }
+
+    override suspend fun syncCompanyCatalogue(): Result<Unit> {
+        return runCatching {
+            if (!isProductionHttpMode()) return@runCatching
+            val actor = requireAuthenticatedUser()
+            if (actor.organizationType == OrganizationType.STOCKIST || !actor.hasValidOrganizationContext()) {
+                return@runCatching
+            }
+            val remote = remoteDataSource
+                ?: throw IllegalStateException("Remote workspace API is not initialized.")
+            when (val res = remote.fetchCompanyCatalogue()) {
+                is NetworkResult.Success -> {
+                    db.withTransaction {
+                        res.data.forEach { dto ->
+                            val existing = productDao.getProductById(dto.id)
+                            val entity = dto.toEntity().copy(
+                                organizationId = existing?.organizationId?.takeIf { it > 0L } ?: actor.organizationId,
+                                approvalStatus = MedicineSubmissionStatus.APPROVED.name,
+                                catalogueStatus = if (dto.isActive) {
+                                    CataloguePublicationStatus.ACTIVE.name
+                                } else {
+                                    CataloguePublicationStatus.INACTIVE.name
+                                }
+                            )
+                            productDao.insertProduct(entity)
+                        }
+                    }
+                }
+                else -> throw res.toException()
+            }
+        }
+    }
+
+    override suspend fun syncMasterData(): Result<Unit> {
+        return runCatching {
+            if (!isProductionHttpMode()) return@runCatching
+            val actor = requireAuthenticatedUser()
+            if (actor.organizationType == OrganizationType.STOCKIST || !actor.hasValidOrganizationContext()) {
+                return@runCatching
+            }
+            val remote = remoteDataSource
+                ?: throw IllegalStateException("Remote workspace API is not initialized.")
+            when (val res = remote.fetchMasterData()) {
+                is NetworkResult.Success -> {
+                    val scoped = res.data
+                        .filter { (it.organizationId ?: 0L) == 0L || it.organizationId == actor.organizationId || actor.role == UserRole.ADMIN }
+                        .map { it.toEntity() }
+                    db.withTransaction {
+                        workspaceDao.deleteMasterDataForOrganizationScope(actor.organizationId)
+                        scoped.forEach { workspaceDao.insertMasterDataIgnoreDuplicate(it) }
+                    }
+                }
+                else -> throw res.toException()
+            }
+        }
+    }
+
+    override suspend fun syncManufacturerBanners(): Result<Unit> {
+        return runCatching {
+            if (!isProductionHttpMode()) return@runCatching
+            val actor = requireAuthenticatedUser()
+            if (!AccessControlPolicy.canAccessWorkspace(actor, WorkspaceType.MANUFACTURER)) return@runCatching
+            val remote = remoteDataSource
+                ?: throw IllegalStateException("Remote workspace API is not initialized.")
+            when (val res = remote.fetchManufacturerBanners()) {
+                is NetworkResult.Success -> {
+                    val scoped = res.data
+                        .filter { it.organizationId == actor.organizationId || actor.role == UserRole.ADMIN }
+                        .map { it.toEntity() }
+                    db.withTransaction {
+                        workspaceDao.deleteBannersByOrganization(actor.organizationId)
+                        scoped.forEach { workspaceDao.insertBanner(it) }
+                    }
+                }
+                else -> throw res.toException()
+            }
+        }
+    }
+
+    override suspend fun syncPromotionalCampaigns(): Result<Unit> {
+        return runCatching {
+            if (!isProductionHttpMode()) return@runCatching
+            val actor = requireAuthenticatedUser()
+            if (!AccessControlPolicy.canAccessWorkspace(actor, WorkspaceType.MANUFACTURER)) return@runCatching
+            val remote = remoteDataSource
+                ?: throw IllegalStateException("Remote workspace API is not initialized.")
+            when (val res = remote.fetchManufacturerCampaigns()) {
+                is NetworkResult.Success -> {
+                    val scoped = res.data
+                        .filter { it.organizationId == actor.organizationId || actor.role == UserRole.ADMIN }
+                        .map { it.toEntity() }
+                    db.withTransaction {
+                        workspaceDao.deleteCampaignsByOrganization(actor.organizationId)
+                        scoped.forEach { workspaceDao.insertCampaign(it) }
+                    }
+                }
+                else -> throw res.toException()
+            }
+        }
+    }
+
+    override suspend fun syncManufacturerAnnouncements(): Result<Unit> {
+        return runCatching {
+            if (!isProductionHttpMode()) return@runCatching
+            val actor = requireAuthenticatedUser()
+            if (!AccessControlPolicy.canAccessWorkspace(actor, WorkspaceType.MANUFACTURER)) return@runCatching
+            val remote = remoteDataSource
+                ?: throw IllegalStateException("Remote workspace API is not initialized.")
+            when (val res = remote.fetchManufacturerAnnouncements()) {
+                is NetworkResult.Success -> {
+                    val scoped = res.data
+                        .filter { it.organizationId == actor.organizationId || actor.role == UserRole.ADMIN }
+                        .map { it.toEntity() }
+                    db.withTransaction {
+                        workspaceDao.deleteAnnouncementsByOrganization(actor.organizationId)
+                        scoped.forEach { workspaceDao.insertAnnouncement(it) }
+                    }
+                }
+                else -> throw res.toException()
+            }
+        }
+    }
+
+    override suspend fun syncStockistFeed(): Result<Unit> {
+        return runCatching {
+            if (!isProductionHttpMode()) return@runCatching
+            val remote = remoteDataSource
+                ?: throw IllegalStateException("Remote workspace API is not initialized.")
+            val bannersRes = remote.fetchStockistActiveBanners()
+            if (bannersRes is NetworkResult.Success) {
+                val mapped = bannersRes.data.map { it.toEntity() }
+                db.withTransaction {
+                    workspaceDao.deletePublicCandidateBanners()
+                    mapped.forEach { workspaceDao.insertBanner(it) }
+                }
+            }
+            val announcementsRes = remote.fetchStockistPublishedAnnouncements()
+            if (announcementsRes is NetworkResult.Success) {
+                val mapped = announcementsRes.data.map { it.toEntity() }
+                db.withTransaction {
+                    workspaceDao.deletePublishedAnnouncements()
+                    mapped.forEach { workspaceDao.insertAnnouncement(it) }
+                }
+            }
+            if (bannersRes !is NetworkResult.Success && announcementsRes !is NetworkResult.Success) {
+                throw bannersRes.toException()
+            }
+        }
+    }
+
+    override suspend fun syncStockistPurchasedInventory(): Result<Unit> {
+        return runCatching {
+            if (!isProductionHttpMode()) return@runCatching
+            val actor = requireAuthenticatedUser()
+            if (!AccessControlPolicy.canAccessStockistPurchasedInventory(actor)) return@runCatching
+            val remote = remoteDataSource
+                ?: throw IllegalStateException("Remote workspace API is not initialized.")
+            when (val res = remote.fetchStockistPurchasedInventory()) {
+                is NetworkResult.Success -> {
+                    val scoped = res.data
+                        .filter {
+                            it.stockistOrganizationId == actor.organizationId &&
+                                (it.stockistUserId == 0L || it.stockistUserId == actor.id || actor.role == UserRole.ADMIN)
+                        }
+                        .map { it.toEntity() }
+                    db.withTransaction {
+                        workspaceDao.clearStockistInventoryForOrg(actor.organizationId)
+                        scoped.forEach { workspaceDao.upsertStockistInventoryItem(it) }
+                    }
+                }
+                else -> throw res.toException()
+            }
+        }
+    }
+
+    override suspend fun syncActiveWorkspace(): Result<Unit> {
+        return runCatching {
+            if (!isProductionHttpMode()) return@runCatching
+            val user = syncAuthContext().getOrThrow()
+            val activeWorkspace = getActiveWorkspaceFlow().first()
+            when (activeWorkspace) {
+                WorkspaceType.STOCKIST -> {
+                    syncStockistFeed()
+                    syncStockistPurchasedInventory()
+                }
+                WorkspaceType.MANUFACTURER -> {
+                    syncManufacturerBanners()
+                    syncPromotionalCampaigns()
+                    syncManufacturerAnnouncements()
+                    syncMedicineSubmissions()
+                    syncCompanyCatalogue()
+                }
+                WorkspaceType.COMPANY -> {
+                    syncCompanyCatalogue()
+                    syncMedicineSubmissions()
+                    syncApprovalAuditLogs()
+                    syncMasterData()
+                    if (AccessControlPolicy.canManageOrganizationRoles(user, user.organizationId).isSuccess) {
+                        syncOrganizationMembers()
+                    }
+                }
+                WorkspaceType.ADMIN -> {
+                    syncCompanyCatalogue()
+                    syncMedicineSubmissions()
+                    syncApprovalAuditLogs()
+                    syncMasterData()
+                    syncOrganizationMembers()
+                }
+            }
         }
     }
 }

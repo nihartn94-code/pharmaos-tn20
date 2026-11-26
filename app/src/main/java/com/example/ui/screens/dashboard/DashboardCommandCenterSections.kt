@@ -9,6 +9,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.PaddingValues
@@ -62,7 +63,9 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -182,38 +185,77 @@ fun DashboardOperationsPulseCard(
                     }
                 }
 
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    PulseMetricTile(
-                        value = inventoryMetricValue,
-                        label = inventoryMetricLabel,
-                        icon = Icons.Default.Inventory2,
-                        accentTint = Color(0xFF5EEAD4),
-                        testTag = "pulse_tile_inventory",
-                        onClick = onInventoryClick,
-                        modifier = Modifier.weight(1f)
-                    )
-                    PulseMetricTile(
-                        value = "$alertsCount",
-                        label = "Trade Alerts",
-                        icon = Icons.Default.NotificationsActive,
-                        accentTint = if (uiState.criticalAlertsCount > 0) Color(0xFFFCA5A5) else Color(0xFFFDE68A),
-                        showAlertDot = uiState.criticalAlertsCount > 0,
-                        testTag = "pulse_tile_alerts",
-                        onClick = onAlertsClick,
-                        modifier = Modifier.weight(1f)
-                    )
-                    PulseMetricTile(
-                        value = "$pendingCount",
-                        label = "Pending Orders",
-                        icon = Icons.Default.PendingActions,
-                        accentTint = Color(0xFFBFDBFE),
-                        testTag = "pulse_tile_pending_orders",
-                        onClick = onPendingOrdersClick,
-                        modifier = Modifier.weight(1f)
-                    )
+                val fontScale = LocalDensity.current.fontScale
+                BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+                    val stackTiles = maxWidth < 310.dp || fontScale >= 1.45f
+                    if (stackTiles) {
+                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            PulseMetricTile(
+                                value = inventoryMetricValue,
+                                label = inventoryMetricLabel,
+                                icon = Icons.Default.Inventory2,
+                                accentTint = Color(0xFF5EEAD4),
+                                testTag = "pulse_tile_inventory",
+                                onClick = onInventoryClick,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                            PulseMetricTile(
+                                value = "$alertsCount",
+                                label = "Trade Alerts",
+                                icon = Icons.Default.NotificationsActive,
+                                accentTint = if (uiState.criticalAlertsCount > 0) Color(0xFFFCA5A5) else Color(0xFFFDE68A),
+                                showAlertDot = uiState.criticalAlertsCount > 0,
+                                testTag = "pulse_tile_alerts",
+                                onClick = onAlertsClick,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                            PulseMetricTile(
+                                value = "$pendingCount",
+                                label = "Pending Orders",
+                                icon = Icons.Default.PendingActions,
+                                accentTint = Color(0xFFBFDBFE),
+                                testTag = "pulse_tile_pending_orders",
+                                onClick = onPendingOrdersClick,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        }
+                    } else {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(IntrinsicSize.Max),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            PulseMetricTile(
+                                value = inventoryMetricValue,
+                                label = inventoryMetricLabel,
+                                icon = Icons.Default.Inventory2,
+                                accentTint = Color(0xFF5EEAD4),
+                                testTag = "pulse_tile_inventory",
+                                onClick = onInventoryClick,
+                                modifier = Modifier.weight(1f).fillMaxHeight()
+                            )
+                            PulseMetricTile(
+                                value = "$alertsCount",
+                                label = "Trade Alerts",
+                                icon = Icons.Default.NotificationsActive,
+                                accentTint = if (uiState.criticalAlertsCount > 0) Color(0xFFFCA5A5) else Color(0xFFFDE68A),
+                                showAlertDot = uiState.criticalAlertsCount > 0,
+                                testTag = "pulse_tile_alerts",
+                                onClick = onAlertsClick,
+                                modifier = Modifier.weight(1f).fillMaxHeight()
+                            )
+                            PulseMetricTile(
+                                value = "$pendingCount",
+                                label = "Pending Orders",
+                                icon = Icons.Default.PendingActions,
+                                accentTint = Color(0xFFBFDBFE),
+                                testTag = "pulse_tile_pending_orders",
+                                onClick = onPendingOrdersClick,
+                                modifier = Modifier.weight(1f).fillMaxHeight()
+                            )
+                        }
+                    }
                 }
             }
         }
@@ -918,9 +960,11 @@ private fun TradeAlertItemRow(
                         ) {
                             Text(
                                 text = alert.category.label.uppercase(),
-                                fontSize = 9.5.sp,
+                                style = MaterialTheme.typography.labelSmall,
                                 fontWeight = FontWeight.ExtraBold,
                                 color = accentColor,
+                                maxLines = 1,
+                                softWrap = false,
                                 modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
                             )
                         }
@@ -1193,7 +1237,9 @@ private fun OrderStageTile(
         shape = RoundedCornerShape(12.dp),
         color = accentColor.copy(alpha = 0.08f),
         border = BorderStroke(1.dp, accentColor.copy(alpha = 0.22f)),
-        modifier = modifier.testTag(testTag)
+        modifier = modifier
+            .semantics(mergeDescendants = true) {}
+            .testTag(testTag)
     ) {
         Column(
             modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),

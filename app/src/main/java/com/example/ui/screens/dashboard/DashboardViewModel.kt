@@ -17,11 +17,13 @@ import com.example.domain.repository.DashboardKpis
 import com.example.domain.repository.PharmaRepository
 import com.example.domain.repository.RecallWithAffectedStock
 import com.example.ui.components.OrderTransactionUiModel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 enum class TradeAlertSeverity(val label: String, val priority: Int) {
@@ -127,18 +129,35 @@ class DashboardViewModel(
         observeStockistPromotionalFeed()
     }
 
+    private val bannerClockMillis = MutableStateFlow(System.currentTimeMillis())
+
     private fun observeStockistPromotionalFeed() {
         val wsRepo = workspaceRepository ?: return
         viewModelScope.launch {
             wsRepo.ensureWorkspaceSeededForLocalDev()
+            runCatching { wsRepo.syncStockistFeed() }
+            runCatching { wsRepo.syncStockistPurchasedInventory() }
+        }
+        // Periodic banner boundary clock so scheduled banners activate & expired banners auto-hide
+        viewModelScope.launch {
+            while (isActive) {
+                delay(30_000L)
+                val now = System.currentTimeMillis()
+                bannerClockMillis.value = now
+                wsRepo.refreshBannerClock(now)
+            }
         }
         viewModelScope.launch {
             combine(
                 wsRepo.getStockistActiveBannersFlow(),
                 wsRepo.getStockistPublishedAnnouncementsFlow(),
-                wsRepo.getStockistPurchasedInventoryFlow()
-            ) { banners, announcements, purchased ->
-                Triple(banners, announcements, purchased.size)
+                wsRepo.getStockistPurchasedInventoryFlow(),
+                bannerClockMillis
+            ) { banners, announcements, purchased, now ->
+                val eligibleNow = banners
+                    .filter { it.isEligibleForStockist(now) }
+                    .sortedWith(compareBy<com.example.domain.model.OfferBanner> { it.priorityOrder }.thenByDescending { it.updatedAtEpochMillis })
+                Triple(eligibleNow, announcements, purchased.size)
             }.collect { (banners, announcements, purchasedCount) ->
                 _uiState.update {
                     it.copy(
@@ -149,6 +168,12 @@ class DashboardViewModel(
                 }
             }
         }
+    }
+
+    /** Forces immediate time-boundary re-evaluation for active/scheduled/expired offer banners. */
+    fun evaluateBannerScheduleAt(epochMillis: Long = System.currentTimeMillis()) {
+        bannerClockMillis.value = epochMillis
+        workspaceRepository?.refreshBannerClock(epochMillis)
     }
 
     private fun observeCurrentUser() {
@@ -208,6 +233,11 @@ class DashboardViewModel(
                 val authorized = user?.role?.canAccessRealTimeInventory == true
                 if (authorized) {
                     repository.refreshRealTimeInventory()
+                }
+                bannerClockMillis.value = System.currentTimeMillis()
+                workspaceRepository?.let { ws ->
+                    runCatching { ws.syncStockistFeed() }
+                    runCatching { ws.syncStockistPurchasedInventory() }
                 }
                 val kpis = repository.getDashboardStats()
                 _uiState.update {

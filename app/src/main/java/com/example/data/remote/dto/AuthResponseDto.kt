@@ -46,7 +46,7 @@ data class UserDto(
     @param:Json(name = "roles") val roles: List<String>? = null,
     @param:Json(name = "permissions") val permissions: List<String>? = null
 ) {
-    fun toAuthUser(): AuthUser {
+    fun toAuthUser(isProductionMode: Boolean = true): AuthUser {
         val parsedRole = try {
             UserRole.valueOf(role.uppercase())
         } catch (_: Exception) {
@@ -62,16 +62,18 @@ data class UserDto(
             ?.toSet()
             ?.takeIf { it.isNotEmpty() }
             ?: setOf(parsedRole)
-        val explicitPermissions = permissions
-            ?.mapNotNull { raw ->
-                com.example.domain.model.PharmaPermission.entries.firstOrNull {
-                    it.name.equals(raw.trim(), ignoreCase = true)
-                }
-            }
-            ?.toSet()
-            ?: emptySet()
+        val resolution = com.example.domain.model.RolePermissionMatrix.resolvePermissionState(
+            roles = parsedRoles,
+            rawPermissions = permissions,
+            isProductionMode = isProductionMode
+        )
         val resolvedOrgType = com.example.domain.model.OrganizationType.fromString(organizationType, parsedRole)
-        val resolvedOrgId = organizationId?.takeIf { it > 0L } ?: id
+        // SECURITY: Never substitute userId for a missing organizationId in production mode.
+        val resolvedOrgId = if (isProductionMode) {
+            organizationId?.takeIf { it > 0L } ?: 0L
+        } else {
+            organizationId?.takeIf { it > 0L } ?: id
+        }
         return AuthUser(
             id = id,
             fullName = fullName,
@@ -89,10 +91,9 @@ data class UserDto(
             organizationType = resolvedOrgType,
             organizationName = organizationName?.takeIf { it.isNotBlank() } ?: businessName,
             assignedRoles = parsedRoles,
-            permissions = com.example.domain.model.RolePermissionMatrix.resolvePermissions(
-                roles = parsedRoles,
-                explicitPermissions = explicitPermissions
-            )
+            permissions = resolution.permissions,
+            permissionStatus = resolution.status,
+            isProductionContext = isProductionMode
         )
     }
 
@@ -100,26 +101,8 @@ data class UserDto(
      * Maps remote user into local Room cache representation.
      * Password hashes are intentionally never returned by or synced from the backend.
      */
-    fun toUserEntityCache(): UserEntity {
-        val parsedRole = UserRole.fromString(role)
-        val parsedRoles = roles
-            ?.mapNotNull { raw -> UserRole.entries.firstOrNull { it.name.equals(raw.trim(), ignoreCase = true) } }
-            ?.toSet()
-            ?.takeIf { it.isNotEmpty() }
-            ?: setOf(parsedRole)
-        val explicitPermissions = permissions
-            ?.mapNotNull { raw ->
-                com.example.domain.model.PharmaPermission.entries.firstOrNull {
-                    it.name.equals(raw.trim(), ignoreCase = true)
-                }
-            }
-            ?.toSet()
-            ?: emptySet()
-        val resolvedPermissions = com.example.domain.model.RolePermissionMatrix.resolvePermissions(
-            roles = parsedRoles,
-            explicitPermissions = explicitPermissions
-        )
-        val resolvedOrgType = com.example.domain.model.OrganizationType.fromString(organizationType, parsedRole)
+    fun toUserEntityCache(isProductionMode: Boolean = true): UserEntity {
+        val authUser = toAuthUser(isProductionMode = isProductionMode)
         return UserEntity(
             id = id,
             fullName = fullName,
@@ -130,17 +113,17 @@ data class UserDto(
             address = address,
             passwordHash = "",
             passwordSalt = "",
-            role = parsedRole.name,
+            role = authUser.role.name,
             status = status.uppercase(),
             createdAtEpochMillis = createdAtEpochMillis,
             emailVerified = emailVerified,
             phoneVerified = phoneVerified,
             profileBio = profileBio,
-            organizationId = organizationId?.takeIf { it > 0L } ?: id,
-            organizationType = resolvedOrgType.name,
-            organizationName = organizationName?.takeIf { it.isNotBlank() } ?: businessName,
-            assignedRolesCsv = com.example.domain.model.RolePermissionMatrix.rolesToCsv(parsedRoles),
-            permissionsCsv = com.example.domain.model.PharmaPermission.toCsv(resolvedPermissions)
+            organizationId = authUser.organizationId,
+            organizationType = authUser.organizationType.name,
+            organizationName = authUser.organizationName,
+            assignedRolesCsv = com.example.domain.model.RolePermissionMatrix.rolesToCsv(authUser.assignedRoles),
+            permissionsCsv = com.example.domain.model.PharmaPermission.toCsv(authUser.permissions)
         )
     }
 }

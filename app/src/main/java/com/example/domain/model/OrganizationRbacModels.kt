@@ -92,10 +92,29 @@ enum class PharmaPermission(val description: String) {
 }
 
 /**
- * Default permission sets mapped to each [UserRole].
- * Employees of a [OrganizationType.PHARMACEUTICAL_ORGANIZATION] can hold both
- * [UserRole.MANUFACTURER] and [UserRole.PHARMA_COMPANY] roles under one [organizationId],
- * receiving the union of their permissions and unlocking the Workspace Switcher.
+ * Distinguishes backend-confirmed permission payloads from missing, explicitly empty,
+ * or malformed payloads so production mode always fails closed.
+ */
+enum class PermissionResolutionStatus {
+    CONFIRMED,
+    EXPLICITLY_EMPTY,
+    MISSING,
+    INVALID
+}
+
+data class PermissionResolution(
+    val permissions: Set<PharmaPermission>,
+    val status: PermissionResolutionStatus
+)
+
+/**
+ * Default permission sets mapped to each [UserRole] (used ONLY in explicitly isolated
+ * DEVELOPMENT_LOCAL_MODE). In production, permissions MUST come from the backend auth context;
+ * missing, empty, or invalid payloads fail closed with zero permissions.
+ *
+ * SECURITY RULE:
+ * `ROLE_ASSIGN` and `ORGANIZATION_MEMBER_MANAGE` are strictly excluded from default
+ * [companyPermissions] and restricted to explicitly authorized organization administrators.
  */
 object RolePermissionMatrix {
 
@@ -122,6 +141,9 @@ object RolePermissionMatrix {
         PharmaPermission.ANALYTICS_VIEW
     )
 
+    /**
+     * Standard Company governance permissions (excludes ROLE_ASSIGN and ORGANIZATION_MEMBER_MANAGE).
+     */
     val companyPermissions: Set<PharmaPermission> = setOf(
         PharmaPermission.PRODUCT_VIEW,
         PharmaPermission.ORDER_VIEW,
@@ -134,7 +156,13 @@ object RolePermissionMatrix {
         PharmaPermission.COMPOSITION_MANAGE,
         PharmaPermission.DOSAGE_FORM_MANAGE,
         PharmaPermission.BRAND_MANAGE,
-        PharmaPermission.ANALYTICS_VIEW,
+        PharmaPermission.ANALYTICS_VIEW
+    )
+
+    /**
+     * Elevated organization administrator permissions granted ONLY explicitly to org admins.
+     */
+    val companyOrgAdminPermissions: Set<PharmaPermission> = companyPermissions + setOf(
         PharmaPermission.ORGANIZATION_MEMBER_MANAGE,
         PharmaPermission.ROLE_ASSIGN
     )
@@ -148,11 +176,60 @@ object RolePermissionMatrix {
         UserRole.ADMIN -> adminPermissions
     }
 
+    /**
+     * Authoritative permission resolver that distinguishes missing, explicitly empty,
+     * invalid, and confirmed backend permission payloads.
+     *
+     * - In production (`isProductionMode == true`): NEVER assigns default role permissions.
+     *   Missing, explicitly empty, or malformed permissions fail closed with emptySet().
+     * - In isolated local dev (`isProductionMode == false`): null derives local role defaults;
+     *   explicitly empty still fails closed as EXPLICITLY_EMPTY.
+     */
+    fun resolvePermissionState(
+        roles: Set<UserRole>,
+        rawPermissions: List<String>?,
+        isProductionMode: Boolean
+    ): PermissionResolution {
+        if (rawPermissions == null) {
+            return if (isProductionMode) {
+                PermissionResolution(emptySet(), PermissionResolutionStatus.MISSING)
+            } else {
+                PermissionResolution(
+                    permissions = roles.flatMap { defaultPermissionsFor(it) }.toSet(),
+                    status = PermissionResolutionStatus.CONFIRMED
+                )
+            }
+        }
+        if (rawPermissions.isEmpty()) {
+            return PermissionResolution(emptySet(), PermissionResolutionStatus.EXPLICITLY_EMPTY)
+        }
+        val parsed = mutableSetOf<PharmaPermission>()
+        var hasInvalidEntry = false
+        for (raw in rawPermissions) {
+            val trimmed = raw.trim()
+            val match = PharmaPermission.entries.firstOrNull { it.name.equals(trimmed, ignoreCase = true) }
+            if (match != null) {
+                parsed.add(match)
+            } else if (trimmed.isNotEmpty()) {
+                hasInvalidEntry = true
+            }
+        }
+        if (parsed.isEmpty()) {
+            return PermissionResolution(emptySet(), PermissionResolutionStatus.INVALID)
+        }
+        if (isProductionMode && hasInvalidEntry && parsed.isEmpty()) {
+            return PermissionResolution(emptySet(), PermissionResolutionStatus.INVALID)
+        }
+        return PermissionResolution(parsed, PermissionResolutionStatus.CONFIRMED)
+    }
+
     fun resolvePermissions(
         roles: Set<UserRole>,
-        explicitPermissions: Set<PharmaPermission> = emptySet()
+        explicitPermissions: Set<PharmaPermission> = emptySet(),
+        isProductionMode: Boolean = false
     ): Set<PharmaPermission> {
         if (explicitPermissions.isNotEmpty()) return explicitPermissions
+        if (isProductionMode) return emptySet()
         return roles.flatMap { defaultPermissionsFor(it) }.toSet()
     }
 
@@ -177,34 +254,55 @@ object RolePermissionMatrix {
 object AccessControlPolicy {
 
     fun authorizedWorkspaces(user: AuthUser): List<WorkspaceType> {
+        // Fail closed whenever backend permission context is missing, empty, or invalid
+        if (user.permissionStatus != PermissionResolutionStatus.CONFIRMED) {
+            return emptyList()
+        }
+        if (user.permissions.isEmpty() && user.role != UserRole.ADMIN) {
+            return emptyList()
+        }
+        if (user.isProductionContext && user.role != UserRole.ADMIN && user.organizationId <= 0L) {
+            return emptyList()
+        }
+
         val workspaces = linkedSetOf<WorkspaceType>()
-        if (user.organizationType == OrganizationType.STOCKIST ||
-            user.assignedRoles.contains(UserRole.STOCKIST) ||
-            user.hasPermission(PharmaPermission.BASKET_MANAGE)
+        val hasStockistCapability = user.hasPermission(PharmaPermission.BASKET_MANAGE) ||
+            user.hasPermission(PharmaPermission.ORDER_CREATE) ||
+            user.hasPermission(PharmaPermission.STOCKIST_INVENTORY_MANAGE)
+        if (user.organizationType == OrganizationType.STOCKIST &&
+            (hasStockistCapability || (!user.isProductionContext && user.assignedRoles.contains(UserRole.STOCKIST)))
         ) {
             workspaces.add(WorkspaceType.STOCKIST)
         }
+
         val hasManufacturerCapability =
-            user.assignedRoles.contains(UserRole.MANUFACTURER) ||
-                user.hasPermission(PharmaPermission.BANNER_CREATE) ||
+            user.hasPermission(PharmaPermission.BANNER_CREATE) ||
+                user.hasPermission(PharmaPermission.BANNER_UPDATE) ||
                 user.hasPermission(PharmaPermission.CAMPAIGN_MANAGE) ||
-                user.hasPermission(PharmaPermission.MEDICINE_ANNOUNCEMENT_CREATE)
-        if (hasManufacturerCapability && user.organizationType == OrganizationType.PHARMACEUTICAL_ORGANIZATION) {
+                user.hasPermission(PharmaPermission.MEDICINE_ANNOUNCEMENT_CREATE) ||
+                (!user.isProductionContext && user.assignedRoles.contains(UserRole.MANUFACTURER))
+        if (hasManufacturerCapability &&
+            user.organizationType == OrganizationType.PHARMACEUTICAL_ORGANIZATION &&
+            user.organizationId > 0L
+        ) {
             workspaces.add(WorkspaceType.MANUFACTURER)
         }
+
         val hasCompanyCapability =
-            user.assignedRoles.contains(UserRole.PHARMA_COMPANY) ||
-                user.hasPermission(PharmaPermission.MEDICINE_APPROVE) ||
+            user.hasPermission(PharmaPermission.MEDICINE_APPROVE) ||
+                user.hasPermission(PharmaPermission.MEDICINE_REJECT) ||
                 user.hasPermission(PharmaPermission.MEDICINE_CATALOGUE_MANAGE) ||
-                user.hasPermission(PharmaPermission.COMPOSITION_MANAGE)
-        if (hasCompanyCapability && user.organizationType == OrganizationType.PHARMACEUTICAL_ORGANIZATION) {
+                user.hasPermission(PharmaPermission.COMPOSITION_MANAGE) ||
+                (!user.isProductionContext && user.assignedRoles.contains(UserRole.PHARMA_COMPANY))
+        if (hasCompanyCapability &&
+            user.organizationType == OrganizationType.PHARMACEUTICAL_ORGANIZATION &&
+            user.organizationId > 0L
+        ) {
             workspaces.add(WorkspaceType.COMPANY)
         }
+
         if (user.assignedRoles.contains(UserRole.ADMIN) || user.role == UserRole.ADMIN) {
             workspaces.add(WorkspaceType.ADMIN)
-        }
-        if (workspaces.isEmpty()) {
-            workspaces.add(defaultWorkspaceForRole(user.role))
         }
         return workspaces.toList()
     }
@@ -223,7 +321,9 @@ object AccessControlPolicy {
 
     fun canAccessManufacturerRealTimeInventory(user: AuthUser?): Boolean {
         if (user == null) return false
+        if (user.permissionStatus != PermissionResolutionStatus.CONFIRMED) return false
         if (user.organizationType == OrganizationType.STOCKIST && user.role == UserRole.STOCKIST) return false
+        if (user.isProductionContext && user.organizationId <= 0L && user.role != UserRole.ADMIN) return false
         return user.assignedRoles.contains(UserRole.MANUFACTURER) ||
             user.assignedRoles.contains(UserRole.PHARMA_COMPANY) ||
             user.assignedRoles.contains(UserRole.ADMIN)
@@ -231,8 +331,80 @@ object AccessControlPolicy {
 
     fun canAccessStockistPurchasedInventory(user: AuthUser?): Boolean {
         if (user == null) return false
+        if (user.permissionStatus != PermissionResolutionStatus.CONFIRMED) return false
         return user.hasPermission(PharmaPermission.STOCKIST_INVENTORY_MANAGE) &&
             (user.organizationType == OrganizationType.STOCKIST || user.role == UserRole.ADMIN)
+    }
+
+    /**
+     * Manufacturers holding limited MEDICINE_EDIT may edit ONLY DRAFT or REJECTED submissions
+     * belonging to their own organization — NEVER PENDING_APPROVAL or APPROVED catalogue products.
+     */
+    fun canEditMedicineSubmission(actor: AuthUser?, submission: MedicineSubmission): Result<Unit> {
+        if (actor == null) {
+            return Result.failure(SecurityException("Authentication required to edit medicine submissions."))
+        }
+        if (actor.permissionStatus != PermissionResolutionStatus.CONFIRMED) {
+            return Result.failure(SecurityException("Authorization context is not confirmed."))
+        }
+        if (!actor.hasPermission(PharmaPermission.MEDICINE_EDIT) && !actor.hasPermission(PharmaPermission.MEDICINE_SUBMIT)) {
+            return Result.failure(SecurityException("Access denied: MEDICINE_EDIT permission is required."))
+        }
+        if (!canOperateOnOrganization(actor, submission.organizationId)) {
+            return Result.failure(SecurityException("Cross-organization edit denied."))
+        }
+        if (submission.approvalStatus != MedicineSubmissionStatus.DRAFT &&
+            submission.approvalStatus != MedicineSubmissionStatus.REJECTED
+        ) {
+            return Result.failure(
+                IllegalStateException(
+                    "Only DRAFT or REJECTED submissions can be edited (current: ${submission.approvalStatus}). Approved medicines require Company catalogue governance."
+                )
+            )
+        }
+        return Result.success(Unit)
+    }
+
+    /**
+     * Mutating live APPROVED regulated catalogue products requires explicit Company
+     * `MEDICINE_CATALOGUE_MANAGE` governance authority within the same organization.
+     */
+    fun canEditApprovedCatalogueProduct(actor: AuthUser?, targetOrganizationId: Long): Result<Unit> {
+        if (actor == null) {
+            return Result.failure(SecurityException("Authentication required."))
+        }
+        if (actor.permissionStatus != PermissionResolutionStatus.CONFIRMED) {
+            return Result.failure(SecurityException("Authorization context is not confirmed."))
+        }
+        if (!actor.hasPermission(PharmaPermission.MEDICINE_CATALOGUE_MANAGE)) {
+            return Result.failure(SecurityException("Access denied: MEDICINE_CATALOGUE_MANAGE authority is required to modify approved catalogue medicines."))
+        }
+        if (!canOperateOnOrganization(actor, targetOrganizationId)) {
+            return Result.failure(SecurityException("Cross-organization catalogue update denied."))
+        }
+        return Result.success(Unit)
+    }
+
+    /**
+     * Role & member administration is strictly restricted to explicitly authorized organization admins.
+     */
+    fun canManageOrganizationRoles(actor: AuthUser?, targetOrganizationId: Long): Result<Unit> {
+        if (actor == null) {
+            return Result.failure(SecurityException("Authentication required."))
+        }
+        if (actor.permissionStatus != PermissionResolutionStatus.CONFIRMED) {
+            return Result.failure(SecurityException("Authorization context is not confirmed."))
+        }
+        val hasAdminAuthority = actor.role == UserRole.ADMIN ||
+            (actor.hasPermission(PharmaPermission.ROLE_ASSIGN) &&
+                actor.hasPermission(PharmaPermission.ORGANIZATION_MEMBER_MANAGE))
+        if (!hasAdminAuthority) {
+            return Result.failure(SecurityException("Access denied: ROLE_ASSIGN and ORGANIZATION_MEMBER_MANAGE admin permissions are required."))
+        }
+        if (!canOperateOnOrganization(actor, targetOrganizationId)) {
+            return Result.failure(SecurityException("Cross-organization member administration denied."))
+        }
+        return Result.success(Unit)
     }
 
     fun canOperateOnOrganization(user: AuthUser?, targetOrganizationId: Long): Boolean {
@@ -380,8 +552,8 @@ data class MedicineSubmission(
     // Commercial Information
     val mrp: Double = 0.0,
     val wholesaleRatePtr: Double = 0.0,
-    val hsnCode: String = "30049099",
-    val gstRatePercent: Double = 12.0,
+    val hsnCode: String = "",
+    val gstRatePercent: Double = 0.0,
     val skuCode: String = "",
     // Supporting Information
     val description: String = "",

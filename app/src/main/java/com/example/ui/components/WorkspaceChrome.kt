@@ -5,12 +5,17 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -32,6 +37,8 @@ import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Badge
+import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -51,6 +58,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -293,8 +301,145 @@ private fun WorkspaceSwitchOptionCard(
 }
 
 /**
+ * Model representing a single KPI card rendered in [ResponsiveKpiGrid].
+ */
+data class DashboardKpiCardModel(
+    val title: String,
+    val value: String,
+    val caption: String,
+    val icon: ImageVector,
+    val accentColor: Color? = null,
+    val testTag: String = "",
+    val onClick: () -> Unit
+)
+
+/**
+ * Responsive dashboard KPI grid that guarantees equal card heights per row using
+ * `IntrinsicSize.Max` + `fillMaxHeight()` on standard viewports, and automatically
+ * collapses into a full-width single-column stack on narrow screens (<340dp) or
+ * high accessibility font scales (>=1.45f) so text never clips or overlaps.
+ */
+@Composable
+fun ResponsiveKpiGrid(
+    items: List<DashboardKpiCardModel>,
+    modifier: Modifier = Modifier
+) {
+    val fontScale = LocalDensity.current.fontScale
+    BoxWithConstraints(modifier = modifier.fillMaxWidth()) {
+        val useSingleColumn = maxWidth < 340.dp || fontScale >= 1.45f
+        val columns = if (useSingleColumn) 1 else 2
+
+        Column(
+            modifier = Modifier.fillMaxWidth(),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            items.chunked(columns).forEach { rowItems ->
+                if (columns == 1) {
+                    AlignedKpiCard(
+                        model = rowItems.first(),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                } else {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(IntrinsicSize.Max),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        rowItems.forEach { model ->
+                            AlignedKpiCard(
+                                model = model,
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .fillMaxHeight()
+                            )
+                        }
+                        if (rowItems.size < columns) {
+                            Spacer(modifier = Modifier.weight(1f))
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun AlignedKpiCard(
+    model: DashboardKpiCardModel,
+    modifier: Modifier = Modifier
+) {
+    val accent = model.accentColor ?: MaterialTheme.colorScheme.primary
+    Card(
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+        modifier = modifier
+            .clip(RoundedCornerShape(16.dp))
+            .clickable { model.onClick() }
+            .let { base -> if (model.testTag.isNotBlank()) base.testTag(model.testTag) else base }
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(14.dp),
+            verticalArrangement = Arrangement.SpaceBetween
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = model.value,
+                    style = MaterialTheme.typography.headlineMedium,
+                    fontWeight = FontWeight.ExtraBold,
+                    color = accent,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Surface(
+                    shape = RoundedCornerShape(10.dp),
+                    color = accent.copy(alpha = 0.12f),
+                    modifier = Modifier.size(34.dp)
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Icon(
+                            imageVector = model.icon,
+                            contentDescription = model.title,
+                            tint = accent,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+                }
+            }
+            Spacer(modifier = Modifier.height(10.dp))
+            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(
+                    text = model.title,
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    text = model.caption,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+        }
+    }
+}
+
+/**
  * Manufacturer Workspace Bottom Navigation:
- * Home | Products | Promotions | Updates | Profile
+ * Home | Products | Offers | Updates | Profile
  */
 @Composable
 fun ManufacturerBottomBar(
@@ -305,44 +450,46 @@ fun ManufacturerBottomBar(
     onNavigateUpdates: () -> Unit,
     onNavigateProfile: () -> Unit
 ) {
+    val labelStyle = MaterialTheme.typography.labelMedium
     NavigationBar(
         containerColor = MaterialTheme.colorScheme.surface,
         tonalElevation = 4.dp,
+        windowInsets = WindowInsets.navigationBars,
         modifier = Modifier.testTag("manufacturer_bottom_nav")
     ) {
         NavigationBarItem(
             selected = selectedTab == "home",
             onClick = onNavigateHome,
-            icon = { Icon(Icons.Default.Home, contentDescription = "Manufacturer Home") },
-            label = { Text("Home", maxLines = 1, overflow = TextOverflow.Ellipsis) },
+            icon = { Icon(Icons.Default.Home, contentDescription = "Manufacturer Home", modifier = Modifier.size(24.dp)) },
+            label = { Text("Home", style = labelStyle, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis) },
             modifier = Modifier.testTag("mfg_nav_home")
         )
         NavigationBarItem(
             selected = selectedTab == "products",
             onClick = onNavigateProducts,
-            icon = { Icon(Icons.Default.Inventory2, contentDescription = "Products & Banners") },
-            label = { Text("Products", maxLines = 1, overflow = TextOverflow.Ellipsis) },
+            icon = { Icon(Icons.Default.Inventory2, contentDescription = "Products & Banners", modifier = Modifier.size(24.dp)) },
+            label = { Text("Products", style = labelStyle, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis) },
             modifier = Modifier.testTag("mfg_nav_products")
         )
         NavigationBarItem(
             selected = selectedTab == "promotions",
             onClick = onNavigatePromotions,
-            icon = { Icon(Icons.Default.LocalOffer, contentDescription = "Promotions") },
-            label = { Text("Promotions", maxLines = 1, overflow = TextOverflow.Ellipsis) },
+            icon = { Icon(Icons.Default.LocalOffer, contentDescription = "Promotions & Offers", modifier = Modifier.size(24.dp)) },
+            label = { Text("Offers", style = labelStyle, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis) },
             modifier = Modifier.testTag("mfg_nav_promotions")
         )
         NavigationBarItem(
             selected = selectedTab == "updates",
             onClick = onNavigateUpdates,
-            icon = { Icon(Icons.Default.Campaign, contentDescription = "Updates & Submissions") },
-            label = { Text("Updates", maxLines = 1, overflow = TextOverflow.Ellipsis) },
+            icon = { Icon(Icons.Default.Campaign, contentDescription = "Updates & Submissions", modifier = Modifier.size(24.dp)) },
+            label = { Text("Updates", style = labelStyle, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis) },
             modifier = Modifier.testTag("mfg_nav_updates")
         )
         NavigationBarItem(
             selected = selectedTab == "profile",
             onClick = onNavigateProfile,
-            icon = { Icon(Icons.Default.Person, contentDescription = "Profile") },
-            label = { Text("Profile", maxLines = 1, overflow = TextOverflow.Ellipsis) },
+            icon = { Icon(Icons.Default.Person, contentDescription = "Profile", modifier = Modifier.size(24.dp)) },
+            label = { Text("Profile", style = labelStyle, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis) },
             modifier = Modifier.testTag("mfg_nav_profile")
         )
     }
@@ -350,7 +497,7 @@ fun ManufacturerBottomBar(
 
 /**
  * Company Workspace Bottom Navigation:
- * Home | Catalogue | Approvals | Management | Profile
+ * Home | Catalogue | Approvals (with BadgedBox count) | Manage | Profile
  */
 @Composable
 fun CompanyBottomBar(
@@ -362,33 +509,63 @@ fun CompanyBottomBar(
     onNavigateManagement: () -> Unit,
     onNavigateProfile: () -> Unit
 ) {
+    val labelStyle = MaterialTheme.typography.labelMedium
     NavigationBar(
         containerColor = MaterialTheme.colorScheme.surface,
         tonalElevation = 4.dp,
+        windowInsets = WindowInsets.navigationBars,
         modifier = Modifier.testTag("company_bottom_nav")
     ) {
         NavigationBarItem(
             selected = selectedTab == "home",
             onClick = onNavigateHome,
-            icon = { Icon(Icons.Default.Home, contentDescription = "Company Home") },
-            label = { Text("Home", maxLines = 1, overflow = TextOverflow.Ellipsis) },
+            icon = { Icon(Icons.Default.Home, contentDescription = "Company Home", modifier = Modifier.size(24.dp)) },
+            label = { Text("Home", style = labelStyle, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis) },
             modifier = Modifier.testTag("company_nav_home")
         )
         NavigationBarItem(
             selected = selectedTab == "catalogue",
             onClick = onNavigateCatalogue,
-            icon = { Icon(Icons.Default.Medication, contentDescription = "Catalogue") },
-            label = { Text("Catalogue", maxLines = 1, overflow = TextOverflow.Ellipsis) },
+            icon = { Icon(Icons.Default.Medication, contentDescription = "Catalogue", modifier = Modifier.size(24.dp)) },
+            label = { Text("Catalogue", style = labelStyle, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis) },
             modifier = Modifier.testTag("company_nav_catalogue")
         )
         NavigationBarItem(
             selected = selectedTab == "approvals",
             onClick = onNavigateApprovals,
-            icon = { Icon(Icons.Default.Approval, contentDescription = "Approvals") },
+            icon = {
+                BadgedBox(
+                    badge = {
+                        if (pendingApprovalsCount > 0) {
+                            Badge(
+                                modifier = Modifier.testTag("company_nav_approvals_badge")
+                            ) {
+                                Text(
+                                    text = if (pendingApprovalsCount > 99) "99+" else pendingApprovalsCount.toString(),
+                                    maxLines = 1,
+                                    softWrap = false
+                                )
+                            }
+                        }
+                    }
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Approval,
+                        contentDescription = if (pendingApprovalsCount > 0) {
+                            "Approvals, $pendingApprovalsCount pending"
+                        } else {
+                            "Approvals"
+                        },
+                        modifier = Modifier.size(24.dp)
+                    )
+                }
+            },
             label = {
                 Text(
-                    text = if (pendingApprovalsCount > 0) "Approvals ($pendingApprovalsCount)" else "Approvals",
+                    text = "Approvals",
+                    style = labelStyle,
                     maxLines = 1,
+                    softWrap = false,
                     overflow = TextOverflow.Ellipsis
                 )
             },
@@ -397,15 +574,15 @@ fun CompanyBottomBar(
         NavigationBarItem(
             selected = selectedTab == "management",
             onClick = onNavigateManagement,
-            icon = { Icon(Icons.Default.Tune, contentDescription = "Master Data & Management") },
-            label = { Text("Manage", maxLines = 1, overflow = TextOverflow.Ellipsis) },
+            icon = { Icon(Icons.Default.Tune, contentDescription = "Master Data & Management", modifier = Modifier.size(24.dp)) },
+            label = { Text("Manage", style = labelStyle, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis) },
             modifier = Modifier.testTag("company_nav_management")
         )
         NavigationBarItem(
             selected = selectedTab == "profile",
             onClick = onNavigateProfile,
-            icon = { Icon(Icons.Default.Person, contentDescription = "Profile") },
-            label = { Text("Profile", maxLines = 1, overflow = TextOverflow.Ellipsis) },
+            icon = { Icon(Icons.Default.Person, contentDescription = "Profile", modifier = Modifier.size(24.dp)) },
+            label = { Text("Profile", style = labelStyle, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis) },
             modifier = Modifier.testTag("company_nav_profile")
         )
     }
@@ -466,10 +643,12 @@ fun OfferBannerShowcaseCard(
                     ) {
                         Text(
                             text = banner.offerType.displayName.uppercase(),
-                            fontSize = 10.sp,
+                            style = MaterialTheme.typography.labelSmall,
                             fontWeight = FontWeight.Bold,
-                            letterSpacing = 0.8.sp,
+                            letterSpacing = 0.6.sp,
                             color = Color.White,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
                             modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
                         )
                     }
@@ -485,17 +664,21 @@ fun OfferBannerShowcaseCard(
                         ) {
                             Text(
                                 text = effectiveStatus.displayName,
-                                fontSize = 10.sp,
+                                style = MaterialTheme.typography.labelSmall,
                                 fontWeight = FontWeight.Bold,
                                 color = Color.White,
-                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                                maxLines = 1,
+                                softWrap = false,
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
                             )
                         }
                     } else {
                         Text(
                             text = "Valid till ${Formatters.formatDate(banner.endDateEpochMillis)}",
-                            fontSize = 11.sp,
-                            color = Color.White.copy(alpha = 0.9f)
+                            style = MaterialTheme.typography.labelSmall,
+                            color = Color.White.copy(alpha = 0.92f),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
                         )
                     }
                 }
@@ -534,23 +717,23 @@ fun OfferBannerShowcaseCard(
 
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
                             text = banner.organizationName,
-                            fontSize = 11.sp,
+                            style = MaterialTheme.typography.labelMedium,
                             fontWeight = FontWeight.SemiBold,
-                            color = Color.White.copy(alpha = 0.85f),
+                            color = Color.White.copy(alpha = 0.9f),
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
                         )
                         banner.linkedProductName?.let { prod ->
                             Text(
                                 text = "Linked: $prod",
-                                fontSize = 11.sp,
-                                color = Color.White.copy(alpha = 0.8f),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = Color.White.copy(alpha = 0.84f),
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis
                             )
@@ -561,14 +744,16 @@ fun OfferBannerShowcaseCard(
                         color = Color.White
                     ) {
                         Row(
-                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Text(
                                 text = banner.ctaText.ifBlank { "View Offer" },
-                                fontSize = 12.sp,
+                                style = MaterialTheme.typography.labelMedium,
                                 fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.primary
+                                color = MaterialTheme.colorScheme.primary,
+                                maxLines = 1,
+                                softWrap = false
                             )
                             Spacer(modifier = Modifier.width(4.dp))
                             Icon(

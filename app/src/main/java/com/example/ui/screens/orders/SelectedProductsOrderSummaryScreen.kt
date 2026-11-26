@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -937,9 +938,9 @@ fun SelectedProductItemCard(
             ) {
                 Text(
                     text = "Taxable: ${Formatters.formatInr(product.lineTaxableAmount)} • GST ${String.format("%.0f", product.gstRatePercent)}%: ${Formatters.formatInr(product.lineGstAmount)}",
-                    fontSize = 11.sp,
+                    style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
+                    maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier
                         .weight(1f)
@@ -948,10 +949,12 @@ fun SelectedProductItemCard(
                 Spacer(modifier = Modifier.width(8.dp))
                 Text(
                     text = "Subtotal: ${Formatters.formatInr(product.lineTotalAmount)}",
-                    fontSize = 12.sp,
+                    style = MaterialTheme.typography.labelLarge,
                     fontWeight = FontWeight.Bold,
                     color = MaterialTheme.colorScheme.onSurface,
+                    textAlign = TextAlign.End,
                     maxLines = 1,
+                    softWrap = false,
                     modifier = Modifier.testTag("product_subtotal_${product.itemId}")
                 )
             }
@@ -1026,13 +1029,12 @@ fun QuantityAdjustControls(
             color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f),
             border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.5f)),
             modifier = Modifier
-                .widthIn(min = 56.dp)
-                .height(36.dp)
+                .defaultMinSize(minWidth = 56.dp, minHeight = 36.dp)
                 .testTag(displayTag)
         ) {
             Box(
                 contentAlignment = Alignment.Center,
-                modifier = Modifier.padding(horizontal = 8.dp)
+                modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
             ) {
                 Text(
                     text = "$quantity",

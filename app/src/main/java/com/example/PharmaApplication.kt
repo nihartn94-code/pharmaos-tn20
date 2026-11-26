@@ -43,6 +43,9 @@ class PharmaApplication : Application() {
     lateinit var workspaceRemoteDataSource: com.example.data.remote.source.WorkspaceRemoteDataSource
         private set
 
+    lateinit var mediaUploadManager: com.example.data.remote.upload.MediaUploadManager
+        private set
+
     lateinit var repository: PharmaRepository
         private set
 
@@ -72,6 +75,11 @@ class PharmaApplication : Application() {
         authRemoteDataSource = AuthRemoteDataSource(networkModule)
         pharmaRemoteDataSource = PharmaRemoteDataSource(networkModule)
         workspaceRemoteDataSource = com.example.data.remote.source.WorkspaceRemoteDataSource(networkModule)
+        mediaUploadManager = com.example.data.remote.upload.MediaUploadManager(
+            context = this,
+            dataStoreManager = dataStoreManager,
+            remoteDataSource = workspaceRemoteDataSource
+        )
 
         repository = PharmaRepositoryImpl(
             db = database,
@@ -116,8 +124,9 @@ class PharmaApplication : Application() {
 
         appIoScope.launch {
             try {
+                dataStoreManager.migrateLegacyPlaintextTokensIfNeeded()
                 dataStoreManager.accessTokenFlow.collect {
-                    // Populates DataStoreManager.cachedAccessToken for AuthInterceptor
+                    // Encrypted tokens live in SecureTokenStorage
                 }
             } catch (_: Exception) {
             }

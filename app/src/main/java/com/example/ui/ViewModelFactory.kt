@@ -35,13 +35,15 @@ class PharmaViewModelFactory(
             modelClass.isAssignableFrom(com.example.ui.screens.manufacturer.ManufacturerWorkspaceViewModel::class.java) -> {
                 com.example.ui.screens.manufacturer.ManufacturerWorkspaceViewModel(
                     pharmaRepository = repo,
-                    workspaceRepository = app.workspaceRepository
+                    workspaceRepository = app.workspaceRepository,
+                    mediaUploadManager = app.mediaUploadManager
                 ) as T
             }
             modelClass.isAssignableFrom(com.example.ui.screens.company.CompanyWorkspaceViewModel::class.java) -> {
                 com.example.ui.screens.company.CompanyWorkspaceViewModel(
                     pharmaRepository = repo,
-                    workspaceRepository = app.workspaceRepository
+                    workspaceRepository = app.workspaceRepository,
+                    mediaUploadManager = app.mediaUploadManager
                 ) as T
             }
             modelClass.isAssignableFrom(com.example.ui.screens.stockist.StockistInventoryViewModel::class.java) -> {

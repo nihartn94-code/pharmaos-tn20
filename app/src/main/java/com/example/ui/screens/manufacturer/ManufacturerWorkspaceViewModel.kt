@@ -1,8 +1,12 @@
 package com.example.ui.screens.manufacturer
 
+import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.data.local.entity.ProductEntity
+import com.example.data.remote.upload.MediaUploadKind
+import com.example.data.remote.upload.MediaUploadManager
+import com.example.data.remote.upload.MediaUploadState
 import com.example.domain.model.AccessControlPolicy
 import com.example.domain.model.AnnouncementStatus
 import com.example.domain.model.AuthUser
@@ -18,11 +22,15 @@ import com.example.domain.model.PromotionalCampaign
 import com.example.domain.model.WorkspaceType
 import com.example.domain.repository.PharmaRepository
 import com.example.domain.repository.WorkspaceRepository
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 data class ManufacturerWorkspaceUiState(
@@ -43,6 +51,7 @@ data class ManufacturerWorkspaceUiState(
     val approvedProducts: List<ProductEntity> = emptyList(),
     val duplicateCandidates: List<MedicineDuplicateCandidate> = emptyList(),
     val unreadNotificationsCount: Int = 0,
+    val currentTimeMillis: Long = System.currentTimeMillis(),
     val isSaving: Boolean = false,
     val statusMessage: String? = null,
     val errorMessage: String? = null
@@ -50,13 +59,20 @@ data class ManufacturerWorkspaceUiState(
 
 class ManufacturerWorkspaceViewModel(
     private val pharmaRepository: PharmaRepository,
-    private val workspaceRepository: WorkspaceRepository
+    private val workspaceRepository: WorkspaceRepository,
+    private val mediaUploadManager: MediaUploadManager? = null
 ) : ViewModel() {
 
     private val isSaving = MutableStateFlow(false)
     private val statusMessage = MutableStateFlow<String?>(null)
     private val errorMessage = MutableStateFlow<String?>(null)
     private val duplicateCandidates = MutableStateFlow<List<MedicineDuplicateCandidate>>(emptyList())
+    private val bannerClockMillis = MutableStateFlow(System.currentTimeMillis())
+
+    private val _mediaUploadState = MutableStateFlow<MediaUploadState>(MediaUploadState.Idle)
+    val mediaUploadState: StateFlow<MediaUploadState> = _mediaUploadState.asStateFlow()
+    private var activeUploadJob: Job? = null
+    private var lastUploadUri: Uri? = null
 
     private val primaryDataFlow = combine(
         pharmaRepository.getApiUsersMeFlow(),
@@ -72,9 +88,10 @@ class ManufacturerWorkspaceViewModel(
         workspaceRepository.getOrganizationSubmissionsFlow(),
         workspaceRepository.getApprovedProductsForOrganizationFlow(),
         pharmaRepository.getApiNotificationsUnreadCountFlow(),
-        duplicateCandidates
-    ) { submissions, approvedProducts, unreadCount, duplicates ->
-        SecondaryManufacturerBundle(submissions, approvedProducts, unreadCount, duplicates)
+        duplicateCandidates,
+        bannerClockMillis
+    ) { submissions, approvedProducts, unreadCount, duplicates, nowMillis ->
+        SecondaryManufacturerBundle(submissions, approvedProducts, unreadCount, duplicates, nowMillis)
     }
 
     private val feedbackFlow = combine(isSaving, statusMessage, errorMessage) { saving, msg, err ->
@@ -87,6 +104,12 @@ class ManufacturerWorkspaceViewModel(
         feedbackFlow
     ) { primary, secondary, (saving, msg, err) ->
         val user = primary.user
+        val now = secondary.nowMillis
+        val refreshedSummary = primary.summary.copy(
+            activeBannersCount = primary.banners.count { it.effectiveStatus(now) == BannerStatus.ACTIVE },
+            scheduledBannersCount = primary.banners.count { it.effectiveStatus(now) == BannerStatus.SCHEDULED },
+            activeCampaignsCount = primary.campaigns.count { it.isCurrentlyActive(now) }
+        )
         ManufacturerWorkspaceUiState(
             user = user,
             isAuthorized = AccessControlPolicy.canAccessWorkspace(user, WorkspaceType.MANUFACTURER),
@@ -97,7 +120,7 @@ class ManufacturerWorkspaceViewModel(
             canManageCampaigns = user?.hasPermission(PharmaPermission.CAMPAIGN_MANAGE) == true,
             canCreateAnnouncement = user?.hasPermission(PharmaPermission.MEDICINE_ANNOUNCEMENT_CREATE) == true,
             canSubmitMedicine = user?.hasPermission(PharmaPermission.MEDICINE_SUBMIT) == true,
-            summary = primary.summary,
+            summary = refreshedSummary,
             banners = primary.banners,
             campaigns = primary.campaigns,
             announcements = primary.announcements,
@@ -105,6 +128,7 @@ class ManufacturerWorkspaceViewModel(
             approvedProducts = secondary.approvedProducts,
             duplicateCandidates = secondary.duplicates,
             unreadNotificationsCount = secondary.unreadCount,
+            currentTimeMillis = now,
             isSaving = saving,
             statusMessage = msg,
             errorMessage = err
@@ -118,7 +142,66 @@ class ManufacturerWorkspaceViewModel(
     init {
         viewModelScope.launch {
             workspaceRepository.ensureWorkspaceSeededForLocalDev()
+            runCatching { workspaceRepository.syncActiveWorkspace() }
         }
+        // Periodic banner schedule ticker so scheduled/expired KPI & list chips stay synchronized
+        viewModelScope.launch {
+            while (isActive) {
+                delay(30_000L)
+                bannerClockMillis.value = System.currentTimeMillis()
+            }
+        }
+    }
+
+    fun refreshWorkspace() {
+        viewModelScope.launch {
+            bannerClockMillis.value = System.currentTimeMillis()
+            workspaceRepository.syncActiveWorkspace()
+                .onFailure { errorMessage.value = it.message }
+        }
+    }
+
+    fun evaluateBannerScheduleAt(epochMillis: Long = System.currentTimeMillis()) {
+        bannerClockMillis.value = epochMillis
+    }
+
+    fun uploadBannerImage(uri: Uri, onUploaded: (String) -> Unit) {
+        val uploader = mediaUploadManager
+        if (uploader == null) {
+            _mediaUploadState.value = MediaUploadState.Failed(
+                message = "Media upload service is not initialized.",
+                localPreviewUri = uri.toString(),
+                retryable = false
+            )
+            return
+        }
+        lastUploadUri = uri
+        activeUploadJob?.cancel()
+        activeUploadJob = viewModelScope.launch {
+            uploader.uploadUri(uri, MediaUploadKind.IMAGE) { state ->
+                _mediaUploadState.value = state
+            }.onSuccess { remoteUrl ->
+                onUploaded(remoteUrl)
+            }
+        }
+    }
+
+    fun retryBannerImageUpload(onUploaded: (String) -> Unit) {
+        val uri = lastUploadUri ?: return
+        uploadBannerImage(uri, onUploaded)
+    }
+
+    fun cancelBannerImageUpload() {
+        activeUploadJob?.cancel()
+        activeUploadJob = null
+        _mediaUploadState.value = MediaUploadState.Cancelled
+    }
+
+    fun resetMediaUploadState() {
+        activeUploadJob?.cancel()
+        activeUploadJob = null
+        lastUploadUri = null
+        _mediaUploadState.value = MediaUploadState.Idle
     }
 
     fun switchToCompanyWorkspace(onSwitched: () -> Unit) {
@@ -135,7 +218,9 @@ class ManufacturerWorkspaceViewModel(
             errorMessage.value = null
             workspaceRepository.saveOfferBanner(banner)
                 .onSuccess { saved ->
+                    bannerClockMillis.value = System.currentTimeMillis()
                     statusMessage.value = "Banner '${saved.title}' saved (${saved.effectiveStatus().displayName})."
+                    resetMediaUploadState()
                     onSuccess()
                 }
                 .onFailure { errorMessage.value = it.message ?: "Failed to save offer banner." }
@@ -148,7 +233,10 @@ class ManufacturerWorkspaceViewModel(
             isSaving.value = true
             errorMessage.value = null
             workspaceRepository.updateOfferBannerStatus(bannerId, newStatus)
-                .onSuccess { statusMessage.value = "Banner status updated to ${newStatus.displayName}." }
+                .onSuccess {
+                    bannerClockMillis.value = System.currentTimeMillis()
+                    statusMessage.value = "Banner status updated to ${newStatus.displayName}."
+                }
                 .onFailure { errorMessage.value = it.message ?: "Unable to update banner status." }
             isSaving.value = false
         }
@@ -286,6 +374,7 @@ class ManufacturerWorkspaceViewModel(
         val submissions: List<MedicineSubmission>,
         val approvedProducts: List<ProductEntity>,
         val unreadCount: Int,
-        val duplicates: List<MedicineDuplicateCandidate>
+        val duplicates: List<MedicineDuplicateCandidate>,
+        val nowMillis: Long
     )
 }
