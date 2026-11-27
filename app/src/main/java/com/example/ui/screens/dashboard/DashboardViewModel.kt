@@ -96,6 +96,7 @@ data class DashboardUiState(
     val publishedAnnouncements: List<com.example.domain.model.MedicineAnnouncement> = emptyList(),
     val stockistPurchasedInventoryCount: Int = 0,
     val shortageAlertsCount: Int = 0,
+    val syncState: com.example.domain.model.WorkspaceSyncState = com.example.domain.model.WorkspaceSyncState(),
     val reorderSuccessMessage: String? = null,
     val errorMessage: String? = null
 ) {
@@ -167,6 +168,19 @@ class DashboardViewModel(
                     )
                 }
             }
+        }
+        viewModelScope.launch {
+            wsRepo.workspaceSyncStateFlow.collect { state ->
+                _uiState.update { it.copy(syncState = state) }
+            }
+        }
+    }
+
+    /** Retries remote workspace synchronization when stale cache or sync errors occur. */
+    fun retryWorkspaceSync() {
+        val wsRepo = workspaceRepository ?: return
+        viewModelScope.launch {
+            wsRepo.syncActiveWorkspace()
         }
     }
 

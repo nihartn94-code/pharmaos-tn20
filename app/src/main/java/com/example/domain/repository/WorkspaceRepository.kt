@@ -19,8 +19,10 @@ import com.example.domain.model.OrganizationMember
 import com.example.domain.model.PromotionalCampaign
 import com.example.domain.model.StockistPurchasedInventoryItem
 import com.example.domain.model.UserRole
+import com.example.domain.model.WorkspaceSyncState
 import com.example.domain.model.WorkspaceType
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.StateFlow
 
 /**
  * Domain repository for PharmaOS role-based workspaces:
@@ -136,6 +138,8 @@ interface WorkspaceRepository {
     suspend fun syncManufacturerAnnouncements(): Result<Unit>
     suspend fun syncStockistFeed(): Result<Unit>
     suspend fun syncStockistPurchasedInventory(): Result<Unit>
+    val workspaceSyncStateFlow: StateFlow<WorkspaceSyncState>
     suspend fun syncActiveWorkspace(): Result<Unit>
+    fun cancelActiveSync()
     fun refreshBannerClock(nowEpochMillis: Long = System.currentTimeMillis())
 }

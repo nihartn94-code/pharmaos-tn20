@@ -170,7 +170,9 @@ fun CompanyCatalogueScreen(
                         onClick = { statusFilter = null },
                         label = { Text("All (${uiState.catalogueProducts.size})") }
                     )
-                    CataloguePublicationStatus.entries.forEach { st ->
+                    CataloguePublicationStatus.entries
+                        .filter { it != CataloguePublicationStatus.UNKNOWN }
+                        .forEach { st ->
                         FilterChip(
                             selected = statusFilter == st,
                             onClick = { statusFilter = st },
@@ -207,6 +209,7 @@ fun CompanyCatalogueScreen(
                                     CataloguePublicationStatus.ACTIVE -> MaterialTheme.colorScheme.primaryContainer
                                     CataloguePublicationStatus.INACTIVE -> MaterialTheme.colorScheme.tertiaryContainer
                                     CataloguePublicationStatus.ARCHIVED -> MaterialTheme.colorScheme.surfaceVariant
+                                    CataloguePublicationStatus.UNKNOWN -> MaterialTheme.colorScheme.errorContainer
                                 }
                             ) {
                                 Text(

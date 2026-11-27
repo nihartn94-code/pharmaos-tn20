@@ -19,6 +19,7 @@ import com.example.domain.model.MedicineSubmission
 import com.example.domain.model.OrganizationMember
 import com.example.domain.model.PharmaPermission
 import com.example.domain.model.UserRole
+import com.example.domain.model.WorkspaceSyncState
 import com.example.domain.model.WorkspaceType
 import com.example.domain.repository.PharmaRepository
 import com.example.domain.repository.WorkspaceRepository
@@ -48,6 +49,7 @@ data class CompanyWorkspaceUiState(
     val organizationMembers: List<OrganizationMember> = emptyList(),
     val duplicateCandidates: List<MedicineDuplicateCandidate> = emptyList(),
     val unreadNotificationsCount: Int = 0,
+    val syncState: WorkspaceSyncState = WorkspaceSyncState(),
     val isSaving: Boolean = false,
     val statusMessage: String? = null,
     val errorMessage: String? = null
@@ -96,8 +98,9 @@ class CompanyWorkspaceViewModel(
     val uiState: StateFlow<CompanyWorkspaceUiState> = combine(
         primaryFlow,
         secondaryFlow,
-        feedbackFlow
-    ) { primary, secondary, (saving, msg, err) ->
+        feedbackFlow,
+        workspaceRepository.workspaceSyncStateFlow
+    ) { primary, secondary, (saving, msg, err), syncState ->
         val user = primary.user
         CompanyWorkspaceUiState(
             user = user,
@@ -118,6 +121,7 @@ class CompanyWorkspaceViewModel(
             organizationMembers = secondary.members,
             duplicateCandidates = secondary.duplicates,
             unreadNotificationsCount = secondary.unreadCount,
+            syncState = syncState,
             isSaving = saving,
             statusMessage = msg,
             errorMessage = err

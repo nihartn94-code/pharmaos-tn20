@@ -722,9 +722,8 @@ fun SelectedProductItemCard(
             // Salt composition & Pack size tag
             Text(
                 text = product.saltComposition,
-                style = MaterialTheme.typography.labelSmall,
+                style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                fontSize = 11.5.sp,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
             )
@@ -743,7 +742,7 @@ fun SelectedProductItemCard(
                 ) {
                     Text(
                         text = product.packSize,
-                        fontSize = 11.sp,
+                        style = MaterialTheme.typography.labelSmall,
                         fontWeight = FontWeight.Medium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
@@ -756,7 +755,7 @@ fun SelectedProductItemCard(
                 ) {
                     Text(
                         text = "Batch: ${product.batchNumber}",
-                        fontSize = 11.sp,
+                        style = MaterialTheme.typography.labelSmall,
                         fontWeight = FontWeight.Medium,
                         color = Color(0xFF475569),
                         modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
@@ -769,7 +768,7 @@ fun SelectedProductItemCard(
                 ) {
                     Text(
                         text = "Exp: ${product.expiryDate}",
-                        fontSize = 11.sp,
+                        style = MaterialTheme.typography.labelSmall,
                         fontWeight = FontWeight.Bold,
                         color = Color(0xFF15803D),
                         modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
@@ -801,7 +800,7 @@ fun SelectedProductItemCard(
                             text = if (product.freeQuantity > 0)
                                 "${product.schemeDescription} • +${product.freeQuantity} FREE units added"
                             else product.schemeDescription,
-                            fontSize = 11.5.sp,
+                            style = MaterialTheme.typography.labelSmall,
                             fontWeight = FontWeight.Bold,
                             color = Color(0xFF92400E)
                         )
@@ -890,7 +889,7 @@ fun SelectedProductItemCard(
             ) {
                 Text(
                     text = "Quick add:",
-                    fontSize = 11.sp,
+                    style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 listOf(10, 25, 50, 100).forEach { preset ->
@@ -1259,7 +1258,7 @@ fun SupplierHeaderRow(
         ) {
             Text(
                 text = if (totalUnits > 0) "$itemCount item(s) • $totalUnits units" else "$itemCount item(s)",
-                fontSize = 11.sp,
+                style = MaterialTheme.typography.labelSmall,
                 fontWeight = FontWeight.SemiBold,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
@@ -1424,7 +1423,7 @@ fun TotalOrderValueStickyBottomBar(
                 if (summary.schemeSavings > 0) {
                     Text(
                         text = "Saved ${Formatters.formatInr(summary.schemeSavings)}",
-                        fontSize = 11.sp,
+                        style = MaterialTheme.typography.labelSmall,
                         fontWeight = FontWeight.Bold,
                         color = Color(0xFF15803D)
                     )

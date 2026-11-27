@@ -10,13 +10,30 @@ package com.example.domain.model
  */
 enum class OrganizationType(val displayName: String) {
     STOCKIST("Stockist Organization"),
-    PHARMACEUTICAL_ORGANIZATION("Pharmaceutical Organization");
+    PHARMACEUTICAL_ORGANIZATION("Pharmaceutical Organization"),
+    UNKNOWN("Unverified Organization");
 
     companion object {
-        fun fromString(raw: String?, fallbackRole: UserRole = UserRole.STOCKIST): OrganizationType {
-            if (!raw.isNullOrBlank()) {
-                entries.firstOrNull { it.name.equals(raw.trim(), ignoreCase = true) }?.let { return it }
+        fun parseStrict(raw: String?): OrganizationType? {
+            if (raw.isNullOrBlank()) return null
+            return entries.firstOrNull {
+                it != UNKNOWN && it.name.equals(raw.trim(), ignoreCase = true)
             }
+        }
+
+        /**
+         * Parses organization type safely.
+         * - In production (`isProductionMode == true`): NEVER infers organization type from role;
+         *   missing or unrecognized values return [UNKNOWN] so authorization fails closed.
+         * - In local dev (`isProductionMode == false`): may derive from [fallbackRole] when absent.
+         */
+        fun fromString(
+            raw: String?,
+            fallbackRole: UserRole = UserRole.STOCKIST,
+            isProductionMode: Boolean = false
+        ): OrganizationType {
+            parseStrict(raw)?.let { return it }
+            if (isProductionMode) return UNKNOWN
             return when (fallbackRole) {
                 UserRole.STOCKIST -> STOCKIST
                 UserRole.MANUFACTURER, UserRole.PHARMA_COMPANY, UserRole.ADMIN -> PHARMACEUTICAL_ORGANIZATION
@@ -104,7 +121,8 @@ enum class PermissionResolutionStatus {
 
 data class PermissionResolution(
     val permissions: Set<PharmaPermission>,
-    val status: PermissionResolutionStatus
+    val status: PermissionResolutionStatus,
+    val unrecognizedTokens: Set<String> = emptySet()
 )
 
 /**
@@ -204,23 +222,34 @@ object RolePermissionMatrix {
             return PermissionResolution(emptySet(), PermissionResolutionStatus.EXPLICITLY_EMPTY)
         }
         val parsed = mutableSetOf<PharmaPermission>()
-        var hasInvalidEntry = false
+        val unrecognized = linkedSetOf<String>()
         for (raw in rawPermissions) {
             val trimmed = raw.trim()
+            if (trimmed.isEmpty()) {
+                unrecognized.add("")
+                continue
+            }
             val match = PharmaPermission.entries.firstOrNull { it.name.equals(trimmed, ignoreCase = true) }
             if (match != null) {
                 parsed.add(match)
-            } else if (trimmed.isNotEmpty()) {
-                hasInvalidEntry = true
+            } else {
+                unrecognized.add(trimmed)
             }
         }
         if (parsed.isEmpty()) {
-            return PermissionResolution(emptySet(), PermissionResolutionStatus.INVALID)
+            return PermissionResolution(
+                permissions = emptySet(),
+                status = PermissionResolutionStatus.INVALID,
+                unrecognizedTokens = unrecognized
+            )
         }
-        if (isProductionMode && hasInvalidEntry && parsed.isEmpty()) {
-            return PermissionResolution(emptySet(), PermissionResolutionStatus.INVALID)
-        }
-        return PermissionResolution(parsed, PermissionResolutionStatus.CONFIRMED)
+        // Preserve backend-confirmed known permissions while explicitly tracking any unknown/future
+        // permission tokens (never granting unknown tokens or falling back to role defaults).
+        return PermissionResolution(
+            permissions = parsed,
+            status = PermissionResolutionStatus.CONFIRMED,
+            unrecognizedTokens = unrecognized
+        )
     }
 
     fun resolvePermissions(
@@ -233,14 +262,24 @@ object RolePermissionMatrix {
         return roles.flatMap { defaultPermissionsFor(it) }.toSet()
     }
 
-    fun parseRolesCsv(csv: String?, fallback: UserRole): Set<UserRole> {
-        if (csv.isNullOrBlank()) return setOf(fallback)
+    fun parseRolesCsv(
+        csv: String?,
+        fallback: UserRole? = null,
+        isProductionMode: Boolean = false
+    ): Set<UserRole> {
+        if (csv.isNullOrBlank()) {
+            return if (!isProductionMode && fallback != null) setOf(fallback) else emptySet()
+        }
         val parsed = csv.split(",")
-            .mapNotNull { token ->
-                UserRole.entries.firstOrNull { it.name.equals(token.trim(), ignoreCase = true) }
-            }
+            .mapNotNull { token -> UserRole.parseStrict(token) }
             .toSet()
-        return if (parsed.isEmpty()) setOf(fallback) else parsed
+        return if (parsed.isNotEmpty()) {
+            parsed
+        } else if (!isProductionMode && fallback != null) {
+            setOf(fallback)
+        } else {
+            emptySet()
+        }
     }
 
     fun rolesToCsv(roles: Set<UserRole>): String = roles.map { it.name }.sorted().joinToString(",")
@@ -254,15 +293,23 @@ object RolePermissionMatrix {
 object AccessControlPolicy {
 
     fun authorizedWorkspaces(user: AuthUser): List<WorkspaceType> {
-        // Fail closed whenever backend permission context is missing, empty, or invalid
+        // Fail closed whenever account is not ACTIVE or backend permission context is missing/empty/invalid
+        if (user.status != AccountStatus.ACTIVE) {
+            return emptyList()
+        }
         if (user.permissionStatus != PermissionResolutionStatus.CONFIRMED) {
+            return emptyList()
+        }
+        if (user.assignedRoles.isEmpty()) {
             return emptyList()
         }
         if (user.permissions.isEmpty() && user.role != UserRole.ADMIN) {
             return emptyList()
         }
-        if (user.isProductionContext && user.role != UserRole.ADMIN && user.organizationId <= 0L) {
-            return emptyList()
+        if (user.isProductionContext && user.role != UserRole.ADMIN) {
+            if (user.organizationId <= 0L || user.organizationType == OrganizationType.UNKNOWN) {
+                return emptyList()
+            }
         }
 
         val workspaces = linkedSetOf<WorkspaceType>()
@@ -321,7 +368,9 @@ object AccessControlPolicy {
 
     fun canAccessManufacturerRealTimeInventory(user: AuthUser?): Boolean {
         if (user == null) return false
+        if (user.status != AccountStatus.ACTIVE) return false
         if (user.permissionStatus != PermissionResolutionStatus.CONFIRMED) return false
+        if (user.organizationType == OrganizationType.UNKNOWN && user.role != UserRole.ADMIN) return false
         if (user.organizationType == OrganizationType.STOCKIST && user.role == UserRole.STOCKIST) return false
         if (user.isProductionContext && user.organizationId <= 0L && user.role != UserRole.ADMIN) return false
         return user.assignedRoles.contains(UserRole.MANUFACTURER) ||
@@ -331,6 +380,7 @@ object AccessControlPolicy {
 
     fun canAccessStockistPurchasedInventory(user: AuthUser?): Boolean {
         if (user == null) return false
+        if (user.status != AccountStatus.ACTIVE) return false
         if (user.permissionStatus != PermissionResolutionStatus.CONFIRMED) return false
         return user.hasPermission(PharmaPermission.STOCKIST_INVENTORY_MANAGE) &&
             (user.organizationType == OrganizationType.STOCKIST || user.role == UserRole.ADMIN)
@@ -509,22 +559,40 @@ enum class MedicineSubmissionStatus(val displayName: String) {
     PENDING_APPROVAL("Pending Approval"),
     APPROVED("Approved"),
     REJECTED("Rejected"),
-    WITHDRAWN("Withdrawn");
+    WITHDRAWN("Withdrawn"),
+    UNKNOWN("Unknown");
 
     companion object {
-        fun fromString(raw: String?): MedicineSubmissionStatus =
-            entries.firstOrNull { it.name.equals(raw?.trim(), ignoreCase = true) } ?: APPROVED
+        /**
+         * Fails closed to [UNKNOWN] on missing or unrecognized status strings —
+         * NEVER defaults unknown medicines to [APPROVED].
+         */
+        fun fromString(raw: String?): MedicineSubmissionStatus {
+            if (raw.isNullOrBlank()) return UNKNOWN
+            return entries.firstOrNull {
+                it != UNKNOWN && it.name.equals(raw.trim(), ignoreCase = true)
+            } ?: UNKNOWN
+        }
     }
 }
 
 enum class CataloguePublicationStatus(val displayName: String) {
     ACTIVE("Active"),
     INACTIVE("Inactive"),
-    ARCHIVED("Archived");
+    ARCHIVED("Archived"),
+    UNKNOWN("Unknown");
 
     companion object {
-        fun fromString(raw: String?): CataloguePublicationStatus =
-            entries.firstOrNull { it.name.equals(raw?.trim(), ignoreCase = true) } ?: ACTIVE
+        /**
+         * Fails closed to [UNKNOWN] on missing or unrecognized status strings —
+         * NEVER defaults unknown publication status to [ACTIVE].
+         */
+        fun fromString(raw: String?): CataloguePublicationStatus {
+            if (raw.isNullOrBlank()) return UNKNOWN
+            return entries.firstOrNull {
+                it != UNKNOWN && it.name.equals(raw.trim(), ignoreCase = true)
+            } ?: UNKNOWN
+        }
     }
 }
 
@@ -841,3 +909,40 @@ data class CompanyDashboardSummary(
     val masterDataEntriesCount: Int = 0,
     val organizationMembersCount: Int = 0
 )
+
+// =====================================================================
+// Remote Workspace Synchronization State & Telemetry
+// =====================================================================
+
+enum class SyncHealthStatus {
+    IDLE,
+    SYNCING,
+    SUCCESS,
+    PARTIAL_SUCCESS,
+    FAILED,
+    CANCELLED
+}
+
+data class SyncStepResult(
+    val stepName: String,
+    val required: Boolean,
+    val succeeded: Boolean,
+    val errorMessage: String? = null
+)
+
+data class WorkspaceSyncState(
+    val status: SyncHealthStatus = SyncHealthStatus.IDLE,
+    val activeWorkspace: WorkspaceType? = null,
+    val isStaleCache: Boolean = false,
+    val lastSuccessfulSyncEpochMillis: Long? = null,
+    val lastAttemptEpochMillis: Long? = null,
+    val errorMessage: String? = null,
+    val failedSteps: List<SyncStepResult> = emptyList(),
+    val succeededSteps: List<String> = emptyList(),
+    val canRetry: Boolean = false
+) {
+    val isSyncing: Boolean get() = status == SyncHealthStatus.SYNCING
+    val hasWarningOrError: Boolean
+        get() = status == SyncHealthStatus.FAILED || status == SyncHealthStatus.PARTIAL_SUCCESS || isStaleCache
+}
+

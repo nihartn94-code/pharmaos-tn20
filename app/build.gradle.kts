@@ -96,7 +96,16 @@ android {
     compose = true
     buildConfig = true
   }
-  testOptions { unitTests { isIncludeAndroidResources = true } }
+  testOptions {
+    unitTests {
+      isIncludeAndroidResources = true
+      all { test ->
+        System.getProperty("robolectric.dependency.repo.url")?.let { repoUrl ->
+          test.systemProperty("robolectric.dependency.repo.url", repoUrl)
+        }
+      }
+    }
+  }
   dependenciesInfo {
     includeInApk = false
     includeInBundle = true

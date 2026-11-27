@@ -112,7 +112,7 @@ fun BackendStatusBar(
                 Column {
                     Text(
                         text = statusTitle,
-                        fontSize = 11.5.sp,
+                        style = MaterialTheme.typography.labelMedium,
                         fontWeight = FontWeight.Bold,
                         color = accentColor,
                         maxLines = 1,
@@ -120,7 +120,7 @@ fun BackendStatusBar(
                     )
                     Text(
                         text = statusSubtitle,
-                        fontSize = 10.5.sp,
+                        style = MaterialTheme.typography.bodySmall,
                         color = accentColor.copy(alpha = 0.85f),
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
@@ -145,7 +145,7 @@ fun BackendStatusBar(
                     Spacer(modifier = Modifier.width(4.dp))
                     Text(
                         text = "Configure",
-                        fontSize = 11.sp,
+                        style = MaterialTheme.typography.labelSmall,
                         fontWeight = FontWeight.Bold,
                         color = accentColor
                     )
@@ -242,20 +242,20 @@ fun BackendConfigDialog(
                         onClick = { urlInput = ApiConfig.EMULATOR_DEFAULT_BASE_URL },
                         modifier = Modifier.weight(1f)
                     ) {
-                        Text("Emulator", fontSize = 11.sp)
+                        Text("Emulator", style = MaterialTheme.typography.labelMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
                     OutlinedButton(
                         onClick = { urlInput = ApiConfig.PHYSICAL_DEVICE_PLACEHOLDER_URL },
                         modifier = Modifier.weight(1f)
                     ) {
-                        Text("Device LAN", fontSize = 11.sp)
+                        Text("Device LAN", style = MaterialTheme.typography.labelMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
                 }
                 OutlinedButton(
                     onClick = { urlInput = ApiConfig.PLACEHOLDER_UNCONFIGURED_BASE_URL },
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    Text("Reset to Unconfigured Placeholder", fontSize = 11.sp)
+                    Text("Reset to Unconfigured Placeholder", style = MaterialTheme.typography.labelMedium)
                 }
 
                 Text(

@@ -10,7 +10,17 @@ import okhttp3.Response
 interface TokenProvider {
     fun getAccessToken(): String?
     fun getRefreshToken(): String? = null
+    fun getSessionGeneration(): Long = 0L
     fun updateTokens(accessToken: String?, refreshToken: String?) {}
+    fun updateTokensIfSessionMatches(
+        expectedGeneration: Long,
+        accessToken: String?,
+        refreshToken: String?
+    ): Boolean {
+        if (getSessionGeneration() != expectedGeneration) return false
+        updateTokens(accessToken, refreshToken)
+        return true
+    }
     fun clearTokens() {}
 }
 

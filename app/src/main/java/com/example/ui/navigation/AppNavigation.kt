@@ -107,11 +107,16 @@ fun AppNavigation() {
     suspend fun resolveAuthorizedRootRoute(): String {
         val user = app.repository.getApiUsersMeFlow().firstOrNull()
         if (user == null) return NavRoutes.LOGIN
+        val authorized = user.authorizedWorkspaces()
+        if (authorized.isEmpty()) {
+            // Fail closed: never route an unconfirmed, suspended, or unauthorized account into a workspace
+            return NavRoutes.LOGIN
+        }
         val savedWorkspace = app.workspaceRepository.getActiveWorkspaceFlow().firstOrNull()
-        val effectiveWorkspace = if (savedWorkspace != null && user.authorizedWorkspaces().contains(savedWorkspace)) {
+        val effectiveWorkspace = if (savedWorkspace != null && authorized.contains(savedWorkspace)) {
             savedWorkspace
         } else {
-            user.defaultWorkspace()
+            authorized.first()
         }
         return NavRoutes.rootRouteForWorkspace(effectiveWorkspace)
     }

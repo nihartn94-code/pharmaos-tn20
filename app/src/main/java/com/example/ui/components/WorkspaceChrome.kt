@@ -1,8 +1,10 @@
 package com.example.ui.components
 
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -11,14 +13,18 @@ import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -26,6 +32,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.Apartment
 import androidx.compose.material.icons.filled.Approval
 import androidx.compose.material.icons.filled.Campaign
+import androidx.compose.material.icons.filled.CloudOff
 import androidx.compose.material.icons.filled.Factory
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Inventory2
@@ -34,18 +41,24 @@ import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Medication
 import androidx.compose.material.icons.filled.NotificationsActive
 import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.QrCodeScanner
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material.icons.filled.Tune
+import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Badge
 import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -54,8 +67,11 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalDensity
@@ -69,6 +85,8 @@ import coil.compose.AsyncImage
 import com.example.domain.model.BannerStatus
 import com.example.domain.model.MedicineAnnouncement
 import com.example.domain.model.OfferBanner
+import com.example.domain.model.SyncHealthStatus
+import com.example.domain.model.WorkspaceSyncState
 import com.example.domain.model.WorkspaceType
 import com.example.util.Formatters
 
@@ -438,6 +456,406 @@ fun AlignedKpiCard(
 }
 
 /**
+ * Compact sync status / stale-cache banner surfaced whenever remote synchronization is
+ * running, partially failed, failed, or displaying cached data with a retry action.
+ */
+@Composable
+fun WorkspaceSyncStatusBanner(
+    syncState: WorkspaceSyncState,
+    onRetry: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    if (!syncState.isSyncing && !syncState.hasWarningOrError) return
+    val isError = syncState.status == SyncHealthStatus.FAILED
+    val containerColor = when {
+        syncState.isSyncing -> MaterialTheme.colorScheme.secondaryContainer
+        isError -> MaterialTheme.colorScheme.errorContainer
+        else -> MaterialTheme.colorScheme.tertiaryContainer
+    }
+    val contentColor = when {
+        syncState.isSyncing -> MaterialTheme.colorScheme.onSecondaryContainer
+        isError -> MaterialTheme.colorScheme.onErrorContainer
+        else -> MaterialTheme.colorScheme.onTertiaryContainer
+    }
+    Surface(
+        shape = RoundedCornerShape(14.dp),
+        color = containerColor,
+        modifier = modifier
+            .fillMaxWidth()
+            .testTag("workspace_sync_status_banner")
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 14.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            if (syncState.isSyncing) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(18.dp),
+                    strokeWidth = 2.dp,
+                    color = contentColor
+                )
+            } else {
+                Icon(
+                    imageVector = Icons.Default.CloudOff,
+                    contentDescription = "Sync status warning",
+                    tint = contentColor,
+                    modifier = Modifier.size(20.dp)
+                )
+            }
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(2.dp)
+            ) {
+                val headline = when (syncState.status) {
+                    SyncHealthStatus.SYNCING -> "Synchronizing workspace data..."
+                    SyncHealthStatus.PARTIAL_SUCCESS -> "Partial sync — some cached data may be stale"
+                    SyncHealthStatus.FAILED -> "Sync failed — showing cached data"
+                    SyncHealthStatus.CANCELLED -> "Sync cancelled"
+                    else -> "Showing cached workspace data"
+                }
+                Text(
+                    text = headline,
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = FontWeight.Bold,
+                    color = contentColor
+                )
+                val detail = syncState.errorMessage ?: syncState.lastSuccessfulSyncEpochMillis?.let { ts ->
+                    "Last synced ${Formatters.formatDateTime(ts)}"
+                }
+                if (!detail.isNullOrBlank()) {
+                    Text(
+                        text = detail,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = contentColor.copy(alpha = 0.9f),
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
+            if (syncState.canRetry && !syncState.isSyncing) {
+                OutlinedButton(
+                    onClick = onRetry,
+                    border = BorderStroke(1.dp, contentColor.copy(alpha = 0.5f)),
+                    modifier = Modifier.testTag("workspace_sync_retry_btn")
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Refresh,
+                        contentDescription = "Retry sync",
+                        tint = contentColor,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(
+                        text = "Retry",
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = contentColor
+                    )
+                }
+            }
+        }
+    }
+}
+
+private data class WorkspaceNavDestination(
+    val id: String,
+    val label: String,
+    val contentDescription: String,
+    val icon: ImageVector,
+    val badgeCount: Int = 0,
+    val badgeTestTag: String? = null,
+    val testTag: String,
+    val onClick: () -> Unit
+)
+
+/**
+ * Shared responsive 5-destination bottom navigation bar for Manufacturer & Company workspaces.
+ *
+ * - Standard width (`>= 360.dp`) and standard font scale (`<= 1.3f`): renders Material 3 [NavigationBar].
+ * - Narrow screens (`< 360.dp`, e.g. 320dp) or high accessibility font scales (`> 1.3f`, e.g. 1.5x–2.0x):
+ *   automatically switches to a horizontally scrollable accessible destination bar so every destination
+ *   keeps a full readable label (no cramped single-line ellipsis) and >= 48dp touch targets.
+ */
+@Composable
+private fun AdaptiveWorkspaceNavigationBar(
+    barTestTag: String,
+    selectedId: String,
+    destinations: List<WorkspaceNavDestination>
+) {
+    val fontScale = LocalDensity.current.fontScale
+    BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+        val useScrollableCompactBar = maxWidth < 360.dp || fontScale > 1.3f
+        if (!useScrollableCompactBar) {
+            val labelStyle = MaterialTheme.typography.labelMedium
+            NavigationBar(
+                containerColor = MaterialTheme.colorScheme.surface,
+                tonalElevation = 4.dp,
+                windowInsets = WindowInsets.navigationBars,
+                modifier = Modifier.testTag(barTestTag)
+            ) {
+                destinations.forEach { dest ->
+                    NavigationBarItem(
+                        selected = selectedId == dest.id,
+                        onClick = dest.onClick,
+                        icon = {
+                            WorkspaceNavIconWithBadge(
+                                icon = dest.icon,
+                                contentDescription = dest.contentDescription,
+                                badgeCount = dest.badgeCount,
+                                badgeTestTag = dest.badgeTestTag
+                            )
+                        },
+                        label = {
+                            Text(
+                                text = dest.label,
+                                style = labelStyle,
+                                maxLines = 1,
+                                softWrap = false,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        },
+                        modifier = Modifier.testTag(dest.testTag)
+                    )
+                }
+            }
+        } else {
+            Surface(
+                color = MaterialTheme.colorScheme.surface,
+                tonalElevation = 4.dp,
+                shadowElevation = 6.dp,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag(barTestTag)
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .navigationBarsPadding()
+                        .horizontalScroll(rememberScrollState())
+                        .padding(horizontal = 8.dp, vertical = 6.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    destinations.forEach { dest ->
+                        val isSelected = selectedId == dest.id
+                        val containerColor = if (isSelected) {
+                            MaterialTheme.colorScheme.secondaryContainer
+                        } else {
+                            Color.Transparent
+                        }
+                        val tintColor = if (isSelected) {
+                            MaterialTheme.colorScheme.onSecondaryContainer
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        }
+                        Surface(
+                            shape = RoundedCornerShape(14.dp),
+                            color = containerColor,
+                            modifier = Modifier
+                                .defaultMinSize(minWidth = 68.dp, minHeight = 52.dp)
+                                .clip(RoundedCornerShape(14.dp))
+                                .clickable { dest.onClick() }
+                                .testTag(dest.testTag)
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.Center
+                            ) {
+                                WorkspaceNavIconWithBadge(
+                                    icon = dest.icon,
+                                    contentDescription = dest.contentDescription,
+                                    badgeCount = dest.badgeCount,
+                                    badgeTestTag = dest.badgeTestTag,
+                                    tint = tintColor
+                                )
+                                Spacer(modifier = Modifier.height(2.dp))
+                                Text(
+                                    text = dest.label,
+                                    style = MaterialTheme.typography.labelMedium,
+                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                                    color = tintColor,
+                                    maxLines = 2,
+                                    textAlign = TextAlign.Center
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun WorkspaceNavIconWithBadge(
+    icon: ImageVector,
+    contentDescription: String,
+    badgeCount: Int,
+    badgeTestTag: String?,
+    tint: Color = Color.Unspecified
+) {
+    if (badgeCount > 0) {
+        BadgedBox(
+            badge = {
+                Badge(
+                    modifier = if (badgeTestTag != null) Modifier.testTag(badgeTestTag) else Modifier
+                ) {
+                    Text(
+                        text = if (badgeCount > 99) "99+" else badgeCount.toString(),
+                        maxLines = 1,
+                        softWrap = false
+                    )
+                }
+            }
+        ) {
+            if (tint == Color.Unspecified) {
+                Icon(icon, contentDescription = contentDescription, modifier = Modifier.size(24.dp))
+            } else {
+                Icon(icon, contentDescription = contentDescription, tint = tint, modifier = Modifier.size(24.dp))
+            }
+        }
+    } else {
+        if (tint == Color.Unspecified) {
+            Icon(icon, contentDescription = contentDescription, modifier = Modifier.size(24.dp))
+        } else {
+            Icon(icon, contentDescription = contentDescription, tint = tint, modifier = Modifier.size(24.dp))
+        }
+    }
+}
+
+/**
+ * Shared Stockist Workspace Bottom Navigation:
+ * Home | Explore | Scan | Orders | Profile
+ *
+ * Adapts seamlessly between the signature elevated-scanner bar on standard displays
+ * and an accessible horizontally scrollable 5-destination bar on narrow screens (<360dp)
+ * or large accessibility font scales (>1.3x), using Material 3 theme tokens in Light & Dark mode.
+ */
+@Composable
+fun StockistWorkspaceBottomBar(
+    selectedTab: String,
+    onSelectTab: (String) -> Unit,
+    homeTestTag: String = "dashboard_nav_home",
+    exploreTestTag: String = "dashboard_nav_explore",
+    scanTestTag: String = "dashboard_nav_scan",
+    ordersTestTag: String = "dashboard_nav_orders",
+    profileTestTag: String = "dashboard_nav_profile",
+    barTestTag: String = "stockist_bottom_nav"
+) {
+    val fontScale = LocalDensity.current.fontScale
+    BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+        val useScrollableCompactBar = maxWidth < 360.dp || fontScale > 1.3f
+        if (useScrollableCompactBar) {
+            AdaptiveWorkspaceNavigationBar(
+                barTestTag = barTestTag,
+                selectedId = selectedTab,
+                destinations = listOf(
+                    WorkspaceNavDestination("home", "Home", "Home", Icons.Default.Home, testTag = homeTestTag, onClick = { onSelectTab("home") }),
+                    WorkspaceNavDestination("explore", "Explore", "Explore", Icons.Default.Search, testTag = exploreTestTag, onClick = { onSelectTab("explore") }),
+                    WorkspaceNavDestination("scan", "Scan", "OCR Scanner", Icons.Default.QrCodeScanner, testTag = scanTestTag, onClick = { onSelectTab("scan") }),
+                    WorkspaceNavDestination("orders", "Orders", "Orders", Icons.Default.Inventory2, testTag = ordersTestTag, onClick = { onSelectTab("orders") }),
+                    WorkspaceNavDestination("profile", "Profile", "Profile", Icons.Outlined.Person, testTag = profileTestTag, onClick = { onSelectTab("profile") })
+                )
+            )
+        } else {
+            Surface(
+                color = MaterialTheme.colorScheme.surface,
+                shadowElevation = 10.dp,
+                tonalElevation = 2.dp,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag(barTestTag)
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .navigationBarsPadding()
+                        .padding(horizontal = 8.dp, vertical = 6.dp),
+                    horizontalArrangement = Arrangement.SpaceAround,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    StockistNavTabItem("Home", Icons.Default.Home, selectedTab == "home", homeTestTag) { onSelectTab("home") }
+                    StockistNavTabItem("Explore", Icons.Default.Search, selectedTab == "explore", exploreTestTag) { onSelectTab("explore") }
+
+                    Box(
+                        modifier = Modifier
+                            .offset(y = (-8).dp)
+                            .size(54.dp)
+                            .shadow(8.dp, CircleShape)
+                            .clip(CircleShape)
+                            .background(MaterialTheme.colorScheme.primary)
+                            .clickable { onSelectTab("scan") }
+                            .testTag(scanTestTag),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Canvas(modifier = Modifier.size(26.dp)) {
+                            val w = size.width
+                            val h = size.height
+                            val cornerLen = 7.dp.toPx()
+                            val strokeW = 2.5.dp.toPx()
+                            drawLine(Color.White, Offset(0f, 0f), Offset(cornerLen, 0f), strokeW, StrokeCap.Round)
+                            drawLine(Color.White, Offset(0f, 0f), Offset(0f, cornerLen), strokeW, StrokeCap.Round)
+                            drawLine(Color.White, Offset(w, 0f), Offset(w - cornerLen, 0f), strokeW, StrokeCap.Round)
+                            drawLine(Color.White, Offset(w, 0f), Offset(w, cornerLen), strokeW, StrokeCap.Round)
+                            drawLine(Color.White, Offset(0f, h), Offset(cornerLen, h), strokeW, StrokeCap.Round)
+                            drawLine(Color.White, Offset(0f, h), Offset(0f, h - cornerLen), strokeW, StrokeCap.Round)
+                            drawLine(Color.White, Offset(w, h), Offset(w - cornerLen, h), strokeW, StrokeCap.Round)
+                            drawLine(Color.White, Offset(w, h), Offset(w, h - cornerLen), strokeW, StrokeCap.Round)
+                            drawLine(Color.White, Offset(w * 0.2f, h / 2), Offset(w * 0.8f, h / 2), strokeW, StrokeCap.Round)
+                        }
+                    }
+
+                    StockistNavTabItem("Orders", Icons.Default.Inventory2, selectedTab == "orders", ordersTestTag) { onSelectTab("orders") }
+                    StockistNavTabItem("Profile", Icons.Outlined.Person, selectedTab == "profile", profileTestTag) { onSelectTab("profile") }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun StockistNavTabItem(
+    label: String,
+    icon: ImageVector,
+    selected: Boolean,
+    testTag: String,
+    onClick: () -> Unit
+) {
+    val tint = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center,
+        modifier = Modifier
+            .defaultMinSize(minWidth = 48.dp, minHeight = 48.dp)
+            .clip(RoundedCornerShape(12.dp))
+            .clickable { onClick() }
+            .padding(horizontal = 8.dp, vertical = 4.dp)
+            .testTag(testTag)
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = label,
+            tint = tint,
+            modifier = Modifier.size(24.dp)
+        )
+        Spacer(modifier = Modifier.height(2.dp))
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+            color = tint,
+            maxLines = 1,
+            softWrap = false,
+            overflow = TextOverflow.Ellipsis
+        )
+    }
+}
+
+/**
  * Manufacturer Workspace Bottom Navigation:
  * Home | Products | Offers | Updates | Profile
  */
@@ -450,49 +868,52 @@ fun ManufacturerBottomBar(
     onNavigateUpdates: () -> Unit,
     onNavigateProfile: () -> Unit
 ) {
-    val labelStyle = MaterialTheme.typography.labelMedium
-    NavigationBar(
-        containerColor = MaterialTheme.colorScheme.surface,
-        tonalElevation = 4.dp,
-        windowInsets = WindowInsets.navigationBars,
-        modifier = Modifier.testTag("manufacturer_bottom_nav")
-    ) {
-        NavigationBarItem(
-            selected = selectedTab == "home",
-            onClick = onNavigateHome,
-            icon = { Icon(Icons.Default.Home, contentDescription = "Manufacturer Home", modifier = Modifier.size(24.dp)) },
-            label = { Text("Home", style = labelStyle, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis) },
-            modifier = Modifier.testTag("mfg_nav_home")
+    AdaptiveWorkspaceNavigationBar(
+        barTestTag = "manufacturer_bottom_nav",
+        selectedId = selectedTab,
+        destinations = listOf(
+            WorkspaceNavDestination(
+                id = "home",
+                label = "Home",
+                contentDescription = "Manufacturer Home",
+                icon = Icons.Default.Home,
+                testTag = "mfg_nav_home",
+                onClick = onNavigateHome
+            ),
+            WorkspaceNavDestination(
+                id = "products",
+                label = "Products",
+                contentDescription = "Products & Banners",
+                icon = Icons.Default.Inventory2,
+                testTag = "mfg_nav_products",
+                onClick = onNavigateProducts
+            ),
+            WorkspaceNavDestination(
+                id = "promotions",
+                label = "Offers",
+                contentDescription = "Promotions & Offers",
+                icon = Icons.Default.LocalOffer,
+                testTag = "mfg_nav_promotions",
+                onClick = onNavigatePromotions
+            ),
+            WorkspaceNavDestination(
+                id = "updates",
+                label = "Updates",
+                contentDescription = "Updates & Submissions",
+                icon = Icons.Default.Campaign,
+                testTag = "mfg_nav_updates",
+                onClick = onNavigateUpdates
+            ),
+            WorkspaceNavDestination(
+                id = "profile",
+                label = "Profile",
+                contentDescription = "Profile",
+                icon = Icons.Default.Person,
+                testTag = "mfg_nav_profile",
+                onClick = onNavigateProfile
+            )
         )
-        NavigationBarItem(
-            selected = selectedTab == "products",
-            onClick = onNavigateProducts,
-            icon = { Icon(Icons.Default.Inventory2, contentDescription = "Products & Banners", modifier = Modifier.size(24.dp)) },
-            label = { Text("Products", style = labelStyle, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis) },
-            modifier = Modifier.testTag("mfg_nav_products")
-        )
-        NavigationBarItem(
-            selected = selectedTab == "promotions",
-            onClick = onNavigatePromotions,
-            icon = { Icon(Icons.Default.LocalOffer, contentDescription = "Promotions & Offers", modifier = Modifier.size(24.dp)) },
-            label = { Text("Offers", style = labelStyle, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis) },
-            modifier = Modifier.testTag("mfg_nav_promotions")
-        )
-        NavigationBarItem(
-            selected = selectedTab == "updates",
-            onClick = onNavigateUpdates,
-            icon = { Icon(Icons.Default.Campaign, contentDescription = "Updates & Submissions", modifier = Modifier.size(24.dp)) },
-            label = { Text("Updates", style = labelStyle, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis) },
-            modifier = Modifier.testTag("mfg_nav_updates")
-        )
-        NavigationBarItem(
-            selected = selectedTab == "profile",
-            onClick = onNavigateProfile,
-            icon = { Icon(Icons.Default.Person, contentDescription = "Profile", modifier = Modifier.size(24.dp)) },
-            label = { Text("Profile", style = labelStyle, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis) },
-            modifier = Modifier.testTag("mfg_nav_profile")
-        )
-    }
+    )
 }
 
 /**
@@ -509,83 +930,58 @@ fun CompanyBottomBar(
     onNavigateManagement: () -> Unit,
     onNavigateProfile: () -> Unit
 ) {
-    val labelStyle = MaterialTheme.typography.labelMedium
-    NavigationBar(
-        containerColor = MaterialTheme.colorScheme.surface,
-        tonalElevation = 4.dp,
-        windowInsets = WindowInsets.navigationBars,
-        modifier = Modifier.testTag("company_bottom_nav")
-    ) {
-        NavigationBarItem(
-            selected = selectedTab == "home",
-            onClick = onNavigateHome,
-            icon = { Icon(Icons.Default.Home, contentDescription = "Company Home", modifier = Modifier.size(24.dp)) },
-            label = { Text("Home", style = labelStyle, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis) },
-            modifier = Modifier.testTag("company_nav_home")
+    AdaptiveWorkspaceNavigationBar(
+        barTestTag = "company_bottom_nav",
+        selectedId = selectedTab,
+        destinations = listOf(
+            WorkspaceNavDestination(
+                id = "home",
+                label = "Home",
+                contentDescription = "Company Home",
+                icon = Icons.Default.Home,
+                testTag = "company_nav_home",
+                onClick = onNavigateHome
+            ),
+            WorkspaceNavDestination(
+                id = "catalogue",
+                label = "Catalogue",
+                contentDescription = "Catalogue",
+                icon = Icons.Default.Medication,
+                testTag = "company_nav_catalogue",
+                onClick = onNavigateCatalogue
+            ),
+            WorkspaceNavDestination(
+                id = "approvals",
+                label = "Approvals",
+                contentDescription = if (pendingApprovalsCount > 0) {
+                    "Approvals, $pendingApprovalsCount pending"
+                } else {
+                    "Approvals"
+                },
+                icon = Icons.Default.Approval,
+                badgeCount = pendingApprovalsCount,
+                badgeTestTag = "company_nav_approvals_badge",
+                testTag = "company_nav_approvals",
+                onClick = onNavigateApprovals
+            ),
+            WorkspaceNavDestination(
+                id = "management",
+                label = "Manage",
+                contentDescription = "Master Data & Management",
+                icon = Icons.Default.Tune,
+                testTag = "company_nav_management",
+                onClick = onNavigateManagement
+            ),
+            WorkspaceNavDestination(
+                id = "profile",
+                label = "Profile",
+                contentDescription = "Profile",
+                icon = Icons.Default.Person,
+                testTag = "company_nav_profile",
+                onClick = onNavigateProfile
+            )
         )
-        NavigationBarItem(
-            selected = selectedTab == "catalogue",
-            onClick = onNavigateCatalogue,
-            icon = { Icon(Icons.Default.Medication, contentDescription = "Catalogue", modifier = Modifier.size(24.dp)) },
-            label = { Text("Catalogue", style = labelStyle, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis) },
-            modifier = Modifier.testTag("company_nav_catalogue")
-        )
-        NavigationBarItem(
-            selected = selectedTab == "approvals",
-            onClick = onNavigateApprovals,
-            icon = {
-                BadgedBox(
-                    badge = {
-                        if (pendingApprovalsCount > 0) {
-                            Badge(
-                                modifier = Modifier.testTag("company_nav_approvals_badge")
-                            ) {
-                                Text(
-                                    text = if (pendingApprovalsCount > 99) "99+" else pendingApprovalsCount.toString(),
-                                    maxLines = 1,
-                                    softWrap = false
-                                )
-                            }
-                        }
-                    }
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Approval,
-                        contentDescription = if (pendingApprovalsCount > 0) {
-                            "Approvals, $pendingApprovalsCount pending"
-                        } else {
-                            "Approvals"
-                        },
-                        modifier = Modifier.size(24.dp)
-                    )
-                }
-            },
-            label = {
-                Text(
-                    text = "Approvals",
-                    style = labelStyle,
-                    maxLines = 1,
-                    softWrap = false,
-                    overflow = TextOverflow.Ellipsis
-                )
-            },
-            modifier = Modifier.testTag("company_nav_approvals")
-        )
-        NavigationBarItem(
-            selected = selectedTab == "management",
-            onClick = onNavigateManagement,
-            icon = { Icon(Icons.Default.Tune, contentDescription = "Master Data & Management", modifier = Modifier.size(24.dp)) },
-            label = { Text("Manage", style = labelStyle, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis) },
-            modifier = Modifier.testTag("company_nav_management")
-        )
-        NavigationBarItem(
-            selected = selectedTab == "profile",
-            onClick = onNavigateProfile,
-            icon = { Icon(Icons.Default.Person, contentDescription = "Profile", modifier = Modifier.size(24.dp)) },
-            label = { Text("Profile", style = labelStyle, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis) },
-            modifier = Modifier.testTag("company_nav_profile")
-        )
-    }
+    )
 }
 
 /**

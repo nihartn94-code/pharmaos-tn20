@@ -15,6 +15,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.map
+import java.util.concurrent.atomic.AtomicLong
 
 private val Context.dataStore by preferencesDataStore(name = "pharmaos_session")
 
@@ -49,6 +50,12 @@ class DataStoreManager(
         const val DEFAULT_DEPLETION_THRESHOLD = 10
     }
 
+    private val tokenMutationLock = Any()
+    private val sessionGeneration = AtomicLong(1L)
+
+    @Volatile
+    private var lastTrackedUserId: Long? = null
+
     private val _accessTokenFlow = MutableStateFlow<String?>(secureTokenStorage.getAccessToken())
     private val _refreshTokenFlow = MutableStateFlow<String?>(secureTokenStorage.getRefreshToken())
 
@@ -60,7 +67,28 @@ class DataStoreManager(
         _refreshTokenFlow.value = it
     }
 
+    override fun getSessionGeneration(): Long = sessionGeneration.get()
+
     override fun updateTokens(accessToken: String?, refreshToken: String?) {
+        synchronized(tokenMutationLock) {
+            secureTokenStorage.saveTokens(accessToken, refreshToken)
+            _accessTokenFlow.value = accessToken?.takeIf { it.isNotBlank() }
+            if (!refreshToken.isNullOrBlank()) {
+                _refreshTokenFlow.value = refreshToken
+            } else if (accessToken.isNullOrBlank()) {
+                _refreshTokenFlow.value = null
+            }
+        }
+    }
+
+    override fun updateTokensIfSessionMatches(
+        expectedGeneration: Long,
+        accessToken: String?,
+        refreshToken: String?
+    ): Boolean = synchronized(tokenMutationLock) {
+        if (sessionGeneration.get() != expectedGeneration) {
+            return@synchronized false
+        }
         secureTokenStorage.saveTokens(accessToken, refreshToken)
         _accessTokenFlow.value = accessToken?.takeIf { it.isNotBlank() }
         if (!refreshToken.isNullOrBlank()) {
@@ -68,12 +96,16 @@ class DataStoreManager(
         } else if (accessToken.isNullOrBlank()) {
             _refreshTokenFlow.value = null
         }
+        true
     }
 
     override fun clearTokens() {
-        secureTokenStorage.clearTokens()
-        _accessTokenFlow.value = null
-        _refreshTokenFlow.value = null
+        synchronized(tokenMutationLock) {
+            sessionGeneration.incrementAndGet()
+            secureTokenStorage.clearTokens()
+            _accessTokenFlow.value = null
+            _refreshTokenFlow.value = null
+        }
     }
 
     /**
@@ -148,9 +180,16 @@ class DataStoreManager(
     }
 
     suspend fun setLoggedInUserId(userId: Long?) {
+        val normalized = userId?.takeIf { it > 0L }
+        synchronized(tokenMutationLock) {
+            if (lastTrackedUserId != normalized) {
+                sessionGeneration.incrementAndGet()
+                lastTrackedUserId = normalized
+            }
+        }
         context.dataStore.edit { preferences ->
-            if (userId != null && userId > 0) {
-                preferences[KEY_LOGGED_IN_USER_ID] = userId
+            if (normalized != null) {
+                preferences[KEY_LOGGED_IN_USER_ID] = normalized
             } else {
                 preferences.remove(KEY_LOGGED_IN_USER_ID)
             }
@@ -173,6 +212,9 @@ class DataStoreManager(
     }
 
     suspend fun clearAuthSession() {
+        synchronized(tokenMutationLock) {
+            lastTrackedUserId = null
+        }
         clearTokens()
         context.dataStore.edit { preferences ->
             preferences.remove(KEY_LOGGED_IN_USER_ID)

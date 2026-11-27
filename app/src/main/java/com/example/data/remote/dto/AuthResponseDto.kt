@@ -47,30 +47,44 @@ data class UserDto(
     @param:Json(name = "permissions") val permissions: List<String>? = null
 ) {
     fun toAuthUser(isProductionMode: Boolean = true): AuthUser {
-        val parsedRole = try {
-            UserRole.valueOf(role.uppercase())
-        } catch (_: Exception) {
-            UserRole.STOCKIST
-        }
-        val parsedStatus = try {
-            AccountStatus.valueOf(status.uppercase())
-        } catch (_: Exception) {
-            AccountStatus.ACTIVE
-        }
-        val parsedRoles = roles
-            ?.mapNotNull { raw -> UserRole.entries.firstOrNull { it.name.equals(raw.trim(), ignoreCase = true) } }
+        val strictRole = UserRole.parseStrict(role)
+        val parsedStatus = AccountStatus.fromString(status, isProductionMode = isProductionMode)
+        val explicitParsedRoles = roles
+            ?.mapNotNull { UserRole.parseStrict(it) }
             ?.toSet()
-            ?.takeIf { it.isNotEmpty() }
-            ?: setOf(parsedRole)
-        val resolution = com.example.domain.model.RolePermissionMatrix.resolvePermissionState(
-            roles = parsedRoles,
-            rawPermissions = permissions,
+            .orEmpty()
+        val hasInvalidRolePayload = if (isProductionMode) {
+            strictRole == null || (roles != null && explicitParsedRoles.isEmpty())
+        } else {
+            false
+        }
+        val parsedRole = strictRole ?: explicitParsedRoles.firstOrNull() ?: UserRole.STOCKIST
+        val parsedRoles = when {
+            hasInvalidRolePayload -> emptySet()
+            explicitParsedRoles.isNotEmpty() -> explicitParsedRoles
+            strictRole != null -> setOf(strictRole)
+            else -> if (isProductionMode) emptySet() else setOf(UserRole.STOCKIST)
+        }
+        val resolution = if (hasInvalidRolePayload) {
+            com.example.domain.model.PermissionResolution(
+                permissions = emptySet(),
+                status = com.example.domain.model.PermissionResolutionStatus.INVALID
+            )
+        } else {
+            com.example.domain.model.RolePermissionMatrix.resolvePermissionState(
+                roles = parsedRoles,
+                rawPermissions = permissions,
+                isProductionMode = isProductionMode
+            )
+        }
+        val resolvedOrgType = com.example.domain.model.OrganizationType.fromString(
+            raw = organizationType,
+            fallbackRole = parsedRole,
             isProductionMode = isProductionMode
         )
-        val resolvedOrgType = com.example.domain.model.OrganizationType.fromString(organizationType, parsedRole)
         // SECURITY: Never substitute userId for a missing organizationId in production mode.
         val resolvedOrgId = if (isProductionMode) {
-            organizationId?.takeIf { it > 0L } ?: 0L
+            if (hasInvalidRolePayload) 0L else (organizationId?.takeIf { it > 0L } ?: 0L)
         } else {
             organizationId?.takeIf { it > 0L } ?: id
         }
@@ -103,6 +117,7 @@ data class UserDto(
      */
     fun toUserEntityCache(isProductionMode: Boolean = true): UserEntity {
         val authUser = toAuthUser(isProductionMode = isProductionMode)
+        val storedRole = UserRole.parseStrict(role)?.name ?: if (isProductionMode) "UNKNOWN" else authUser.role.name
         return UserEntity(
             id = id,
             fullName = fullName,
@@ -113,8 +128,8 @@ data class UserDto(
             address = address,
             passwordHash = "",
             passwordSalt = "",
-            role = authUser.role.name,
-            status = status.uppercase(),
+            role = storedRole,
+            status = authUser.status.name,
             createdAtEpochMillis = createdAtEpochMillis,
             emailVerified = emailVerified,
             phoneVerified = phoneVerified,

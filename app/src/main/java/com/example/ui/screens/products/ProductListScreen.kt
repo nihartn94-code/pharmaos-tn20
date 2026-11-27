@@ -116,14 +116,14 @@ fun ProductListScreen(
                     Column {
                         Text(
                             text = "Products & Inventory",
-                            fontSize = 18.sp,
+                            style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Bold,
-                            color = Color(0xFF0F172A)
+                            color = MaterialTheme.colorScheme.onSurface
                         )
                         Text(
                             text = "Room Database • SKU & Stock Thresholds",
-                            fontSize = 11.5.sp,
-                            color = Color(0xFF64748B)
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
                 },
@@ -135,7 +135,7 @@ fun ProductListScreen(
                         Icon(
                             imageVector = Icons.AutoMirrored.Filled.ArrowBack,
                             contentDescription = "Back",
-                            tint = Color(0xFF0F172A)
+                            tint = MaterialTheme.colorScheme.onSurface
                         )
                     }
                 },
@@ -161,7 +161,7 @@ fun ProductListScreen(
                                 Spacer(modifier = Modifier.width(4.dp))
                                 Text(
                                     text = "${uiState.totalProductsCount} SKUs",
-                                    fontSize = 11.sp,
+                                    style = MaterialTheme.typography.labelSmall,
                                     fontWeight = FontWeight.Bold,
                                     color = Color(0xFF1D4ED8)
                                 )
@@ -169,7 +169,7 @@ fun ProductListScreen(
                         }
                     }
                 },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.White)
+                colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.surface)
             )
         },
         floatingActionButton = {
@@ -400,8 +400,8 @@ private fun MetricStatItem(
         )
         Text(
             text = label,
-            fontSize = 11.sp,
-            color = Color(0xFF64748B)
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
         )
     }
 }
@@ -585,7 +585,7 @@ private fun ProductInventoryCard(
                         ) {
                             Text(
                                 text = item.sku,
-                                fontSize = 11.sp,
+                                style = MaterialTheme.typography.labelSmall,
                                 fontFamily = FontFamily.Monospace,
                                 fontWeight = FontWeight.SemiBold,
                                 color = Color(0xFF334155),
@@ -604,7 +604,7 @@ private fun ProductInventoryCard(
                             ) {
                                 Text(
                                     text = item.dosageForm,
-                                    fontSize = 10.5.sp,
+                                    style = MaterialTheme.typography.labelSmall,
                                     color = Color(0xFF64748B),
                                     modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
                                 )
@@ -634,7 +634,7 @@ private fun ProductInventoryCard(
                         }
                         Text(
                             text = statusLabel,
-                            fontSize = 10.5.sp,
+                            style = MaterialTheme.typography.labelSmall,
                             fontWeight = FontWeight.Bold,
                             color = statusTextColor
                         )
@@ -647,8 +647,8 @@ private fun ProductInventoryCard(
                 Spacer(modifier = Modifier.height(6.dp))
                 Text(
                     text = item.saltComposition,
-                    fontSize = 11.5.sp,
-                    color = Color(0xFF64748B),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1
                 )
             }
@@ -733,7 +733,7 @@ private fun ProductInventoryCard(
                         Spacer(modifier = Modifier.height(4.dp))
                         Text(
                             text = "⚠ Deficit of ${item.reorderThreshold - item.currentStock} units below reorder safety stock.",
-                            fontSize = 11.sp,
+                            style = MaterialTheme.typography.bodySmall,
                             fontWeight = FontWeight.Medium,
                             color = Color(0xFFB45309)
                         )
@@ -753,7 +753,7 @@ private fun ProductInventoryCard(
                 IconButton(
                     onClick = { showDeleteConfirm = true },
                     modifier = Modifier
-                        .size(36.dp)
+                        .size(48.dp)
                         .testTag("btn_delete_product_${item.sku}")
                 ) {
                     Icon(
@@ -771,8 +771,8 @@ private fun ProductInventoryCard(
                 ) {
                     Text(
                         text = "Adjust Stock:",
-                        fontSize = 11.5.sp,
-                        color = Color(0xFF64748B)
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
 
                     // Minus button
@@ -1007,8 +1007,8 @@ fun AddProductDialog(
                     )
                     Text(
                         text = "Room Database Inventory Entity",
-                        fontSize = 11.sp,
-                        color = Color(0xFF64748B)
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
             }
@@ -1112,7 +1112,7 @@ fun AddProductDialog(
                             tint = Color(0xFF2563EB)
                         )
                         Spacer(modifier = Modifier.width(4.dp))
-                        Text("Auto", fontSize = 11.sp, color = Color(0xFF2563EB))
+                        Text("Auto", style = MaterialTheme.typography.labelMedium, color = Color(0xFF2563EB))
                     }
                 }
 
@@ -1128,8 +1128,8 @@ fun AddProductDialog(
                             currentStockText = it.filter { ch -> ch.isDigit() }
                             errorMessage = null
                         },
-                        label = { Text("Current Stock *", fontSize = 12.sp) },
-                        placeholder = { Text("e.g. 50", fontSize = 12.sp) },
+                        label = { Text("Current Stock *", style = MaterialTheme.typography.labelMedium) },
+                        placeholder = { Text("e.g. 50", style = MaterialTheme.typography.bodySmall) },
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                         singleLine = true,
                         shape = RoundedCornerShape(10.dp),
@@ -1149,8 +1149,8 @@ fun AddProductDialog(
                             reorderThresholdText = it.filter { ch -> ch.isDigit() }
                             errorMessage = null
                         },
-                        label = { Text("Threshold *", fontSize = 12.sp) },
-                        placeholder = { Text("e.g. 15", fontSize = 12.sp) },
+                        label = { Text("Threshold *", style = MaterialTheme.typography.labelMedium) },
+                        placeholder = { Text("e.g. 15", style = MaterialTheme.typography.bodySmall) },
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                         singleLine = true,
                         shape = RoundedCornerShape(10.dp),
@@ -1166,16 +1166,16 @@ fun AddProductDialog(
 
                 Text(
                     text = "Reorder threshold triggers automated push notifications and warning badges when stock falls to or below this quantity.",
-                    fontSize = 11.sp,
-                    color = Color(0xFF64748B)
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
 
                 // Dosage Form Chips
                 Text(
                     text = "Dosage Form",
-                    fontSize = 12.sp,
+                    style = MaterialTheme.typography.labelMedium,
                     fontWeight = FontWeight.SemiBold,
-                    color = Color(0xFF334155)
+                    color = MaterialTheme.colorScheme.onSurface
                 )
 
                 Row(
@@ -1197,7 +1197,7 @@ fun AddProductDialog(
                         ) {
                             Text(
                                 text = form,
-                                fontSize = 11.sp,
+                                style = MaterialTheme.typography.labelSmall,
                                 fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
                                 color = if (isSelected) Color(0xFF1D4ED8) else Color(0xFF475569),
                                 modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)

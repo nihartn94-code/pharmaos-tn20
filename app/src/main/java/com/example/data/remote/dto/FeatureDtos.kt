@@ -111,7 +111,22 @@ data class ProductDto(
     @param:Json(name = "isRx") val isRx: Boolean,
     @param:Json(name = "isActive") val isActive: Boolean = true,
     @param:Json(name = "createdBy") val createdBy: Long = 0L,
-    @param:Json(name = "createdAtEpochMillis") val createdAtEpochMillis: Long = System.currentTimeMillis()
+    @param:Json(name = "createdAtEpochMillis") val createdAtEpochMillis: Long = System.currentTimeMillis(),
+    // [PROPOSED — AWAITING BACKEND CONFIRMATION] Authoritative ownership & governance fields
+    @param:Json(name = "organizationId") val organizationId: Long? = null,
+    @param:Json(name = "approvalStatus") val approvalStatus: String? = null,
+    @param:Json(name = "catalogueStatus") val catalogueStatus: String? = null,
+    @param:Json(name = "commerciallyAvailable") val commerciallyAvailable: Boolean? = null,
+    @param:Json(name = "genericName") val genericName: String? = null,
+    @param:Json(name = "routeOfAdministration") val routeOfAdministration: String? = null,
+    @param:Json(name = "packagingType") val packagingType: String? = null,
+    @param:Json(name = "description") val description: String? = null,
+    @param:Json(name = "imageUrl") val imageUrl: String? = null,
+    @param:Json(name = "skuCode") val skuCode: String? = null,
+    @param:Json(name = "mrp") val mrp: Double? = null,
+    @param:Json(name = "regulatoryIdentifier") val regulatoryIdentifier: String? = null,
+    @param:Json(name = "updatedAtEpochMillis") val updatedAtEpochMillis: Long? = null,
+    @param:Json(name = "version") val version: Long? = null
 )
 
 @JsonClass(generateAdapter = true)

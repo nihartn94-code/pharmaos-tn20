@@ -93,6 +93,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -248,9 +249,9 @@ fun LoginScreenContent(
                     }
                     Text(
                         text = "CONNECT • TRADE • GROW",
-                        fontSize = 9.sp,
+                        style = MaterialTheme.typography.labelSmall,
                         fontWeight = FontWeight.SemiBold,
-                        letterSpacing = 1.2.sp,
+                        letterSpacing = 1.sp,
                         color = Color(0xFF64748B)
                     )
                 }
@@ -301,7 +302,7 @@ fun LoginScreenContent(
                                 UserRole.MANUFACTURER -> "🏭 Manufacturer Portal"
                                 UserRole.ADMIN -> "🛡️ Administrator Portal"
                             },
-                            fontSize = 11.sp,
+                            style = MaterialTheme.typography.labelSmall,
                             fontWeight = FontWeight.SemiBold,
                             color = Color(0xFF2563EB),
                             modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
@@ -404,9 +405,8 @@ fun LoginScreenContent(
                     }
                     Text(
                         text = roleDescription,
-                        fontSize = 11.5.sp,
-                        color = Color(0xFF475569),
-                        lineHeight = 16.sp
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Color(0xFF475569)
                     )
                 }
             }
@@ -495,18 +495,21 @@ fun LoginScreenContent(
                                         )
                                         Text(
                                             text = "$quickEmail • $quickOrg",
-                                            fontSize = 11.sp,
-                                            color = Color(0xFF15803D)
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = Color(0xFF15803D),
+                                            maxLines = 2,
+                                            overflow = TextOverflow.Ellipsis
                                         )
                                     }
                                 }
+                                Spacer(modifier = Modifier.width(8.dp))
                                 Surface(
                                     shape = RoundedCornerShape(6.dp),
                                     color = Color(0xFF16A34A)
                                 ) {
                                     Text(
                                         text = "Autofill",
-                                        fontSize = 11.sp,
+                                        style = MaterialTheme.typography.labelSmall,
                                         fontWeight = FontWeight.Bold,
                                         color = Color.White,
                                         modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
@@ -857,7 +860,7 @@ fun LoginScreenContent(
                             ) {
                                 Text(
                                     text = "${matchingUsers.size} ready",
-                                    fontSize = 11.sp,
+                                    style = MaterialTheme.typography.labelSmall,
                                     fontWeight = FontWeight.Bold,
                                     color = Color(0xFF2563EB),
                                     modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
@@ -867,7 +870,7 @@ fun LoginScreenContent(
 
                         Text(
                             text = "Tap to autofill credentials for instant testing on device:",
-                            fontSize = 11.5.sp,
+                            style = MaterialTheme.typography.bodySmall,
                             color = Color(0xFF64748B)
                         )
 
@@ -915,13 +918,16 @@ fun LoginScreenContent(
                                             )
                                             Text(
                                                 text = "manufacturer@pharmaos.com • Ph: 9876543220",
-                                                fontSize = 11.sp,
-                                                color = Color(0xFF64748B)
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = Color(0xFF64748B),
+                                                maxLines = 2,
+                                                overflow = TextOverflow.Ellipsis
                                             )
                                         }
+                                        Spacer(modifier = Modifier.width(8.dp))
                                         Text(
                                             text = "Autofill",
-                                            fontSize = 11.sp,
+                                            style = MaterialTheme.typography.labelSmall,
                                             fontWeight = FontWeight.Bold,
                                             color = Color(0xFF047857)
                                         )
@@ -977,13 +983,16 @@ fun LoginScreenContent(
                                             )
                                             Text(
                                                 text = "${regUser.email} • Ph: ${regUser.phone}",
-                                                fontSize = 11.sp,
-                                                color = Color(0xFF64748B)
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = Color(0xFF64748B),
+                                                maxLines = 2,
+                                                overflow = TextOverflow.Ellipsis
                                             )
                                         }
+                                        Spacer(modifier = Modifier.width(8.dp))
                                         Text(
                                             text = "Autofill",
-                                            fontSize = 11.sp,
+                                            style = MaterialTheme.typography.labelSmall,
                                             fontWeight = FontWeight.Bold,
                                             color = Color(0xFF2563EB)
                                         )
@@ -996,7 +1005,7 @@ fun LoginScreenContent(
                             Spacer(modifier = Modifier.height(8.dp))
                             Text(
                                 text = "Accounts registered under other roles: ${otherUsers.size}. Switch tabs above to access them.",
-                                fontSize = 11.sp,
+                                style = MaterialTheme.typography.bodySmall,
                                 color = Color(0xFF94A3B8)
                             )
                         }
@@ -1023,9 +1032,8 @@ fun LoginScreenContent(
                 Spacer(modifier = Modifier.width(6.dp))
                 Text(
                     text = "Your data is safe with us. We follow industry-standard security practices.",
-                    fontSize = 11.sp,
+                    style = MaterialTheme.typography.bodySmall,
                     color = Color(0xFF64748B),
-                    lineHeight = 15.sp,
                     textAlign = TextAlign.Center
                 )
             }
@@ -1183,7 +1191,7 @@ fun LoginScreenContent(
                     if (uiState.allRegisteredUsers.isNotEmpty()) {
                         Text(
                             text = "Or choose registered account on this device:",
-                            fontSize = 11.5.sp,
+                            style = MaterialTheme.typography.labelSmall,
                             fontWeight = FontWeight.SemiBold,
                             color = Color(0xFF64748B)
                         )
@@ -1242,8 +1250,10 @@ fun LoginScreenContent(
                                             )
                                             Text(
                                                 text = regUser.email,
-                                                fontSize = 11.5.sp,
-                                                color = Color(0xFF64748B)
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = Color(0xFF64748B),
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis
                                             )
                                         }
                                         Icon(
@@ -1384,9 +1394,8 @@ fun LoginScreenContent(
                     // Privacy notice
                     Text(
                         text = "To continue, Google will share your name and email address with PharmaOS. Review PharmaOS Privacy Policy and Terms of Service.",
-                        fontSize = 10.5.sp,
+                        style = MaterialTheme.typography.bodySmall,
                         color = Color(0xFF94A3B8),
-                        lineHeight = 14.sp,
                         textAlign = TextAlign.Center,
                         modifier = Modifier.fillMaxWidth()
                     )
@@ -1439,10 +1448,12 @@ private fun RoleTabItem(
             Spacer(modifier = Modifier.height(4.dp))
             Text(
                 text = title,
-                fontSize = 11.5.sp,
+                style = MaterialTheme.typography.labelSmall,
                 fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
                 color = contentColor,
-                maxLines = 1
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                textAlign = TextAlign.Center
             )
         }
     }

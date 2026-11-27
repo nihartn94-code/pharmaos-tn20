@@ -251,7 +251,7 @@ internal fun ManufacturerSummaryCard(
                     val skuLabel = if (manufacturer.productCount == 1) "1 SKU" else "${manufacturer.productCount} SKUs"
                     Text(
                         text = skuLabel,
-                        fontSize = 11.5.sp,
+                        style = MaterialTheme.typography.labelSmall,
                         fontWeight = FontWeight.Bold,
                         color = Color(0xFF1D4ED8),
                         modifier = Modifier.padding(horizontal = 9.dp, vertical = 4.dp)
@@ -268,13 +268,13 @@ internal fun ManufacturerSummaryCard(
                 manufacturer.dosageForms.take(3).forEach { form ->
                     Surface(
                         shape = RoundedCornerShape(8.dp),
-                        color = Color(0xFFF1F5F9)
+                        color = MaterialTheme.colorScheme.surfaceVariant
                     ) {
                         Text(
                             text = form.displayName,
-                            fontSize = 11.sp,
+                            style = MaterialTheme.typography.labelSmall,
                             fontWeight = FontWeight.Medium,
-                            color = Color(0xFF334155),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
                         )
                     }
@@ -282,8 +282,8 @@ internal fun ManufacturerSummaryCard(
                 if (manufacturer.dosageForms.size > 3) {
                     Text(
                         text = "+${manufacturer.dosageForms.size - 3} more",
-                        fontSize = 11.sp,
-                        color = Color(0xFF64748B)
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
             }
@@ -295,15 +295,18 @@ internal fun ManufacturerSummaryCard(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Row(
+                    modifier = Modifier.weight(1f),
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     manufacturer.minOfferPrice?.let { minPtr ->
                         Text(
                             text = "From ₹${String.format(Locale.US, "%.2f", minPtr)}",
-                            fontSize = 12.5.sp,
+                            style = MaterialTheme.typography.labelMedium,
                             fontWeight = FontWeight.SemiBold,
-                            color = Color(0xFF0F172A)
+                            color = MaterialTheme.colorScheme.onSurface,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
                         )
                     }
                     manufacturer.maxMarginPercent?.let { margin ->
@@ -313,24 +316,28 @@ internal fun ManufacturerSummaryCard(
                         ) {
                             Text(
                                 text = "Up to $margin% Margin",
-                                fontSize = 10.5.sp,
+                                style = MaterialTheme.typography.labelSmall,
                                 fontWeight = FontWeight.Bold,
                                 color = Color(0xFF047857),
+                                maxLines = 1,
                                 modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp)
                             )
                         }
                     }
                 }
 
+                Spacer(modifier = Modifier.width(6.dp))
+
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
                     Text(
-                        text = "Explore Products",
-                        fontSize = 12.5.sp,
+                        text = "Explore",
+                        style = MaterialTheme.typography.labelMedium,
                         fontWeight = FontWeight.Bold,
-                        color = Color(0xFF1D64EC)
+                        color = Color(0xFF1D64EC),
+                        maxLines = 1
                     )
                     Icon(
                         imageVector = Icons.AutoMirrored.Filled.ArrowForward,
@@ -412,7 +419,7 @@ internal fun SelectedManufacturerHeaderCard(
                         }
                         Text(
                             text = subtitle,
-                            fontSize = 11.5.sp,
+                            style = MaterialTheme.typography.bodySmall,
                             color = Color(0xFF475569),
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
@@ -442,7 +449,7 @@ internal fun SelectedManufacturerHeaderCard(
                         )
                         Text(
                             text = "All Labs",
-                            fontSize = 11.5.sp,
+                            style = MaterialTheme.typography.labelSmall,
                             fontWeight = FontWeight.Bold,
                             color = Color(0xFF0284C7)
                         )
@@ -458,7 +465,7 @@ internal fun SelectedManufacturerHeaderCard(
                 ) {
                     Text(
                         text = summary.therapeuticCategories.take(3).joinToString(" • "),
-                        fontSize = 11.sp,
+                        style = MaterialTheme.typography.bodySmall,
                         color = Color(0xFF0369A1),
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
@@ -467,7 +474,7 @@ internal fun SelectedManufacturerHeaderCard(
                     summary.minOfferPrice?.let { minPtr ->
                         Text(
                             text = "PTR from ₹${String.format(Locale.US, "%.2f", minPtr)}",
-                            fontSize = 11.sp,
+                            style = MaterialTheme.typography.labelSmall,
                             fontWeight = FontWeight.SemiBold,
                             color = Color(0xFF0F172A)
                         )

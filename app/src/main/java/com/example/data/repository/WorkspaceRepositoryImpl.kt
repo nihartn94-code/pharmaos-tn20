@@ -51,14 +51,22 @@ import com.example.domain.model.PharmaPermission
 import com.example.domain.model.PromotionalCampaign
 import com.example.domain.model.RolePermissionMatrix
 import com.example.domain.model.StockistPurchasedInventoryItem
+import com.example.domain.model.SyncHealthStatus
+import com.example.domain.model.SyncStepResult
 import com.example.domain.model.UserRole
+import com.example.domain.model.WorkspaceSyncState
 import com.example.domain.model.WorkspaceType
 import com.example.domain.repository.PharmaRepository
 import com.example.domain.repository.WorkspaceRepository
 import com.example.util.PasswordHasher
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
@@ -66,6 +74,7 @@ import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import java.util.concurrent.atomic.AtomicReference
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class WorkspaceRepositoryImpl(
@@ -88,9 +97,16 @@ class WorkspaceRepositoryImpl(
      */
     private val operationIdempotencyKeys = ConcurrentHashMap<String, String>()
     private val bannerClockMillisFlow = MutableStateFlow(System.currentTimeMillis())
+    private val _workspaceSyncStateFlow = MutableStateFlow(WorkspaceSyncState())
+    override val workspaceSyncStateFlow: StateFlow<WorkspaceSyncState> = _workspaceSyncStateFlow.asStateFlow()
+    private val activeSyncJobRef = AtomicReference<Job?>(null)
 
     override fun refreshBannerClock(nowEpochMillis: Long) {
         bannerClockMillisFlow.value = nowEpochMillis
+    }
+
+    override fun cancelActiveSync() {
+        activeSyncJobRef.getAndSet(null)?.cancel()
     }
 
     internal fun obtainIdempotencyKey(operationScope: String): String =
@@ -129,7 +145,9 @@ class WorkspaceRepositoryImpl(
                 WorkspaceType.STOCKIST
             } else {
                 val allowed = user.authorizedWorkspaces()
-                if (preferred != null && allowed.contains(preferred)) {
+                if (allowed.isEmpty()) {
+                    WorkspaceType.STOCKIST
+                } else if (preferred != null && allowed.contains(preferred)) {
                     preferred
                 } else {
                     user.defaultWorkspace().takeIf { allowed.contains(it) } ?: allowed.first()
@@ -1797,10 +1815,17 @@ class WorkspaceRepositoryImpl(
     }
 
     override suspend fun clearSensitiveLocalSessionCaches(previousUser: AuthUser?) {
+        // Cancel any in-flight workspace sync jobs so stale responses cannot repopulate local tables
+        cancelActiveSync()
+        operationIdempotencyKeys.clear()
+        _workspaceSyncStateFlow.value = WorkspaceSyncState()
         dataStoreManager.setActiveWorkspace(null)
-        // In PRODUCTION_BACKEND_HTTP mode, clear private cached records on logout/account switch
-        if (isProductionHttpMode() && previousUser != null && previousUser.organizationType == OrganizationType.STOCKIST) {
-            workspaceDao.clearStockistInventoryForOrg(previousUser.organizationId)
+        // In PRODUCTION_BACKEND_HTTP mode, clear ALL private local Room caches on logout/account switch.
+        // This clears ONLY device-local cached data and never deletes records on the Spring Boot backend.
+        if (isProductionHttpMode()) {
+            db.withTransaction {
+                workspaceDao.clearAllPrivateSessionCaches()
+            }
         }
     }
 
@@ -2009,34 +2034,83 @@ class WorkspaceRepositoryImpl(
     }
 
     override suspend fun syncCompanyCatalogue(): Result<Unit> {
-        return runCatching {
-            if (!isProductionHttpMode()) return@runCatching
+        return try {
+            if (!isProductionHttpMode()) return Result.success(Unit)
             val actor = requireAuthenticatedUser()
             if (actor.organizationType == OrganizationType.STOCKIST || !actor.hasValidOrganizationContext()) {
-                return@runCatching
+                return Result.success(Unit)
             }
             val remote = remoteDataSource
-                ?: throw IllegalStateException("Remote workspace API is not initialized.")
+                ?: return Result.failure(IllegalStateException("Remote workspace API is not initialized."))
             when (val res = remote.fetchCompanyCatalogue()) {
                 is NetworkResult.Success -> {
-                    db.withTransaction {
-                        res.data.forEach { dto ->
-                            val existing = productDao.getProductById(dto.id)
-                            val entity = dto.toEntity().copy(
-                                organizationId = existing?.organizationId?.takeIf { it > 0L } ?: actor.organizationId,
-                                approvalStatus = MedicineSubmissionStatus.APPROVED.name,
-                                catalogueStatus = if (dto.isActive) {
-                                    CataloguePublicationStatus.ACTIVE.name
-                                } else {
-                                    CataloguePublicationStatus.INACTIVE.name
-                                }
+                    val authoritativeEntities = mutableListOf<ProductEntity>()
+                    var rejectedCount = 0
+                    for (dto in res.data) {
+                        val dtoOrgId = dto.organizationId?.takeIf { it > 0L }
+                        // SECURITY: Never assign actor.organizationId when backend omits organizationId
+                        if (dtoOrgId == null) {
+                            rejectedCount++
+                            continue
+                        }
+                        // Enforce strict organization ownership isolation
+                        if (actor.role != UserRole.ADMIN && dtoOrgId != actor.organizationId) {
+                            rejectedCount++
+                            continue
+                        }
+                        // SECURITY: Never default missing/unknown approvalStatus or catalogueStatus to APPROVED/ACTIVE
+                        val parsedApproval = MedicineSubmissionStatus.fromString(dto.approvalStatus)
+                        val parsedCatalogue = CataloguePublicationStatus.fromString(dto.catalogueStatus)
+                        if (parsedApproval == MedicineSubmissionStatus.UNKNOWN ||
+                            parsedCatalogue == CataloguePublicationStatus.UNKNOWN
+                        ) {
+                            rejectedCount++
+                            continue
+                        }
+                        authoritativeEntities.add(dto.toEntity(isProductionMode = true))
+                    }
+
+                    if (res.data.isNotEmpty() && authoritativeEntities.isEmpty()) {
+                        return Result.failure(
+                            IllegalStateException(
+                                "Catalogue sync rejected all ${res.data.size} record(s): missing authoritative organizationId, approvalStatus, or catalogueStatus."
                             )
+                        )
+                    }
+
+                    db.withTransaction {
+                        // Reconcile removed or outdated records for the actor's organization
+                        if (actor.role != UserRole.ADMIN) {
+                            val existingForOrg = productDao.getProductsByOrganization(actor.organizationId)
+                            val authoritativeIds = authoritativeEntities.map { it.id }.toSet()
+                            val removedIds = existingForOrg
+                                .map { it.id }
+                                .filter { it !in authoritativeIds }
+                            if (removedIds.isNotEmpty()) {
+                                productDao.deleteProductsByIds(removedIds)
+                            }
+                        }
+                        authoritativeEntities.forEach { entity ->
                             productDao.insertProduct(entity)
                         }
                     }
+
+                    if (rejectedCount > 0) {
+                        Result.failure(
+                            IllegalStateException(
+                                "Catalogue synced ${authoritativeEntities.size} valid medicine(s); skipped $rejectedCount record(s) with unverified ownership or status."
+                            )
+                        )
+                    } else {
+                        Result.success(Unit)
+                    }
                 }
-                else -> throw res.toException()
+                else -> Result.failure(res.toException())
             }
+        } catch (ce: CancellationException) {
+            throw ce
+        } catch (t: Throwable) {
+            Result.failure(t)
         }
     }
 
@@ -2183,39 +2257,187 @@ class WorkspaceRepositoryImpl(
     }
 
     override suspend fun syncActiveWorkspace(): Result<Unit> {
-        return runCatching {
-            if (!isProductionHttpMode()) return@runCatching
-            val user = syncAuthContext().getOrThrow()
-            val activeWorkspace = getActiveWorkspaceFlow().first()
+        if (!isProductionHttpMode()) {
+            val now = System.currentTimeMillis()
+            _workspaceSyncStateFlow.value = WorkspaceSyncState(
+                status = SyncHealthStatus.SUCCESS,
+                isStaleCache = false,
+                lastSuccessfulSyncEpochMillis = now,
+                lastAttemptEpochMillis = now,
+                canRetry = false
+            )
+            return Result.success(Unit)
+        }
+
+        val currentJob = currentCoroutineContext()[Job]
+        activeSyncJobRef.set(currentJob)
+        val attemptStartedAt = System.currentTimeMillis()
+        val previousSuccessTimestamp = _workspaceSyncStateFlow.value.lastSuccessfulSyncEpochMillis
+        _workspaceSyncStateFlow.value = _workspaceSyncStateFlow.value.copy(
+            status = SyncHealthStatus.SYNCING,
+            lastAttemptEpochMillis = attemptStartedAt,
+            errorMessage = null,
+            canRetry = false
+        )
+
+        val stepResults = mutableListOf<SyncStepResult>()
+
+        suspend fun runStep(
+            name: String,
+            required: Boolean,
+            block: suspend () -> Result<Unit>
+        ) {
+            try {
+                val res = block()
+                if (res.isSuccess) {
+                    stepResults.add(SyncStepResult(stepName = name, required = required, succeeded = true))
+                } else {
+                    val cause = res.exceptionOrNull()
+                    if (cause is CancellationException) throw cause
+                    stepResults.add(
+                        SyncStepResult(
+                            stepName = name,
+                            required = required,
+                            succeeded = false,
+                            errorMessage = cause?.message ?: "Failed to sync $name."
+                        )
+                    )
+                }
+            } catch (ce: CancellationException) {
+                throw ce
+            } catch (t: Throwable) {
+                stepResults.add(
+                    SyncStepResult(
+                        stepName = name,
+                        required = required,
+                        succeeded = false,
+                        errorMessage = t.message ?: "Failed to sync $name."
+                    )
+                )
+            }
+        }
+
+        return try {
+            val authResult = syncAuthContext()
+            val user = authResult.getOrElse { err ->
+                if (err is CancellationException) throw err
+                val failureMsg = err.message ?: "Failed to verify session context with backend."
+                val failedStep = SyncStepResult("auth_context", required = true, succeeded = false, errorMessage = failureMsg)
+                _workspaceSyncStateFlow.value = WorkspaceSyncState(
+                    status = SyncHealthStatus.FAILED,
+                    activeWorkspace = _workspaceSyncStateFlow.value.activeWorkspace,
+                    isStaleCache = true,
+                    lastSuccessfulSyncEpochMillis = previousSuccessTimestamp,
+                    lastAttemptEpochMillis = attemptStartedAt,
+                    errorMessage = failureMsg,
+                    failedSteps = listOf(failedStep),
+                    succeededSteps = emptyList(),
+                    canRetry = true
+                )
+                return Result.failure(err)
+            }
+            stepResults.add(SyncStepResult("auth_context", required = true, succeeded = true))
+
+            val authorized = user.authorizedWorkspaces()
+            if (authorized.isEmpty()) {
+                val secErr = SecurityException("No authorized workspace is available for this account.")
+                _workspaceSyncStateFlow.value = WorkspaceSyncState(
+                    status = SyncHealthStatus.FAILED,
+                    activeWorkspace = null,
+                    isStaleCache = true,
+                    lastSuccessfulSyncEpochMillis = previousSuccessTimestamp,
+                    lastAttemptEpochMillis = attemptStartedAt,
+                    errorMessage = secErr.message,
+                    failedSteps = listOf(SyncStepResult("workspace_authorization", true, false, secErr.message)),
+                    succeededSteps = listOf("auth_context"),
+                    canRetry = true
+                )
+                return Result.failure(secErr)
+            }
+
+            val preferredWorkspace = getActiveWorkspaceFlow().first()
+            val activeWorkspace = if (authorized.contains(preferredWorkspace)) preferredWorkspace else authorized.first()
+
             when (activeWorkspace) {
                 WorkspaceType.STOCKIST -> {
-                    syncStockistFeed()
-                    syncStockistPurchasedInventory()
+                    runStep("stockist_feed", required = true) { syncStockistFeed() }
+                    runStep("stockist_inventory", required = true) { syncStockistPurchasedInventory() }
                 }
                 WorkspaceType.MANUFACTURER -> {
-                    syncManufacturerBanners()
-                    syncPromotionalCampaigns()
-                    syncManufacturerAnnouncements()
-                    syncMedicineSubmissions()
-                    syncCompanyCatalogue()
+                    runStep("manufacturer_banners", required = true) { syncManufacturerBanners() }
+                    runStep("promotional_campaigns", required = true) { syncPromotionalCampaigns() }
+                    runStep("medicine_announcements", required = true) { syncManufacturerAnnouncements() }
+                    runStep("medicine_submissions", required = true) { syncMedicineSubmissions() }
+                    runStep("company_catalogue", required = true) { syncCompanyCatalogue() }
                 }
                 WorkspaceType.COMPANY -> {
-                    syncCompanyCatalogue()
-                    syncMedicineSubmissions()
-                    syncApprovalAuditLogs()
-                    syncMasterData()
+                    runStep("company_catalogue", required = true) { syncCompanyCatalogue() }
+                    runStep("medicine_submissions", required = true) { syncMedicineSubmissions() }
+                    runStep("approval_audit_logs", required = false) { syncApprovalAuditLogs() }
+                    runStep("master_data", required = true) { syncMasterData() }
                     if (AccessControlPolicy.canManageOrganizationRoles(user, user.organizationId).isSuccess) {
-                        syncOrganizationMembers()
+                        runStep("organization_members", required = true) { syncOrganizationMembers() }
                     }
                 }
                 WorkspaceType.ADMIN -> {
-                    syncCompanyCatalogue()
-                    syncMedicineSubmissions()
-                    syncApprovalAuditLogs()
-                    syncMasterData()
-                    syncOrganizationMembers()
+                    runStep("company_catalogue", required = true) { syncCompanyCatalogue() }
+                    runStep("medicine_submissions", required = true) { syncMedicineSubmissions() }
+                    runStep("approval_audit_logs", required = false) { syncApprovalAuditLogs() }
+                    runStep("master_data", required = true) { syncMasterData() }
+                    runStep("organization_members", required = true) { syncOrganizationMembers() }
                 }
             }
+
+            val failedSteps = stepResults.filter { !it.succeeded }
+            val succeededNames = stepResults.filter { it.succeeded }.map { it.stepName }
+            val completedAt = System.currentTimeMillis()
+
+            if (failedSteps.isEmpty()) {
+                _workspaceSyncStateFlow.value = WorkspaceSyncState(
+                    status = SyncHealthStatus.SUCCESS,
+                    activeWorkspace = activeWorkspace,
+                    isStaleCache = false,
+                    lastSuccessfulSyncEpochMillis = completedAt,
+                    lastAttemptEpochMillis = attemptStartedAt,
+                    errorMessage = null,
+                    failedSteps = emptyList(),
+                    succeededSteps = succeededNames,
+                    canRetry = false
+                )
+                Result.success(Unit)
+            } else {
+                val nonAuthSuccessCount = stepResults.count { it.stepName != "auth_context" && it.succeeded }
+                val summaryStatus = if (nonAuthSuccessCount > 0) {
+                    SyncHealthStatus.PARTIAL_SUCCESS
+                } else {
+                    SyncHealthStatus.FAILED
+                }
+                val summaryError = failedSteps.joinToString("; ") { step ->
+                    "${step.stepName}: ${step.errorMessage ?: "sync failed"}"
+                }
+                _workspaceSyncStateFlow.value = WorkspaceSyncState(
+                    status = summaryStatus,
+                    activeWorkspace = activeWorkspace,
+                    isStaleCache = true,
+                    lastSuccessfulSyncEpochMillis = previousSuccessTimestamp,
+                    lastAttemptEpochMillis = attemptStartedAt,
+                    errorMessage = summaryError,
+                    failedSteps = failedSteps,
+                    succeededSteps = succeededNames,
+                    canRetry = true
+                )
+                Result.failure(IllegalStateException("Workspace sync incomplete ($summaryStatus): $summaryError"))
+            }
+        } catch (ce: CancellationException) {
+            _workspaceSyncStateFlow.value = _workspaceSyncStateFlow.value.copy(
+                status = SyncHealthStatus.CANCELLED,
+                isStaleCache = true,
+                errorMessage = "Sync cancelled.",
+                canRetry = true
+            )
+            throw ce
+        } finally {
+            activeSyncJobRef.compareAndSet(currentJob, null)
         }
     }
 }

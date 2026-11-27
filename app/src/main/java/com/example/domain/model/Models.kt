@@ -26,16 +26,47 @@ enum class UserRole(val displayName: String) {
         get() = this == MANUFACTURER || this == PHARMA_COMPANY
 
     companion object {
-        fun fromString(raw: String?): UserRole {
-            if (raw.isNullOrBlank()) return STOCKIST
-            return entries.firstOrNull { it.name.equals(raw.trim(), ignoreCase = true) } ?: STOCKIST
+        /**
+         * Strict parser that NEVER coerces missing or unknown roles to [STOCKIST].
+         * Use this for production authentication/authorization payloads so malformed
+         * roles fail closed.
+         */
+        fun parseStrict(raw: String?): UserRole? {
+            if (raw.isNullOrBlank()) return null
+            return entries.firstOrNull { it.name.equals(raw.trim(), ignoreCase = true) }
         }
+
+        /**
+         * Legacy non-production helper retained only for non-auth display/filter defaults.
+         * Never use for production authorization decisions.
+         */
+        fun fromString(raw: String?): UserRole = parseStrict(raw) ?: STOCKIST
     }
 }
 
 enum class AccountStatus {
     ACTIVE,
-    SUSPENDED
+    SUSPENDED,
+    UNKNOWN;
+
+    companion object {
+        fun parseStrict(raw: String?): AccountStatus? {
+            if (raw.isNullOrBlank()) return null
+            return entries.firstOrNull {
+                it != UNKNOWN && it.name.equals(raw.trim(), ignoreCase = true)
+            }
+        }
+
+        /**
+         * Parses account status safely. In production (`isProductionMode == true`),
+         * missing or unrecognized values return [UNKNOWN] (fail closed) and NEVER default to [ACTIVE].
+         */
+        fun fromString(raw: String?, isProductionMode: Boolean = true): AccountStatus {
+            val strict = parseStrict(raw)
+            if (strict != null) return strict
+            return if (isProductionMode) UNKNOWN else ACTIVE
+        }
+    }
 }
 
 enum class DosageForm(val displayName: String) {
@@ -136,12 +167,13 @@ data class AuthUser(
     val isProductionContext: Boolean = false
 ) {
     fun hasPermission(permission: PharmaPermission): Boolean {
+        if (status != AccountStatus.ACTIVE) return false
         if (permissionStatus != PermissionResolutionStatus.CONFIRMED) return false
         return permissions.contains(permission) || (!isProductionContext && role == UserRole.ADMIN)
     }
 
     fun hasValidOrganizationContext(): Boolean =
-        role == UserRole.ADMIN || organizationId > 0L
+        role == UserRole.ADMIN || (organizationId > 0L && organizationType != OrganizationType.UNKNOWN)
 
     fun authorizedWorkspaces(): List<WorkspaceType> =
         AccessControlPolicy.authorizedWorkspaces(this)

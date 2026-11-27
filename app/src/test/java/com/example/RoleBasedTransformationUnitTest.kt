@@ -147,9 +147,10 @@ class RoleBasedTransformationUnitTest {
     fun `enum compatibility preserves PHARMA_COMPANY while displaying Company in UI`() {
         assertEquals("PHARMA_COMPANY", UserRole.PHARMA_COMPANY.name)
         assertEquals("Company", UserRole.PHARMA_COMPANY.displayName)
-        assertEquals(2, OrganizationType.entries.size)
+        assertEquals(2, OrganizationType.entries.count { it != OrganizationType.UNKNOWN })
         assertTrue(OrganizationType.entries.contains(OrganizationType.STOCKIST))
         assertTrue(OrganizationType.entries.contains(OrganizationType.PHARMACEUTICAL_ORGANIZATION))
+        assertTrue(OrganizationType.entries.contains(OrganizationType.UNKNOWN))
         assertEquals(22, PharmaPermission.entries.size)
     }
 
@@ -340,13 +341,14 @@ class RoleBasedTransformationUnitTest {
             role = "STOCKIST"
         )
         val legacyProdMapped = legacyDto.toAuthUser(isProductionMode = true)
-        assertEquals(OrganizationType.STOCKIST, legacyProdMapped.organizationType)
+        assertEquals(OrganizationType.UNKNOWN, legacyProdMapped.organizationType)
         assertEquals(0L, legacyProdMapped.organizationId)
         assertFalse(legacyProdMapped.hasPermission(PharmaPermission.BASKET_MANAGE))
         assertFalse(legacyProdMapped.hasPermission(PharmaPermission.MEDICINE_APPROVE))
 
         // Isolated local dev mode derives local defaults for test convenience
         val legacyDevMapped = legacyDto.toAuthUser(isProductionMode = false)
+        assertEquals(OrganizationType.STOCKIST, legacyDevMapped.organizationType)
         assertTrue(legacyDevMapped.hasPermission(PharmaPermission.BASKET_MANAGE))
         assertFalse(legacyDevMapped.hasPermission(PharmaPermission.MEDICINE_APPROVE))
     }

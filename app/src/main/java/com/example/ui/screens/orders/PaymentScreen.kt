@@ -461,7 +461,7 @@ fun PaymentScreenContent(
                         Spacer(modifier = Modifier.width(6.dp))
                         Text(
                             text = "256-Bit SSL Encrypted • CDSCO & GST E-Invoice Compliant",
-                            fontSize = 11.sp,
+                            style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
@@ -564,7 +564,7 @@ fun PaymentScreenContent(
                             ) {
                                 Text(
                                     text = "GST Compliant",
-                                    fontSize = 11.sp,
+                                    style = MaterialTheme.typography.labelSmall,
                                     fontWeight = FontWeight.Bold,
                                     color = Color(0xFF15803D),
                                     modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
@@ -626,7 +626,7 @@ fun PaymentScreenContent(
                                 )
                                 Text(
                                     text = "Includes all taxes & batch COA records",
-                                    fontSize = 11.sp,
+                                    style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
                             }
@@ -777,7 +777,7 @@ fun PaymentScreenContent(
                                     ) {
                                         Text(
                                             text = method.tag,
-                                            fontSize = 9.sp,
+                                            style = MaterialTheme.typography.labelSmall,
                                             fontWeight = FontWeight.Bold,
                                             color = if (method == PaymentMethodType.PHARMA_CREDIT) Color(0xFFB45309) else Color(0xFF475569),
                                             modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
@@ -825,7 +825,7 @@ fun PaymentScreenContent(
                                                 Spacer(modifier = Modifier.height(4.dp))
                                                 Text(
                                                     text = "✓ Order will be released immediately. Settlement due on $dueDateString.",
-                                                    fontSize = 11.sp,
+                                                    style = MaterialTheme.typography.bodySmall,
                                                     color = Color(0xFF166534),
                                                     fontWeight = FontWeight.Medium
                                                 )
@@ -912,7 +912,7 @@ fun PaymentScreenContent(
                                                                     text = "Valid UPI ID • ${(upiValidation as UpiValidationResult.Valid).provider}",
                                                                     color = Color(0xFF15803D),
                                                                     fontWeight = FontWeight.SemiBold,
-                                                                    fontSize = 11.sp
+                                                                    style = MaterialTheme.typography.labelSmall
                                                                 )
                                                             }
                                                         }
@@ -920,14 +920,14 @@ fun PaymentScreenContent(
                                                             Text(
                                                                 text = (upiValidation as UpiValidationResult.Invalid).reason,
                                                                 color = MaterialTheme.colorScheme.error,
-                                                                fontSize = 11.sp,
+                                                                style = MaterialTheme.typography.labelSmall,
                                                                 fontWeight = FontWeight.Medium
                                                             )
                                                         }
                                                         else -> {
                                                             Text(
                                                                 text = "Format: username@handle (e.g. apex@okhdfcbank, 9876543210@paytm)",
-                                                                fontSize = 11.sp,
+                                                                style = MaterialTheme.typography.bodySmall,
                                                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                                                             )
                                                         }
@@ -946,7 +946,7 @@ fun PaymentScreenContent(
                                             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                                                 Text(
                                                     text = "Quick Handle Shortcuts:",
-                                                    fontSize = 11.sp,
+                                                    style = MaterialTheme.typography.labelSmall,
                                                     fontWeight = FontWeight.Medium,
                                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                                 )
@@ -978,7 +978,7 @@ fun PaymentScreenContent(
                                                         ) {
                                                             Text(
                                                                 text = handle,
-                                                                fontSize = 11.sp,
+                                                                style = MaterialTheme.typography.labelSmall,
                                                                 fontWeight = FontWeight.SemiBold,
                                                                 color = Color(0xFF1D64EC),
                                                                 modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp)
@@ -1009,9 +1009,8 @@ fun PaymentScreenContent(
                                                         Spacer(modifier = Modifier.width(8.dp))
                                                         Text(
                                                             text = "UPI address format verified for instant debit. Orders will be released immediately.",
-                                                            fontSize = 11.sp,
-                                                            color = Color(0xFF166534),
-                                                            lineHeight = 15.sp
+                                                            style = MaterialTheme.typography.bodySmall,
+                                                            color = Color(0xFF166534)
                                                         )
                                                     }
                                                 }
@@ -1019,7 +1018,7 @@ fun PaymentScreenContent(
 
                                             Text(
                                                 text = "Supported: Google Pay, PhonePe, Paytm, BHIM, Amazon Pay & CRED",
-                                                fontSize = 11.sp,
+                                                style = MaterialTheme.typography.bodySmall,
                                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                                             )
                                         }
@@ -1032,12 +1031,12 @@ fun PaymentScreenContent(
                                             modifier = Modifier.fillMaxWidth()
                                         ) {
                                             Column(modifier = Modifier.padding(12.dp)) {
-                                                Text("Virtual Escrow Account for NEFT / RTGS:", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                                                Text("Virtual Escrow Account for NEFT / RTGS:", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.labelMedium)
                                                 Spacer(modifier = Modifier.height(4.dp))
-                                                Text("Bank: HDFC Bank Corporate Escrow", fontSize = 12.sp)
-                                                Text("A/C Number: PHARMAOS8941209", fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                                                Text("IFSC Code: HDFC0000001", fontSize = 12.sp)
-                                                Text("Beneficiary: PharmaOS Escrow Private Limited", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                                Text("Bank: HDFC Bank Corporate Escrow", style = MaterialTheme.typography.bodySmall)
+                                                Text("A/C Number: PHARMAOS8941209", style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Bold)
+                                                Text("IFSC Code: HDFC0000001", style = MaterialTheme.typography.bodySmall)
+                                                Text("Beneficiary: PharmaOS Escrow Private Limited", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                                             }
                                         }
                                     }
@@ -1055,7 +1054,7 @@ fun PaymentScreenContent(
                                             )
                                             Text(
                                                 text = "Cheque will be collected by courier upon physical batch handover.",
-                                                fontSize = 11.sp,
+                                                style = MaterialTheme.typography.bodySmall,
                                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                                             )
                                         }

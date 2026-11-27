@@ -54,6 +54,7 @@ import com.example.ui.components.CompanyBottomBar
 import com.example.ui.components.DashboardKpiCardModel
 import com.example.ui.components.ResponsiveKpiGrid
 import com.example.ui.components.WorkspaceAccessDeniedScreen
+import com.example.ui.components.WorkspaceSyncStatusBanner
 import com.example.ui.components.WorkspaceSwitcherChip
 import com.example.ui.components.WorkspaceSwitcherDialog
 import com.example.ui.theme.PharmaOSTheme
@@ -87,7 +88,8 @@ fun CompanyDashboardScreen(
         onNavigateManagement = onNavigateManagement,
         onNavigateProfile = onNavigateProfile,
         onNavigateNotifications = onNavigateNotifications,
-        onSwitchToManufacturer = { viewModel.switchToManufacturerWorkspace(onSwitchToManufacturerWorkspace) }
+        onSwitchToManufacturer = { viewModel.switchToManufacturerWorkspace(onSwitchToManufacturerWorkspace) },
+        onRetrySync = { viewModel.refreshWorkspace() }
     )
 }
 
@@ -101,7 +103,8 @@ fun CompanyDashboardContent(
     onNavigateManagement: () -> Unit,
     onNavigateProfile: () -> Unit,
     onNavigateNotifications: () -> Unit,
-    onSwitchToManufacturer: () -> Unit
+    onSwitchToManufacturer: () -> Unit,
+    onRetrySync: () -> Unit = {}
 ) {
     var showWorkspaceDialog by remember { mutableStateOf(false) }
 
@@ -165,6 +168,14 @@ fun CompanyDashboardContent(
             contentPadding = PaddingValues(16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
+            if (uiState.syncState.isSyncing || uiState.syncState.hasWarningOrError) {
+                item {
+                    WorkspaceSyncStatusBanner(
+                        syncState = uiState.syncState,
+                        onRetry = onRetrySync
+                    )
+                }
+            }
             item {
                 Card(
                     shape = RoundedCornerShape(20.dp),

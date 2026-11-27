@@ -81,7 +81,13 @@ class ManufacturerCatalogueExplorationTest {
             db = Room.inMemoryDatabaseBuilder(context, AppDatabase::class.java)
                 .allowMainThreadQueries()
                 .build()
-            dataStoreManager = DataStoreManager(context)
+            dataStoreManager = DataStoreManager(
+                context = context,
+                secureTokenStorage = com.example.data.local.SecureTokenStorage.createForUnitTest(
+                    context,
+                    prefsFileName = "test_mfr_catalogue_tokens_${System.nanoTime()}"
+                )
+            )
             dataStoreManager.clearAuthSession()
             dataStoreManager.setOnboardingCompleted(true)
             dataStoreManager.setAuthExecutionMode(AuthExecutionMode.DEVELOPMENT_LOCAL_MODE)

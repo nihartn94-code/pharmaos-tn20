@@ -842,19 +842,21 @@ private fun SummaryCard(
         border = BorderStroke(1.dp, accentColor.copy(alpha = 0.25f)),
         modifier = Modifier
             .clickable(onClick = onClick)
-            .width(160.dp)
+            .width(168.dp)
     ) {
         Column(modifier = Modifier.padding(12.dp)) {
             Text(
                 text = title,
-                fontSize = 11.5.sp,
+                style = MaterialTheme.typography.labelMedium,
                 fontWeight = FontWeight.SemiBold,
-                color = accentColor
+                color = accentColor,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
             )
             Spacer(modifier = Modifier.height(4.dp))
             Text(
                 text = value,
-                fontSize = 18.sp,
+                style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.Bold,
                 color = Color(0xFF0F172A),
                 maxLines = 1,
@@ -863,9 +865,9 @@ private fun SummaryCard(
             Spacer(modifier = Modifier.height(2.dp))
             Text(
                 text = subtitle,
-                fontSize = 11.sp,
+                style = MaterialTheme.typography.bodySmall,
                 color = Color(0xFF64748B),
-                maxLines = 1,
+                maxLines = 2,
                 overflow = TextOverflow.Ellipsis
             )
         }
@@ -967,7 +969,7 @@ private fun InventoryStockItemCard(
                                 Spacer(modifier = Modifier.width(6.dp))
                                 Text(
                                     text = flag,
-                                    fontSize = 11.5.sp,
+                                    style = MaterialTheme.typography.labelSmall,
                                     fontWeight = FontWeight.Bold,
                                     color = if (item.stockStatus == StockLevelStatus.OUT_OF_STOCK || item.isRecalled) Color(0xFF991B1B) else Color(0xFF92400E)
                                 )
@@ -1028,29 +1030,28 @@ private fun InventoryStockItemCard(
 
             // Batch Details & Storage Info Row
             Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Surface(
-                        shape = RoundedCornerShape(6.dp),
-                        color = MaterialTheme.colorScheme.secondaryContainer,
-                        modifier = Modifier.padding(end = 6.dp)
-                    ) {
-                        Text(
-                            text = "Lot: ${item.batchNumber}",
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            color = MaterialTheme.colorScheme.onSecondaryContainer,
-                            modifier = Modifier
-                                .padding(horizontal = 6.dp, vertical = 2.dp)
-                                .testTag("inventory_item_batch_${item.id}")
-                        )
-                    }
-
-                    StorageConditionBadge(storageCondition = item.storageCondition)
+                Surface(
+                    shape = RoundedCornerShape(6.dp),
+                    color = MaterialTheme.colorScheme.secondaryContainer
+                ) {
+                    Text(
+                        text = "Lot: ${item.batchNumber}",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onSecondaryContainer,
+                        modifier = Modifier
+                            .padding(horizontal = 6.dp, vertical = 2.dp)
+                            .testTag("inventory_item_batch_${item.id}")
+                    )
                 }
+
+                StorageConditionBadge(storageCondition = item.storageCondition)
 
                 // Expiry chip
                 ExpiryRiskBadge(
@@ -1070,14 +1071,17 @@ private fun InventoryStockItemCard(
                     ) {
                         Text(
                             text = "Mfg: ${Formatters.formatDate(mfgDate)}",
-                            fontSize = 11.sp,
+                            style = MaterialTheme.typography.bodySmall,
                             fontWeight = FontWeight.Medium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.testTag("inventory_item_mfg_${item.id}")
+                            modifier = Modifier
+                                .weight(1f)
+                                .testTag("inventory_item_mfg_${item.id}")
                         )
+                        Spacer(modifier = Modifier.width(8.dp))
                         Text(
                             text = "Exp Date: ${Formatters.formatDate(item.expiryDateEpochMillis)}",
-                            fontSize = 11.sp,
+                            style = MaterialTheme.typography.bodySmall,
                             fontWeight = FontWeight.Medium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -1095,19 +1099,21 @@ private fun InventoryStockItemCard(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Column {
+                Column(modifier = Modifier.weight(1f)) {
                     Text(
                         text = "Valuation: ${Formatters.formatInr(item.totalValuation)}",
-                        fontSize = 13.sp,
+                        style = MaterialTheme.typography.labelLarge,
                         fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.onSurface
                     )
                     Text(
                         text = "PTR: ${Formatters.formatInr(item.ptr)} / unit",
-                        fontSize = 11.sp,
+                        style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
+
+                Spacer(modifier = Modifier.width(8.dp))
 
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     // Adjust stock button (only for real batches)
@@ -1115,13 +1121,12 @@ private fun InventoryStockItemCard(
                         OutlinedButton(
                             onClick = onAdjustStock,
                             shape = RoundedCornerShape(10.dp),
-                            modifier = Modifier
-                                .height(36.dp)
-                                .testTag("inventory_adjust_btn_${item.id}")
+                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
+                            modifier = Modifier.testTag("inventory_adjust_btn_${item.id}")
                         ) {
                             Icon(Icons.Default.Edit, contentDescription = null, modifier = Modifier.size(14.dp))
                             Spacer(modifier = Modifier.width(4.dp))
-                            Text("Adjust", fontSize = 12.sp)
+                            Text("Adjust", style = MaterialTheme.typography.labelSmall)
                         }
                     }
 
@@ -1129,12 +1134,12 @@ private fun InventoryStockItemCard(
                     Button(
                         onClick = onQuickRestock,
                         shape = RoundedCornerShape(10.dp),
-                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
-                        modifier = Modifier.height(36.dp)
+                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
                     ) {
                         Icon(Icons.Default.ShoppingCart, contentDescription = null, modifier = Modifier.size(14.dp))
                         Spacer(modifier = Modifier.width(4.dp))
-                        Text("Restock", fontSize = 12.sp)
+                        Text("Restock", style = MaterialTheme.typography.labelSmall)
                     }
                 }
             }
@@ -1161,7 +1166,7 @@ private fun StockStatusBadge(
     ) {
         Text(
             text = status.label,
-            fontSize = 11.sp,
+            style = MaterialTheme.typography.labelSmall,
             fontWeight = FontWeight.Bold,
             color = fg,
             modifier = modifier.padding(horizontal = 8.dp, vertical = 3.dp)
@@ -1189,7 +1194,7 @@ private fun ExpiryRiskBadge(
     ) {
         Text(
             text = "Exp: $label",
-            fontSize = 11.sp,
+            style = MaterialTheme.typography.labelSmall,
             fontWeight = FontWeight.SemiBold,
             color = fg,
             modifier = textModifier.padding(horizontal = 6.dp, vertical = 2.dp)
@@ -1255,7 +1260,7 @@ private fun StockAdjustmentDialog(
                     ) {
                         Surface(shape = CircleShape, color = MaterialTheme.colorScheme.surfaceVariant, modifier = Modifier.size(36.dp)) {
                             Box(contentAlignment = Alignment.Center) {
-                                Text("-10", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                Text("-10", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
                             }
                         }
                     }
@@ -1303,7 +1308,7 @@ private fun StockAdjustmentDialog(
                     ) {
                         Surface(shape = CircleShape, color = MaterialTheme.colorScheme.surfaceVariant, modifier = Modifier.size(36.dp)) {
                             Box(contentAlignment = Alignment.Center) {
-                                Text("+10", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                Text("+10", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
                             }
                         }
                     }
@@ -1532,7 +1537,10 @@ private fun InventoryDepletionMonitorBanner(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.weight(1f)
+                ) {
                     Surface(
                         shape = CircleShape,
                         color = if (monitorState.isMonitoringActive) Color(0xFF10B981) else Color(0xFF94A3B8),
@@ -1546,6 +1554,8 @@ private fun InventoryDepletionMonitorBanner(
                         color = if (monitorState.activeDepletionAlertsCount > 0) Color(0xFF991B1B) else MaterialTheme.colorScheme.onSurface
                     )
                 }
+
+                Spacer(modifier = Modifier.width(8.dp))
 
                 Surface(
                     shape = RoundedCornerShape(6.dp),
@@ -1564,7 +1574,7 @@ private fun InventoryDepletionMonitorBanner(
                         Spacer(modifier = Modifier.width(4.dp))
                         Text(
                             text = if (monitorState.notificationsEnabled) "Push ON" else "Push OFF",
-                            fontSize = 10.sp,
+                            style = MaterialTheme.typography.labelSmall,
                             fontWeight = FontWeight.Bold,
                             color = if (monitorState.notificationsEnabled) Color(0xFF15803D) else Color(0xFF64748B)
                         )
@@ -1607,7 +1617,9 @@ private fun InventoryDepletionMonitorBanner(
 
             // Action Buttons Row
             Row(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState()),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
@@ -1619,10 +1631,8 @@ private fun InventoryDepletionMonitorBanner(
                         contentColor = Color.White
                     ),
                     shape = RoundedCornerShape(10.dp),
-                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
-                    modifier = Modifier
-                        .height(38.dp)
-                        .testTag("run_depletion_scan_button")
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+                    modifier = Modifier.testTag("run_depletion_scan_button")
                 ) {
                     if (isScanning) {
                         CircularProgressIndicator(
@@ -1631,33 +1641,30 @@ private fun InventoryDepletionMonitorBanner(
                             modifier = Modifier.size(16.dp)
                         )
                         Spacer(modifier = Modifier.width(6.dp))
-                        Text("Scanning...", fontSize = 12.sp)
+                        Text("Scanning...", style = MaterialTheme.typography.labelSmall)
                     } else {
                         Icon(Icons.Default.Bolt, contentDescription = null, modifier = Modifier.size(16.dp))
                         Spacer(modifier = Modifier.width(4.dp))
-                        Text("Scan Stock Now", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        Text("Scan Stock Now", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
                     }
                 }
 
                 OutlinedButton(
                     onClick = onOpenSettings,
                     shape = RoundedCornerShape(10.dp),
-                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
-                    modifier = Modifier
-                        .height(38.dp)
-                        .testTag("threshold_settings_button")
+                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp),
+                    modifier = Modifier.testTag("threshold_settings_button")
                 ) {
                     Icon(Icons.Default.Tune, contentDescription = null, modifier = Modifier.size(15.dp))
                     Spacer(modifier = Modifier.width(4.dp))
-                    Text("Threshold (≤${monitorState.criticalThreshold})", fontSize = 12.sp)
+                    Text("Threshold (≤${monitorState.criticalThreshold})", style = MaterialTheme.typography.labelSmall)
                 }
 
                 if (monitorState.activeDepletionAlertsCount > 0) {
                     TextButton(
-                        onClick = onFilterCritical,
-                        modifier = Modifier.height(38.dp)
+                        onClick = onFilterCritical
                     ) {
-                        Text("View Critical", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Color(0xFFDC2626))
+                        Text("View Critical", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold, color = Color(0xFFDC2626))
                     }
                 }
             }
@@ -1749,10 +1756,10 @@ private fun DepletionThresholdSettingsDialog(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Column(modifier = Modifier.weight(1f)) {
-                        Text("Automated Push Alerts", fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+                        Text("Automated Push Alerts", fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.bodyMedium)
                         Text(
                             "Deliver heads-up push notifications with sound/vibration",
-                            fontSize = 11.sp,
+                            style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
@@ -1769,10 +1776,10 @@ private fun DepletionThresholdSettingsDialog(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Column(modifier = Modifier.weight(1f)) {
-                        Text("Real-time Room Stream Monitor", fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+                        Text("Real-time Room Stream Monitor", fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.bodyMedium)
                         Text(
                             "Continuously evaluate batch quantity changes",
-                            fontSize = 11.sp,
+                            style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }

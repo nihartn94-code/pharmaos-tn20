@@ -26,6 +26,8 @@ import com.example.domain.model.OrganizationType
 import com.example.domain.model.RolePermissionMatrix
 import com.example.domain.model.UserRole
 import com.example.ui.components.CompanyBottomBar
+import com.example.ui.components.ManufacturerBottomBar
+import com.example.ui.components.StockistWorkspaceBottomBar
 import com.example.ui.components.WorkspaceAccessDeniedScreen
 import com.example.ui.screens.company.CompanyDashboardContent
 import com.example.ui.screens.company.CompanyWorkspaceUiState
@@ -310,5 +312,50 @@ class RoleBasedWorkspacesUiTest {
         composeRule.onNodeWithText("12", useUnmergedTree = true).assertIsDisplayed()
         composeRule.onNodeWithTag("company_nav_approvals").performClick()
         assertTrue(clickedApprovals)
+    }
+
+    @Test
+    fun stockistAndManufacturerBottomBarsAdaptAt320dpAnd200PercentFontScaleWithoutDroppingDestinations() {
+        var clickedStockistOrders = false
+        var clickedManufacturerProfile = false
+        composeRule.setContent {
+            val baseDensity = LocalDensity.current
+            CompositionLocalProvider(
+                LocalDensity provides Density(density = baseDensity.density, fontScale = 2.0f)
+            ) {
+                PharmaOSTheme(darkTheme = true) {
+                    Column(modifier = Modifier.width(320.dp).fillMaxSize()) {
+                        StockistWorkspaceBottomBar(
+                            selectedTab = "home",
+                            onSelectTab = { if (it == "orders") clickedStockistOrders = true }
+                        )
+                        ManufacturerBottomBar(
+                            selectedTab = "home",
+                            onNavigateHome = {},
+                            onNavigateProducts = {},
+                            onNavigatePromotions = {},
+                            onNavigateUpdates = {},
+                            onNavigateProfile = { clickedManufacturerProfile = true }
+                        )
+                    }
+                }
+            }
+        }
+
+        // All 5 Stockist destinations exist and remain accessible even at 320dp + 2.0x font scale
+        composeRule.onNodeWithTag("dashboard_nav_home").assertExists()
+        composeRule.onNodeWithTag("dashboard_nav_explore").assertExists()
+        composeRule.onNodeWithTag("dashboard_nav_scan").assertExists()
+        composeRule.onNodeWithTag("dashboard_nav_orders").assertExists().performClick()
+        composeRule.onNodeWithTag("dashboard_nav_profile").assertExists()
+        assertTrue(clickedStockistOrders)
+
+        // All 5 Manufacturer destinations exist and remain accessible at 320dp + 2.0x font scale
+        composeRule.onNodeWithTag("mfg_nav_home").assertExists()
+        composeRule.onNodeWithTag("mfg_nav_products").assertExists()
+        composeRule.onNodeWithTag("mfg_nav_promotions").assertExists()
+        composeRule.onNodeWithTag("mfg_nav_updates").assertExists()
+        composeRule.onNodeWithTag("mfg_nav_profile").assertExists().performClick()
+        assertTrue(clickedManufacturerProfile)
     }
 }

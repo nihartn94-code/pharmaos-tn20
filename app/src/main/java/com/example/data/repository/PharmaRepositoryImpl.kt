@@ -240,22 +240,35 @@ class PharmaRepositoryImpl(
             return when (val result = remote.login(email.trim(), password, expectedRole?.name)) {
                 is NetworkResult.Success -> {
                     val payload = result.data
+                    val authUserCandidate = payload.user.toAuthUser(isProductionMode = true)
+                    if (expectedRole != null && authUserCandidate.role != expectedRole) {
+                        dataStoreManager.clearAuthSession()
+                        return Result.failure(
+                            IllegalArgumentException("This account is registered as '${authUserCandidate.role.displayName}'. Please switch to the ${authUserCandidate.role.displayName} login tab.")
+                        )
+                    }
+                    if (authUserCandidate.status != AccountStatus.ACTIVE) {
+                        dataStoreManager.clearAuthSession()
+                        val msg = if (authUserCandidate.status == AccountStatus.SUSPENDED) {
+                            "This account is currently suspended. Please contact administrator."
+                        } else {
+                            "Account status could not be verified. Please contact administrator."
+                        }
+                        return Result.failure(IllegalStateException(msg))
+                    }
+                    val previousUserId = dataStoreManager.loggedInUserIdFlow.first()
+                    if (previousUserId != null && previousUserId != payload.user.id) {
+                        // Account switch in production mode: clear previous user's private local caches first
+                        db.withTransaction {
+                            db.workspaceManagementDao().clearAllPrivateSessionCaches()
+                        }
+                        remoteSupplierDirectory.value = emptyMap()
+                        latestCommittedBasket.value = null
+                    }
                     dataStoreManager.setAuthTokens(payload.accessToken, payload.refreshToken)
-                    val cachedUserId = upsertCachedUser(payload.user.toUserEntityCache())
+                    val cachedUserId = upsertCachedUser(payload.user.toUserEntityCache(isProductionMode = true))
                     dataStoreManager.setLoggedInUserId(cachedUserId)
-                    val authUser = payload.user.toAuthUser().copy(id = cachedUserId)
-                    if (expectedRole != null && authUser.role != expectedRole) {
-                        dataStoreManager.clearAuthSession()
-                        return Result.failure(
-                            IllegalArgumentException("This account is registered as '${authUser.role.displayName}'. Please switch to the ${authUser.role.displayName} login tab.")
-                        )
-                    }
-                    if (authUser.status == AccountStatus.SUSPENDED) {
-                        dataStoreManager.clearAuthSession()
-                        return Result.failure(
-                            IllegalStateException("This account is currently suspended. Please contact administrator.")
-                        )
-                    }
+                    val authUser = authUserCandidate.copy(id = cachedUserId)
                     dataStoreManager.setOnboardingCompleted(true)
                     Result.success(authUser)
                 }
@@ -550,25 +563,40 @@ class PharmaRepositoryImpl(
     }
 
     private fun UserEntity.toDomainAuthUser(isProductionMode: Boolean = false): AuthUser {
-        val parsedRole = try { UserRole.valueOf(role) } catch (_: Exception) { UserRole.STOCKIST }
-        val parsedStatus = try { AccountStatus.valueOf(status) } catch (_: Exception) { AccountStatus.ACTIVE }
-        val parsedRoles = com.example.domain.model.RolePermissionMatrix.parseRolesCsv(assignedRolesCsv, parsedRole)
-        val rawTokens = permissionsCsv.split(",").map { it.trim() }.filter { it.isNotEmpty() }
-        val resolution = com.example.domain.model.RolePermissionMatrix.resolvePermissionState(
-            roles = parsedRoles,
-            rawPermissions = if (permissionsCsv.isBlank()) {
-                if (isProductionMode) emptyList() else null
-            } else {
-                rawTokens
-            },
+        val strictRole = UserRole.parseStrict(role)
+        val parsedStatus = AccountStatus.fromString(status, isProductionMode = isProductionMode)
+        val parsedRoles = com.example.domain.model.RolePermissionMatrix.parseRolesCsv(
+            csv = assignedRolesCsv,
+            fallback = if (isProductionMode) strictRole else (strictRole ?: UserRole.STOCKIST),
             isProductionMode = isProductionMode
         )
+        val hasInvalidRole = isProductionMode && (strictRole == null || parsedRoles.isEmpty())
+        val parsedRole = strictRole ?: parsedRoles.firstOrNull() ?: UserRole.STOCKIST
+        val rawTokens = permissionsCsv.split(",").map { it.trim() }.filter { it.isNotEmpty() }
+        val resolution = if (hasInvalidRole) {
+            com.example.domain.model.PermissionResolution(
+                permissions = emptySet(),
+                status = com.example.domain.model.PermissionResolutionStatus.INVALID
+            )
+        } else {
+            com.example.domain.model.RolePermissionMatrix.resolvePermissionState(
+                roles = parsedRoles,
+                rawPermissions = if (permissionsCsv.isBlank()) {
+                    if (isProductionMode) emptyList() else null
+                } else {
+                    rawTokens
+                },
+                isProductionMode = isProductionMode
+            )
+        }
         val resolvedOrgType = com.example.domain.model.OrganizationType.fromString(
-            organizationType.takeIf { it.isNotBlank() },
-            parsedRole
+            raw = organizationType.takeIf { it.isNotBlank() },
+            fallbackRole = parsedRole,
+            isProductionMode = isProductionMode
         )
         // Never substitute userId for missing organizationId in production mode!
         val resolvedOrgId = when {
+            hasInvalidRole -> 0L
             organizationId > 0L -> organizationId
             isProductionMode -> 0L
             else -> id
@@ -589,7 +617,7 @@ class PharmaRepositoryImpl(
             organizationId = resolvedOrgId,
             organizationType = resolvedOrgType,
             organizationName = organizationName.ifBlank { businessName },
-            assignedRoles = parsedRoles,
+            assignedRoles = if (hasInvalidRole) emptySet() else parsedRoles,
             permissions = resolution.permissions,
             permissionStatus = resolution.status,
             isProductionContext = isProductionMode
@@ -1263,7 +1291,8 @@ class PharmaRepositoryImpl(
     }
 
     override suspend fun logout() {
-        if (isProductionHttpMode() && isBackendConfigured()) {
+        val wasProductionMode = isProductionHttpMode()
+        if (wasProductionMode && isBackendConfigured()) {
             try {
                 authRemoteDataSource?.logout()
             } catch (_: Exception) {
@@ -1271,8 +1300,15 @@ class PharmaRepositoryImpl(
             }
         }
         latestCommittedBasket.value = null
+        remoteSupplierDirectory.value = emptyMap()
         basketRefreshTrigger.value = basketMutationSeq.incrementAndGet()
         dataStoreManager.clearAuthSession()
+        if (wasProductionMode) {
+            // Wipe ALL private local Room caches in production mode without deleting remote backend records
+            db.withTransaction {
+                db.workspaceManagementDao().clearAllPrivateSessionCaches()
+            }
+        }
     }
 
     override fun getApiUsersFlow(): Flow<List<UserEntity>> = userDao.getAllUsersFlow()
@@ -1974,8 +2010,29 @@ class PharmaRepositoryImpl(
         }
     }
 
+    private fun isProductVisibleToUser(product: ProductEntity, user: AuthUser?): Boolean {
+        val discoverable = com.example.domain.model.AccessControlPolicy.isMedicineDiscoverableByStockist(
+            approvalStatus = com.example.domain.model.MedicineSubmissionStatus.fromString(product.approvalStatus),
+            publicationStatus = com.example.domain.model.CataloguePublicationStatus.fromString(product.catalogueStatus),
+            isActive = product.isActive
+        )
+        if (discoverable) return true
+        if (user == null) return false
+        if (user.role == UserRole.ADMIN) return true
+        // Stockists may NEVER view unapproved, inactive, or unknown medicines via direct product details
+        if (user.organizationType == com.example.domain.model.OrganizationType.STOCKIST || user.role == UserRole.STOCKIST) {
+            return false
+        }
+        // Authorized pharmaceutical organization members may view their own organization's products
+        return user.hasValidOrganizationContext() &&
+            product.organizationId > 0L &&
+            product.organizationId == user.organizationId
+    }
+
     override suspend fun getApiProductById(id: Long): ProductDetail? {
         val p = productDao.getProductById(id) ?: return null
+        val currentUser = getApiUsersMe()
+        if (!isProductVisibleToUser(p, currentUser)) return null
         val offers = offerDao.getActiveOffersForProduct(id)
         val settingsMap = analyticsDao.getAllSupplierSettings().associateBy { it.supplierId }
         return buildProductSummaryFields(p, offers, settingsMap)
@@ -1985,9 +2042,10 @@ class PharmaRepositoryImpl(
         return combine(
             productDao.getProductByIdFlow(id),
             offerDao.getAllActiveOffersFlow(),
-            analyticsDao.getAllSupplierSettingsFlow()
-        ) { p, offers, settings ->
-            if (p == null) null
+            analyticsDao.getAllSupplierSettingsFlow(),
+            getApiUsersMeFlow()
+        ) { p, offers, settings, currentUser ->
+            if (p == null || !isProductVisibleToUser(p, currentUser)) null
             else {
                 val settingsMap = settings.associateBy { it.supplierId }
                 val prodOffers = offers.filter { it.productId == p.id }
@@ -2061,8 +2119,16 @@ class PharmaRepositoryImpl(
         if (prod == null) {
             emit(emptyList())
         } else {
-            productDao.getAlternativeBrandsFlow(prod.saltComposition, prod.strength, id).collect {
-                emit(it)
+            productDao.getAlternativeBrandsFlow(prod.saltComposition, prod.strength, id).collect { candidates ->
+                emit(
+                    candidates.filter { alt ->
+                        com.example.domain.model.AccessControlPolicy.isMedicineDiscoverableByStockist(
+                            approvalStatus = com.example.domain.model.MedicineSubmissionStatus.fromString(alt.approvalStatus),
+                            publicationStatus = com.example.domain.model.CataloguePublicationStatus.fromString(alt.catalogueStatus),
+                            isActive = alt.isActive
+                        )
+                    }
+                )
             }
         }
     }

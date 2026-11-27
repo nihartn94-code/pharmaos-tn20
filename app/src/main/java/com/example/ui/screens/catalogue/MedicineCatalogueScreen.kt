@@ -88,6 +88,7 @@ import com.example.domain.model.ProductDetail
 import com.example.domain.model.StorageCondition
 import com.example.ui.components.EmptyState
 import com.example.ui.components.LoadingState
+import com.example.ui.components.StockistWorkspaceBottomBar
 import java.util.Locale
 
 import android.content.res.Configuration
@@ -569,7 +570,7 @@ private fun CatalogueTopBar(
                     ) {
                         Text(
                             text = "$activeFilterCount",
-                            fontSize = 10.sp,
+                            style = MaterialTheme.typography.labelSmall,
                             modifier = Modifier.testTag("catalogue_filter_badge")
                         )
                     }
@@ -589,7 +590,7 @@ private fun CatalogueTopBar(
                     Icon(
                         imageVector = Icons.Outlined.ShoppingCart,
                         contentDescription = "Open Basket ($cartItemsCount items)",
-                        tint = Color(0xFF0F172A),
+                        tint = MaterialTheme.colorScheme.onSurface,
                         modifier = Modifier.size(22.dp)
                     )
                 }
@@ -603,7 +604,7 @@ private fun CatalogueTopBar(
                     ) {
                         Text(
                             text = if (cartItemsCount > 99) "99+" else "$cartItemsCount",
-                            fontSize = 10.sp,
+                            style = MaterialTheme.typography.labelSmall,
                             modifier = Modifier.testTag("catalogue_basket_badge")
                         )
                     }
@@ -785,8 +786,8 @@ fun CatalogueProductCard(
                     ) {
                         Text(
                             text = marginText,
+                            style = MaterialTheme.typography.labelSmall,
                             color = Color(0xFF0284C7),
-                            fontSize = 10.5.sp,
                             fontWeight = FontWeight.Bold
                         )
                     }
@@ -798,8 +799,7 @@ fun CatalogueProductCard(
                 Text(
                     text = "${product.manufacturerName} • ${product.packSize}",
                     style = MaterialTheme.typography.bodySmall,
-                    color = Color(0xFF475569),
-                    fontSize = 11.5.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
@@ -807,10 +807,9 @@ fun CatalogueProductCard(
                 // Strength & Dosage Form
                 Text(
                     text = "${product.strength} • ${product.dosageForm.displayName}",
-                    style = MaterialTheme.typography.bodySmall,
+                    style = MaterialTheme.typography.labelSmall,
                     color = Color(0xFF0284C7),
                     fontWeight = FontWeight.Medium,
-                    fontSize = 11.sp,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
@@ -819,8 +818,7 @@ fun CatalogueProductCard(
                 Text(
                     text = product.saltComposition,
                     style = MaterialTheme.typography.bodySmall,
-                    color = Color(0xFF94A3B8),
-                    fontSize = 10.5.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
@@ -1247,108 +1245,24 @@ private fun CatalogueBottomBar(
     onNavigateToProfile: () -> Unit,
     onNavigateToOcr: () -> Unit
 ) {
-    Surface(
-        color = Color.White,
-        shadowElevation = 8.dp
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(vertical = 6.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceAround
-        ) {
-            // Home Tab
-            BottomNavItem(
-                icon = { Icon(Icons.Outlined.Home, contentDescription = "Home", modifier = Modifier.size(24.dp)) },
-                label = "Home",
-                isSelected = false,
-                onClick = onNavigateToDashboard,
-                testTag = "catalogue_nav_home"
-            )
-
-            // Explore Tab (ACTIVE)
-            BottomNavItem(
-                icon = { Icon(Icons.Default.Search, contentDescription = "Explore", modifier = Modifier.size(24.dp)) },
-                label = "Explore",
-                isSelected = true,
-                onClick = {},
-                testTag = "catalogue_nav_explore"
-            )
-
-            // Center Elevated Scan FAB
-            Box(
-                modifier = Modifier
-                    .size(54.dp)
-                    .offset(y = (-10).dp)
-                    .shadow(elevation = 8.dp, shape = CircleShape)
-                    .clip(CircleShape)
-                    .background(
-                        Brush.linearGradient(
-                            listOf(Color(0xFF1D64EC), Color(0xFF0284C7))
-                        )
-                    )
-                    .clickable { onNavigateToOcr() }
-                    .testTag("catalogue_center_scan_fab"),
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(
-                    imageVector = Icons.Outlined.QrCodeScanner,
-                    contentDescription = "Scanner",
-                    tint = Color.White,
-                    modifier = Modifier.size(26.dp)
-                )
+    StockistWorkspaceBottomBar(
+        selectedTab = "explore",
+        onSelectTab = { tab ->
+            when (tab) {
+                "home" -> onNavigateToDashboard()
+                "explore" -> { /* Already on explore */ }
+                "scan" -> onNavigateToOcr()
+                "orders" -> onNavigateToOrders()
+                "profile" -> onNavigateToProfile()
             }
-
-            // Orders Tab
-            BottomNavItem(
-                icon = { Icon(Icons.Outlined.Inventory2, contentDescription = "Orders", modifier = Modifier.size(24.dp)) },
-                label = "Orders",
-                isSelected = false,
-                onClick = onNavigateToOrders,
-                testTag = "catalogue_nav_orders"
-            )
-
-            // Profile Tab
-            BottomNavItem(
-                icon = { Icon(Icons.Outlined.Person, contentDescription = "Profile", modifier = Modifier.size(24.dp)) },
-                label = "Profile",
-                isSelected = false,
-                onClick = onNavigateToProfile,
-                testTag = "catalogue_nav_profile"
-            )
-        }
-    }
-}
-
-@Composable
-private fun BottomNavItem(
-    icon: @Composable () -> Unit,
-    label: String,
-    isSelected: Boolean,
-    onClick: () -> Unit,
-    testTag: String
-) {
-    Column(
-        modifier = Modifier
-            .clickable { onClick() }
-            .padding(horizontal = 8.dp, vertical = 4.dp)
-            .testTag(testTag),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center
-    ) {
-        val tint = if (isSelected) Color(0xFF1D64EC) else Color(0xFF94A3B8)
-        Surface(color = Color.Transparent, contentColor = tint) {
-            icon()
-        }
-        Spacer(modifier = Modifier.height(2.dp))
-        Text(
-            text = label,
-            fontSize = 11.sp,
-            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-            color = tint
-        )
-    }
+        },
+        homeTestTag = "catalogue_nav_home",
+        exploreTestTag = "catalogue_nav_explore",
+        scanTestTag = "catalogue_center_scan_fab",
+        ordersTestTag = "catalogue_nav_orders",
+        profileTestTag = "catalogue_nav_profile",
+        barTestTag = "stockist_catalogue_bottom_nav"
+    )
 }
 
 @OptIn(ExperimentalMaterial3Api::class)

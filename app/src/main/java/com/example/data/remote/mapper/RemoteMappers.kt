@@ -46,24 +46,46 @@ import com.example.domain.model.TrustScoreBreakdown
 import com.example.domain.model.UserRole
 import com.example.domain.repository.DashboardKpis
 
-fun ProductDto.toEntity(): ProductEntity = ProductEntity(
-    id = id,
-    name = name,
-    brand = brand,
-    saltComposition = saltComposition,
-    strength = strength,
-    dosageForm = dosageForm,
-    therapeuticCategory = therapeuticCategory,
-    manufacturerName = manufacturerName,
-    packSize = packSize,
-    hsnCode = hsnCode,
-    gstRatePercent = gstRatePercent,
-    storageCondition = storageCondition,
-    isRx = isRx,
-    isActive = isActive,
-    createdBy = createdBy,
-    createdAtEpochMillis = createdAtEpochMillis
-)
+fun ProductDto.toEntity(isProductionMode: Boolean = true): ProductEntity {
+    val parsedApproval = com.example.domain.model.MedicineSubmissionStatus.fromString(approvalStatus)
+    val parsedCatalogue = com.example.domain.model.CataloguePublicationStatus.fromString(catalogueStatus)
+    val effectiveIsActive = if (isProductionMode) {
+        (commerciallyAvailable ?: isActive) &&
+            parsedApproval == com.example.domain.model.MedicineSubmissionStatus.APPROVED &&
+            parsedCatalogue == com.example.domain.model.CataloguePublicationStatus.ACTIVE
+    } else {
+        commerciallyAvailable ?: isActive
+    }
+    return ProductEntity(
+        id = id,
+        name = name,
+        brand = brand,
+        saltComposition = saltComposition,
+        strength = strength,
+        dosageForm = dosageForm,
+        therapeuticCategory = therapeuticCategory,
+        manufacturerName = manufacturerName,
+        packSize = packSize,
+        hsnCode = hsnCode,
+        gstRatePercent = gstRatePercent,
+        storageCondition = storageCondition,
+        isRx = isRx,
+        isActive = effectiveIsActive,
+        createdBy = createdBy,
+        createdAtEpochMillis = createdAtEpochMillis,
+        organizationId = organizationId?.takeIf { it > 0L } ?: 0L,
+        approvalStatus = parsedApproval.name,
+        catalogueStatus = parsedCatalogue.name,
+        genericName = genericName.orEmpty(),
+        routeOfAdministration = routeOfAdministration?.takeIf { it.isNotBlank() } ?: "Oral",
+        packagingType = packagingType?.takeIf { it.isNotBlank() } ?: "Blister Strip",
+        description = description.orEmpty(),
+        imageUrl = imageUrl,
+        skuCode = skuCode.orEmpty(),
+        mrp = mrp ?: 0.0,
+        regulatoryIdentifier = regulatoryIdentifier
+    )
+}
 
 fun ProductEntity.toDto(): ProductDto = ProductDto(
     id = id,
@@ -81,7 +103,21 @@ fun ProductEntity.toDto(): ProductDto = ProductDto(
     isRx = isRx,
     isActive = isActive,
     createdBy = createdBy,
-    createdAtEpochMillis = createdAtEpochMillis
+    createdAtEpochMillis = createdAtEpochMillis,
+    organizationId = organizationId.takeIf { it > 0L },
+    approvalStatus = approvalStatus,
+    catalogueStatus = catalogueStatus,
+    commerciallyAvailable = isActive &&
+        approvalStatus == com.example.domain.model.MedicineSubmissionStatus.APPROVED.name &&
+        catalogueStatus == com.example.domain.model.CataloguePublicationStatus.ACTIVE.name,
+    genericName = genericName.takeIf { it.isNotBlank() },
+    routeOfAdministration = routeOfAdministration.takeIf { it.isNotBlank() },
+    packagingType = packagingType.takeIf { it.isNotBlank() },
+    description = description.takeIf { it.isNotBlank() },
+    imageUrl = imageUrl,
+    skuCode = skuCode.takeIf { it.isNotBlank() },
+    mrp = mrp.takeIf { it > 0.0 },
+    regulatoryIdentifier = regulatoryIdentifier
 )
 
 fun ProductInventoryDto.toEntity(): ProductInventoryEntity = ProductInventoryEntity(

@@ -71,4 +71,13 @@ interface ProductDao {
         ORDER BY name ASC
     """)
     fun searchProductsFlow(query: String): Flow<List<ProductEntity>>
+
+    @Query("SELECT * FROM products WHERE organizationId = :orgId ORDER BY name ASC")
+    suspend fun getProductsByOrganization(orgId: Long): List<ProductEntity>
+
+    @Query("DELETE FROM products WHERE organizationId = :orgId")
+    suspend fun deleteProductsByOrganization(orgId: Long)
+
+    @Query("DELETE FROM products WHERE id IN (:ids)")
+    suspend fun deleteProductsByIds(ids: List<Long>)
 }

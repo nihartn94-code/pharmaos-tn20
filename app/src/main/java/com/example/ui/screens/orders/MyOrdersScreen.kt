@@ -80,6 +80,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import android.content.res.Configuration
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.material.icons.filled.ReceiptLong
+import com.example.ui.components.StockistWorkspaceBottomBar
 import com.example.ui.theme.PharmaOSTheme
 
 @Composable
@@ -371,7 +372,7 @@ fun MyOrdersContent(
                         ) {
                             Text(
                                 text = "${uiState.activeConsignments.size} Filtered",
-                                fontSize = 11.sp,
+                                style = MaterialTheme.typography.labelSmall,
                                 fontWeight = FontWeight.Bold,
                                 color = Color(0xFF1D64EC),
                                 modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
@@ -513,7 +514,7 @@ private fun OrderPipelineTopBar(
     onBasketClick: () -> Unit = {}
 ) {
     Surface(
-        color = Color.White,
+        color = MaterialTheme.colorScheme.surface,
         shadowElevation = 0.dp
     ) {
         Row(
@@ -529,7 +530,7 @@ private fun OrderPipelineTopBar(
                 Icon(
                     imageVector = Icons.AutoMirrored.Filled.ArrowBack,
                     contentDescription = "Back",
-                    tint = Color(0xFF0F172A),
+                    tint = MaterialTheme.colorScheme.onSurface,
                     modifier = Modifier.size(22.dp)
                 )
             }
@@ -572,23 +573,25 @@ private fun OrderPipelineTopBar(
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(
                             text = "Pharma",
-                            fontSize = 18.sp,
+                            style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Black,
-                            color = Color(0xFF0F172A)
+                            color = MaterialTheme.colorScheme.onSurface
                         )
                         Text(
                             text = "OS",
-                            fontSize = 18.sp,
+                            style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Black,
                             color = Color(0xFF1E6FFE)
                         )
                     }
                     Text(
                         text = "CONNECT • TRADE • GROW",
-                        fontSize = 7.5.sp,
+                        style = MaterialTheme.typography.labelSmall,
                         fontWeight = FontWeight.Bold,
-                        color = Color(0xFF64748B),
-                        letterSpacing = 1.1.sp
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        letterSpacing = 0.6.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
                 }
             }
@@ -610,13 +613,13 @@ private fun OrderPipelineTopBar(
                         modifier = Modifier
                             .size(40.dp)
                             .clip(CircleShape)
-                            .background(Color(0xFFF1F5F9)),
+                            .background(MaterialTheme.colorScheme.surfaceVariant),
                         contentAlignment = Alignment.Center
                     ) {
                         Icon(
                             imageVector = Icons.Outlined.ShoppingCart,
                             contentDescription = "Open Basket ($cartItemCount items)",
-                            tint = Color(0xFF0F172A),
+                            tint = MaterialTheme.colorScheme.onSurface,
                             modifier = Modifier.size(20.dp)
                         )
                     }
@@ -631,7 +634,7 @@ private fun OrderPipelineTopBar(
                     ) {
                         Text(
                             text = if (cartItemCount > 99) "99+" else "$cartItemCount",
-                            fontSize = 10.sp,
+                            style = MaterialTheme.typography.labelSmall,
                             modifier = Modifier.testTag("orders_basket_badge")
                         )
                     }
@@ -847,15 +850,15 @@ private fun ExecutiveSummarySection(
         ) {
             Text(
                 text = "EXECUTIVE SUMMARY",
-                fontSize = 11.sp,
+                style = MaterialTheme.typography.labelSmall,
                 fontWeight = FontWeight.Bold,
-                color = Color(0xFF64748B),
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
                 letterSpacing = 0.8.sp
             )
             Text(
                 text = "Updated 2m ago",
-                fontSize = 11.sp,
-                color = Color(0xFF94A3B8)
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
 
@@ -936,10 +939,13 @@ private fun ExecutiveKpiCard(
             ) {
                 Text(
                     text = title,
-                    fontSize = 10.sp,
+                    style = MaterialTheme.typography.labelSmall,
                     fontWeight = FontWeight.Bold,
-                    color = Color(0xFF64748B),
-                    letterSpacing = 0.5.sp
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    letterSpacing = 0.4.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f)
                 )
                 Icon(
                     imageVector = icon,
@@ -954,16 +960,16 @@ private fun ExecutiveKpiCard(
             Row(verticalAlignment = Alignment.Bottom) {
                 Text(
                     text = value,
-                    fontSize = 24.sp,
+                    style = MaterialTheme.typography.headlineSmall,
                     fontWeight = FontWeight.Bold,
-                    color = Color(0xFF0F172A)
+                    color = MaterialTheme.colorScheme.onSurface
                 )
                 if (valueSuffix.isNotEmpty()) {
                     Text(
                         text = valueSuffix,
-                        fontSize = 13.sp,
+                        style = MaterialTheme.typography.labelMedium,
                         fontWeight = FontWeight.SemiBold,
-                        color = Color(0xFF64748B),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(bottom = 3.dp, start = 2.dp)
                     )
                 }
@@ -973,7 +979,7 @@ private fun ExecutiveKpiCard(
 
             Text(
                 text = trendText,
-                fontSize = 11.sp,
+                style = MaterialTheme.typography.labelSmall,
                 fontWeight = FontWeight.Medium,
                 color = trendColor
             )
@@ -1101,7 +1107,7 @@ private fun PipelineOrderCard(
                 ) {
                     Text(
                         text = item.status.displayName,
-                        fontSize = 11.sp,
+                        style = MaterialTheme.typography.labelSmall,
                         fontWeight = FontWeight.Bold,
                         color = Color(item.status.textHex),
                         modifier = Modifier.padding(horizontal = 9.dp, vertical = 4.dp)
@@ -1119,13 +1125,14 @@ private fun PipelineOrderCard(
             ) {
                 Text(
                     text = item.stageName,
-                    fontSize = 11.5.sp,
+                    style = MaterialTheme.typography.bodySmall,
                     fontWeight = FontWeight.Medium,
-                    color = Color(0xFF334155)
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.weight(1f)
                 )
                 Text(
                     text = "${item.progressPercent}%",
-                    fontSize = 11.5.sp,
+                    style = MaterialTheme.typography.labelSmall,
                     fontWeight = FontWeight.Bold,
                     color = Color(0xFF1D64EC)
                 )
@@ -1233,14 +1240,14 @@ private fun ColdChainFleetStatusCard() {
             Column(modifier = Modifier.weight(1f)) {
                 Text(
                     text = "Refrigerated Fleet Active",
-                    fontSize = 13.5.sp,
+                    style = MaterialTheme.typography.titleSmall,
                     fontWeight = FontWeight.Bold,
-                    color = Color(0xFF0F172A)
+                    color = MaterialTheme.colorScheme.onSurface
                 )
                 Text(
                     text = "Fleet avg 5.2°C • 7/7 vans in range",
-                    fontSize = 11.sp,
-                    color = Color(0xFF64748B)
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
 
@@ -1261,7 +1268,7 @@ private fun ColdChainFleetStatusCard() {
                     Spacer(modifier = Modifier.width(4.dp))
                     Text(
                         text = "Validated",
-                        fontSize = 11.sp,
+                        style = MaterialTheme.typography.labelSmall,
                         fontWeight = FontWeight.Bold,
                         color = Color(0xFF1D64EC)
                     )
@@ -1356,12 +1363,12 @@ private fun TrackingDetailsDialog(
                     color = Color(0xFFF1F5F9),
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    Column(modifier = Modifier.padding(10.dp)) {
-                        Text("Milestones:", fontWeight = FontWeight.Bold, fontSize = 11.5.sp)
-                        Text("✓ Warehouse Dispatch: Dispatched on schedule", fontSize = 11.sp, color = Color(0xFF15803D))
-                        Text("✓ Sorting Hub 1: Passed scan verification", fontSize = 11.sp, color = Color(0xFF15803D))
-                        Text("✓ Transit Hub 2: Passed with GPS temperature 4.2°C", fontSize = 11.sp, color = Color(0xFF15803D))
-                        Text("• Delivery Hub: Out for local fulfillment tomorrow", fontSize = 11.sp, color = Color(0xFF1D64EC))
+                    Column(modifier = Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                        Text("Milestones:", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
+                        Text("✓ Warehouse Dispatch: Dispatched on schedule", style = MaterialTheme.typography.bodySmall, color = Color(0xFF15803D))
+                        Text("✓ Sorting Hub 1: Passed scan verification", style = MaterialTheme.typography.bodySmall, color = Color(0xFF15803D))
+                        Text("✓ Transit Hub 2: Passed with GPS temperature 4.2°C", style = MaterialTheme.typography.bodySmall, color = Color(0xFF15803D))
+                        Text("• Delivery Hub: Out for local fulfillment tomorrow", style = MaterialTheme.typography.bodySmall, color = Color(0xFF1D64EC))
                     }
                 }
             }
@@ -1412,7 +1419,7 @@ private fun QualityDossierDialog(
                 ) {
                     Text(
                         text = "✓ Digital Dossier signed by QC Head. Good Manufacturing Practice (WHO-GMP) compliance verified.",
-                        fontSize = 11.sp,
+                        style = MaterialTheme.typography.bodySmall,
                         color = Color(0xFF166534),
                         modifier = Modifier.padding(10.dp)
                     )
@@ -1480,125 +1487,16 @@ private fun OrderPipelineBottomBar(
     selectedTab: String,
     onSelectTab: (String) -> Unit
 ) {
-    Surface(
-        color = Color.White,
-        shadowElevation = 12.dp,
-        modifier = Modifier.fillMaxWidth()
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 8.dp, vertical = 6.dp),
-            horizontalArrangement = Arrangement.SpaceAround,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            // 1. Home
-            BottomNavItem(
-                label = "Home",
-                icon = Icons.Default.Home,
-                selected = selectedTab == "home",
-                testTag = "orders_nav_home",
-                onClick = { onSelectTab("home") }
-            )
-
-            // 2. Explore
-            BottomNavItem(
-                label = "Explore",
-                icon = Icons.Default.Search,
-                selected = selectedTab == "explore",
-                testTag = "orders_nav_explore",
-                onClick = { onSelectTab("explore") }
-            )
-
-            // 3. Center Scanner Floating Action Button
-            Box(
-                modifier = Modifier
-                    .offset(y = (-10).dp)
-                    .size(54.dp)
-                    .shadow(8.dp, CircleShape)
-                    .clip(CircleShape)
-                    .background(Color(0xFF1E6FFE))
-                    .clickable { onSelectTab("scan") }
-                    .testTag("orders_nav_scan"),
-                contentAlignment = Alignment.Center
-            ) {
-                Canvas(modifier = Modifier.size(26.dp)) {
-                    val w = size.width
-                    val h = size.height
-                    val cornerLen = 7.dp.toPx()
-                    val strokeW = 2.5.dp.toPx()
-
-                    // Top-Left corner
-                    drawLine(Color.White, Offset(0f, 0f), Offset(cornerLen, 0f), strokeW, StrokeCap.Round)
-                    drawLine(Color.White, Offset(0f, 0f), Offset(0f, cornerLen), strokeW, StrokeCap.Round)
-
-                    // Top-Right corner
-                    drawLine(Color.White, Offset(w, 0f), Offset(w - cornerLen, 0f), strokeW, StrokeCap.Round)
-                    drawLine(Color.White, Offset(w, 0f), Offset(w, cornerLen), strokeW, StrokeCap.Round)
-
-                    // Bottom-Left corner
-                    drawLine(Color.White, Offset(0f, h), Offset(cornerLen, h), strokeW, StrokeCap.Round)
-                    drawLine(Color.White, Offset(0f, h), Offset(0f, h - cornerLen), strokeW, StrokeCap.Round)
-
-                    // Bottom-Right corner
-                    drawLine(Color.White, Offset(w, h), Offset(w - cornerLen, h), strokeW, StrokeCap.Round)
-                    drawLine(Color.White, Offset(w, h), Offset(w, h - cornerLen), strokeW, StrokeCap.Round)
-
-                    // Center scanner laser horizontal line
-                    drawLine(Color.White, Offset(w * 0.2f, h / 2), Offset(w * 0.8f, h / 2), strokeW, StrokeCap.Round)
-                }
-            }
-
-            // 4. Orders (Active)
-            BottomNavItem(
-                label = "Orders",
-                icon = Icons.Default.Inventory2,
-                selected = selectedTab == "orders",
-                testTag = "orders_nav_orders",
-                onClick = { onSelectTab("orders") }
-            )
-
-            // 5. Profile
-            BottomNavItem(
-                label = "Profile",
-                icon = Icons.Outlined.Person,
-                selected = selectedTab == "profile",
-                testTag = "orders_nav_profile",
-                onClick = { onSelectTab("profile") }
-            )
-        }
-    }
-}
-
-@Composable
-private fun BottomNavItem(
-    label: String,
-    icon: ImageVector,
-    selected: Boolean,
-    testTag: String,
-    onClick: () -> Unit
-) {
-    Column(
-        horizontalAlignment = Alignment.CenterHorizontally,
-        modifier = Modifier
-            .clickable { onClick() }
-            .padding(horizontal = 10.dp, vertical = 4.dp)
-            .testTag(testTag)
-    ) {
-        Icon(
-            imageVector = icon,
-            contentDescription = label,
-            tint = if (selected) Color(0xFF1E6FFE) else Color(0xFF94A3B8),
-            modifier = Modifier.size(24.dp)
-        )
-        Spacer(modifier = Modifier.height(2.dp))
-        Text(
-            text = label,
-            fontSize = 10.sp,
-            fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
-            color = if (selected) Color(0xFF1E6FFE) else Color(0xFF94A3B8)
-        )
-    }
+    StockistWorkspaceBottomBar(
+        selectedTab = selectedTab,
+        onSelectTab = onSelectTab,
+        homeTestTag = "orders_nav_home",
+        exploreTestTag = "orders_nav_explore",
+        scanTestTag = "orders_nav_scan",
+        ordersTestTag = "orders_nav_orders",
+        profileTestTag = "orders_nav_profile",
+        barTestTag = "stockist_orders_bottom_nav"
+    )
 }
 
 @Preview(name = "Order Pipeline - Light Mode", showBackground = true)

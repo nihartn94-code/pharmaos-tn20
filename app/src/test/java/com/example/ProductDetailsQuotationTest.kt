@@ -98,7 +98,13 @@ class ProductDetailsQuotationTest {
             db = Room.inMemoryDatabaseBuilder(context, AppDatabase::class.java)
                 .allowMainThreadQueries()
                 .build()
-            dataStoreManager = DataStoreManager(context)
+            dataStoreManager = DataStoreManager(
+                context = context,
+                secureTokenStorage = com.example.data.local.SecureTokenStorage.createForUnitTest(
+                    context,
+                    prefsFileName = "test_product_details_tokens_${System.nanoTime()}"
+                )
+            )
             dataStoreManager.clearAuthSession()
             dataStoreManager.setOnboardingCompleted(true)
             dataStoreManager.setAuthExecutionMode(AuthExecutionMode.DEVELOPMENT_LOCAL_MODE)
@@ -850,7 +856,7 @@ class ProductDetailsQuotationTest {
                     req.method == "GET" && path == "/api/v1/products/701" -> jsonResponse(
                         req,
                         200,
-                        """{"success":true,"data":{"id":701,"name":"Remote Dolo 650","brand":"Dolo","saltComposition":"Paracetamol","strength":"650mg","dosageForm":"TABLET","therapeuticCategory":"Analgesic","manufacturerName":"Micro Labs","packSize":"15 Tabs","hsnCode":"3004","gstRatePercent":12.0,"storageCondition":"ROOM_TEMPERATURE","isRx":false,"isActive":true,"createdBy":801,"createdAtEpochMillis":1700000000000}}"""
+                        """{"success":true,"data":{"id":701,"name":"Remote Dolo 650","brand":"Dolo","saltComposition":"Paracetamol","strength":"650mg","dosageForm":"TABLET","therapeuticCategory":"Analgesic","manufacturerName":"Micro Labs","packSize":"15 Tabs","hsnCode":"3004","gstRatePercent":12.0,"storageCondition":"ROOM_TEMPERATURE","isRx":false,"isActive":true,"createdBy":801,"organizationId":801,"approvalStatus":"APPROVED","catalogueStatus":"ACTIVE","createdAtEpochMillis":1700000000000}}"""
                     )
                     req.method == "GET" && path == "/api/v1/products/701/offers" -> jsonResponse(
                         req,
@@ -860,7 +866,7 @@ class ProductDetailsQuotationTest {
                     req.method == "GET" && path == "/api/v1/products/701/alternatives" -> jsonResponse(
                         req,
                         200,
-                        """{"success":true,"data":[{"id":702,"name":"Calpol 650","brand":"Calpol","saltComposition":"Paracetamol","strength":"650mg","dosageForm":"TABLET","therapeuticCategory":"Analgesic","manufacturerName":"GSK","packSize":"15 Tabs","hsnCode":"3004","gstRatePercent":12.0,"storageCondition":"ROOM_TEMPERATURE","isRx":false,"isActive":true,"createdBy":801,"createdAtEpochMillis":1700000000000}]}"""
+                        """{"success":true,"data":[{"id":702,"name":"Calpol 650","brand":"Calpol","saltComposition":"Paracetamol","strength":"650mg","dosageForm":"TABLET","therapeuticCategory":"Analgesic","manufacturerName":"GSK","packSize":"15 Tabs","hsnCode":"3004","gstRatePercent":12.0,"storageCondition":"ROOM_TEMPERATURE","isRx":false,"isActive":true,"createdBy":801,"organizationId":801,"approvalStatus":"APPROVED","catalogueStatus":"ACTIVE","createdAtEpochMillis":1700000000000}]}"""
                     )
                     req.method == "GET" && path == "/api/v1/products/702/offers" -> jsonResponse(
                         req,

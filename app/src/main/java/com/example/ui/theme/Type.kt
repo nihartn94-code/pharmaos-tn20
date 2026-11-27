@@ -9,15 +9,17 @@ import androidx.compose.ui.unit.sp
 import com.example.R
 
 /**
- * Bundled clinical-grade Plus Jakarta Sans font family installed locally in res/font/.
- * All typography styles use scalable sp units and respect Android system font scaling.
+ * Bundled clinical-grade Plus Jakarta Sans font family installed locally in
+ * `app/src/main/res/font/plus_jakarta_sans.ttf` (licensed under SIL OFL 1.1;
+ * see `LICENSES/PLUS_JAKARTA_SANS_OFL.txt`).
+ *
+ * Registering the single bundled static Regular (400) TTF with `FontWeight.Normal`
+ * lets Android's font engine synthesize distinct Bold/SemiBold/ExtraBold weights
+ * rather than clamping heavier weights back to the unmodified Regular face.
+ * All typography styles use scalable `sp` units and respect system font scaling.
  */
 val PlusJakartaSansFontFamily = FontFamily(
-    Font(resId = R.font.plus_jakarta_sans, weight = FontWeight.Normal),
-    Font(resId = R.font.plus_jakarta_sans, weight = FontWeight.Medium),
-    Font(resId = R.font.plus_jakarta_sans, weight = FontWeight.SemiBold),
-    Font(resId = R.font.plus_jakarta_sans, weight = FontWeight.Bold),
-    Font(resId = R.font.plus_jakarta_sans, weight = FontWeight.ExtraBold)
+    Font(resId = R.font.plus_jakarta_sans, weight = FontWeight.Normal)
 )
 
 /**

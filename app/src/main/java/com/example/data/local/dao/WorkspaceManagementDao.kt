@@ -194,4 +194,133 @@ interface WorkspaceManagementDao {
 
     @Query("DELETE FROM medicine_announcements WHERE status = 'PUBLISHED'")
     suspend fun deletePublishedAnnouncements()
+
+    // --- Complete Private Local Session Cache Isolation (PRODUCTION_BACKEND_HTTP logout / account switch) ---
+    @Query("DELETE FROM medicine_submissions")
+    suspend fun clearAllMedicineSubmissions()
+
+    @Query("DELETE FROM approval_audit_logs")
+    suspend fun clearAllApprovalAuditLogs()
+
+    @Query("DELETE FROM organization_members")
+    suspend fun clearAllOrganizationMembers()
+
+    @Query("DELETE FROM organizations")
+    suspend fun clearAllOrganizations()
+
+    @Query("DELETE FROM master_data_entries")
+    suspend fun clearAllMasterData()
+
+    @Query("DELETE FROM offer_banners")
+    suspend fun clearAllOfferBanners()
+
+    @Query("DELETE FROM promotional_campaigns")
+    suspend fun clearAllPromotionalCampaigns()
+
+    @Query("DELETE FROM medicine_announcements")
+    suspend fun clearAllMedicineAnnouncements()
+
+    @Query("DELETE FROM stockist_purchased_inventory")
+    suspend fun clearAllStockistPurchasedInventory()
+
+    @Query("DELETE FROM basket_items")
+    suspend fun clearAllBasketItems()
+
+    @Query("DELETE FROM baskets")
+    suspend fun clearAllBaskets()
+
+    @Query("DELETE FROM order_items")
+    suspend fun clearAllOrderItems()
+
+    @Query("DELETE FROM order_status_history")
+    suspend fun clearAllOrderStatusHistory()
+
+    @Query("DELETE FROM proof_of_delivery")
+    suspend fun clearAllProofOfDelivery()
+
+    @Query("DELETE FROM orders")
+    suspend fun clearAllOrders()
+
+    @Query("DELETE FROM notifications")
+    suspend fun clearAllNotifications()
+
+    @Query("DELETE FROM user_addresses")
+    suspend fun clearAllUserAddresses()
+
+    @Query("DELETE FROM compliance_verifications")
+    suspend fun clearAllComplianceVerifications()
+
+    @Query("DELETE FROM credit_ledger")
+    suspend fun clearAllCreditLedger()
+
+    @Query("DELETE FROM credit_notes")
+    suspend fun clearAllCreditNotes()
+
+    @Query("DELETE FROM returns")
+    suspend fun clearAllReturns()
+
+    @Query("DELETE FROM batches")
+    suspend fun clearAllBatches()
+
+    @Query("DELETE FROM stock_records")
+    suspend fun clearAllStockRecords()
+
+    @Query("DELETE FROM product_inventory")
+    suspend fun clearAllProductInventory()
+
+    @Query("DELETE FROM supplier_offers")
+    suspend fun clearAllSupplierOffers()
+
+    @Query("DELETE FROM supplier_settings")
+    suspend fun clearAllSupplierSettings()
+
+    @Query("DELETE FROM supplier_performance")
+    suspend fun clearAllSupplierPerformance()
+
+    @Query("DELETE FROM recalls")
+    suspend fun clearAllRecalls()
+
+    @Query("DELETE FROM shortage_risks")
+    suspend fun clearAllShortageRisks()
+
+    @Query("DELETE FROM products")
+    suspend fun clearAllCachedProducts()
+
+    @Query("DELETE FROM users")
+    suspend fun clearAllCachedUsers()
+
+    @androidx.room.Transaction
+    suspend fun clearAllPrivateSessionCaches() {
+        clearAllApprovalAuditLogs()
+        clearAllMedicineSubmissions()
+        clearAllOrganizationMembers()
+        clearAllOrganizations()
+        clearAllMasterData()
+        clearAllOfferBanners()
+        clearAllPromotionalCampaigns()
+        clearAllMedicineAnnouncements()
+        clearAllStockistPurchasedInventory()
+        clearAllBasketItems()
+        clearAllBaskets()
+        clearAllOrderItems()
+        clearAllOrderStatusHistory()
+        clearAllProofOfDelivery()
+        clearAllOrders()
+        clearAllNotifications()
+        clearAllUserAddresses()
+        clearAllComplianceVerifications()
+        clearAllCreditLedger()
+        clearAllCreditNotes()
+        clearAllReturns()
+        clearAllBatches()
+        clearAllStockRecords()
+        clearAllProductInventory()
+        clearAllSupplierOffers()
+        clearAllSupplierSettings()
+        clearAllSupplierPerformance()
+        clearAllRecalls()
+        clearAllShortageRisks()
+        clearAllCachedProducts()
+        clearAllCachedUsers()
+    }
 }

@@ -93,6 +93,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -280,9 +281,9 @@ fun RegisterScreenContent(
                     }
                     Text(
                         text = "CONNECT • TRADE • GROW",
-                        fontSize = 9.sp,
+                        style = MaterialTheme.typography.labelSmall,
                         fontWeight = FontWeight.SemiBold,
-                        letterSpacing = 1.2.sp,
+                        letterSpacing = 1.sp,
                         color = Color(0xFF64748B)
                     )
                 }
@@ -329,7 +330,7 @@ fun RegisterScreenContent(
                         ) {
                             Text(
                                 text = "🛡️ First Account: Master Administrator Setup",
-                                fontSize = 11.sp,
+                                style = MaterialTheme.typography.labelSmall,
                                 fontWeight = FontWeight.SemiBold,
                                 color = Color(0xFF0369A1),
                                 modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
@@ -1027,9 +1028,8 @@ fun RegisterScreenContent(
                 Spacer(modifier = Modifier.width(6.dp))
                 Text(
                     text = "Your data is safe with us. We follow industry-standard security practices.",
-                    fontSize = 11.sp,
+                    style = MaterialTheme.typography.bodySmall,
                     color = Color(0xFF64748B),
-                    lineHeight = 15.sp,
                     textAlign = TextAlign.Center
                 )
             }
@@ -1336,9 +1336,8 @@ fun RegisterScreenContent(
                     // Privacy notice
                     Text(
                         text = "By signing up with Google, you agree to the PharmaOS Terms of Service and Privacy Policy.",
-                        fontSize = 10.5.sp,
+                        style = MaterialTheme.typography.bodySmall,
                         color = Color(0xFF94A3B8),
-                        lineHeight = 14.sp,
                         textAlign = TextAlign.Center,
                         modifier = Modifier.fillMaxWidth()
                     )
@@ -1374,20 +1373,22 @@ private fun B2BInputFieldCard(
             ) {
                 Text(
                     text = label,
-                    fontSize = 10.5.sp,
+                    style = MaterialTheme.typography.labelSmall,
                     fontWeight = FontWeight.Bold,
-                    letterSpacing = 0.6.sp,
-                    color = Color(0xFF64748B)
+                    letterSpacing = 0.5.sp,
+                    color = Color(0xFF64748B),
+                    modifier = Modifier.weight(1f, fill = false)
                 )
 
                 if (badge != null) {
+                    Spacer(modifier = Modifier.width(8.dp))
                     Surface(
                         shape = RoundedCornerShape(6.dp),
                         color = Color(0xFFE0F7FA)
                     ) {
                         Text(
                             text = badge,
-                            fontSize = 10.sp,
+                            style = MaterialTheme.typography.labelSmall,
                             fontWeight = FontWeight.Bold,
                             color = Color(0xFF00838F),
                             modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
@@ -1445,10 +1446,12 @@ private fun RegisterRoleTabItem(
             Spacer(modifier = Modifier.height(4.dp))
             Text(
                 text = title,
-                fontSize = 11.5.sp,
+                style = MaterialTheme.typography.labelSmall,
                 fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
                 color = contentColor,
-                maxLines = 1
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                textAlign = TextAlign.Center
             )
         }
     }

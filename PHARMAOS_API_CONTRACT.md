@@ -272,10 +272,11 @@ The Android app centralizes backend routing in `ApiConfig` (`app/src/main/java/c
 > 4. **Rejection requires a mandatory non-blank `rejectionReason`** (returns `400 Bad Request` otherwise).
 > 5. **Stockist Discovery Filter:** `GET /api/v1/products` for Stockists **MUST** enforce `approval_status = 'APPROVED' AND catalogue_status = 'ACTIVE' AND is_active = TRUE`.
 > 6. **No Hard Delete:** Catalogue entries use soft status transitions (`ACTIVE`, `INACTIVE`, `ARCHIVED`) to preserve historical orders and audit trails.
+> 7. **Authoritative `ProductDto` Ownership & Governance Fields `[PROPOSED]`:** Every `ProductDto` returned by `/api/v1/company/catalogue` and `/api/v1/products` MUST explicitly include `organizationId` (positive `Long`), `approvalStatus` (`DRAFT` | `PENDING_APPROVAL` | `APPROVED` | `REJECTED` | `WITHDRAWN`), `catalogueStatus` (`ACTIVE` | `INACTIVE` | `ARCHIVED`), `commerciallyAvailable` (`Boolean`), `updatedAtEpochMillis` (`Long`), and `version` (`Long`). The Android client fails closed (`UNKNOWN`) when these fields are missing and NEVER auto-assigns the caller's `organizationId` or defaults omitted statuses to `APPROVED`/`ACTIVE`.
 
 | Method | Path | Required Permission | Headers / Query | Request / Response `data` |
 |---|---|---|---|---|
-| `GET` | `/api/v1/company/catalogue` | `MEDICINE_CATALOGUE_MANAGE` (org-scoped) | `?query=&status=` | `List<ProductDto>` |
+| `GET` | `/api/v1/company/catalogue` | `MEDICINE_CATALOGUE_MANAGE` (org-scoped) | `?query=&status=` | `List<ProductDto>` (with authoritative `organizationId`, `approvalStatus`, `catalogueStatus`) |
 | `PUT` | `/api/v1/company/catalogue/{productId}` | `MEDICINE_EDIT` + org ownership | `Idempotency-Key` | `ProductDto` → `ProductDto` |
 | `PATCH` | `/api/v1/company/catalogue/{productId}/publication-status` | `MEDICINE_CATALOGUE_MANAGE` + org ownership | `Idempotency-Key` | `UpdateCatalogueStatusRequestDto` (`ACTIVE`/`INACTIVE`/`ARCHIVED`) → `Unit` |
 | `GET` | `/api/v1/medicine-submissions` | `MEDICINE_SUBMIT` or `MEDICINE_APPROVE` (org-scoped) | `?status=` | `List<MedicineSubmissionDto>` |

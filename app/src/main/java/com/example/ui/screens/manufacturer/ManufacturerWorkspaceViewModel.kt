@@ -19,6 +19,7 @@ import com.example.domain.model.MedicineSubmission
 import com.example.domain.model.OfferBanner
 import com.example.domain.model.PharmaPermission
 import com.example.domain.model.PromotionalCampaign
+import com.example.domain.model.WorkspaceSyncState
 import com.example.domain.model.WorkspaceType
 import com.example.domain.repository.PharmaRepository
 import com.example.domain.repository.WorkspaceRepository
@@ -52,6 +53,7 @@ data class ManufacturerWorkspaceUiState(
     val duplicateCandidates: List<MedicineDuplicateCandidate> = emptyList(),
     val unreadNotificationsCount: Int = 0,
     val currentTimeMillis: Long = System.currentTimeMillis(),
+    val syncState: WorkspaceSyncState = WorkspaceSyncState(),
     val isSaving: Boolean = false,
     val statusMessage: String? = null,
     val errorMessage: String? = null
@@ -101,8 +103,9 @@ class ManufacturerWorkspaceViewModel(
     val uiState: StateFlow<ManufacturerWorkspaceUiState> = combine(
         primaryDataFlow,
         secondaryDataFlow,
-        feedbackFlow
-    ) { primary, secondary, (saving, msg, err) ->
+        feedbackFlow,
+        workspaceRepository.workspaceSyncStateFlow
+    ) { primary, secondary, (saving, msg, err), syncState ->
         val user = primary.user
         val now = secondary.nowMillis
         val refreshedSummary = primary.summary.copy(
@@ -129,6 +132,7 @@ class ManufacturerWorkspaceViewModel(
             duplicateCandidates = secondary.duplicates,
             unreadNotificationsCount = secondary.unreadCount,
             currentTimeMillis = now,
+            syncState = syncState,
             isSaving = saving,
             statusMessage = msg,
             errorMessage = err

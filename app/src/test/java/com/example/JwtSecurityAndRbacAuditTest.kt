@@ -6,11 +6,18 @@ import androidx.test.core.app.ApplicationProvider
 import com.example.data.local.AppDatabase
 import com.example.data.local.DataStoreManager
 import com.example.data.local.SecureTokenStorage
+import com.example.data.local.SecureTokenStorageException
+import com.example.data.local.entity.BasketEntity
+import com.example.data.local.entity.NotificationEntity
 import com.example.data.local.entity.OfferBannerEntity
+import com.example.data.local.entity.OrderEntity
+import com.example.data.local.entity.ProductEntity
+import com.example.data.local.entity.UserAddressEntity
 import com.example.data.local.entity.UserEntity
 import com.example.data.remote.config.AuthExecutionMode
 import com.example.data.remote.dto.UserDto
 import com.example.data.remote.interceptor.ApiLoggingInterceptor
+import com.example.data.remote.interceptor.JwtTokenAuthenticator
 import com.example.data.remote.interceptor.TokenProvider
 import com.example.data.remote.source.WorkspaceRemoteDataSource
 import com.example.data.remote.upload.MediaUploadKind
@@ -22,14 +29,19 @@ import com.example.domain.model.AccessControlPolicy
 import com.example.domain.model.AccountStatus
 import com.example.domain.model.AuthUser
 import com.example.domain.model.BannerStatus
+import com.example.domain.model.CataloguePublicationStatus
 import com.example.domain.model.MedicineSubmission
 import com.example.domain.model.MedicineSubmissionStatus
 import com.example.domain.model.OrganizationType
 import com.example.domain.model.PermissionResolutionStatus
 import com.example.domain.model.PharmaPermission
 import com.example.domain.model.RolePermissionMatrix
+import com.example.domain.model.SyncHealthStatus
 import com.example.domain.model.UserRole
 import com.example.domain.model.WorkspaceType
+import java.io.IOException
+import java.util.concurrent.atomic.AtomicLong
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -185,7 +197,7 @@ class JwtSecurityAndRbacAuditTest {
     @Test
     fun secureTokenStorageEncryptsAtRestAndReleaseDataStoreBlocksDevModeAndCleartext() = runBlocking {
         val prefsName = "test_secure_tokens_${System.nanoTime()}"
-        val storage = SecureTokenStorage(context, prefsFileName = prefsName)
+        val storage = SecureTokenStorage.createForUnitTest(context, prefsFileName = prefsName)
         val sampleAccess = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMCJ9.signature_access_12345"
         val sampleRefresh = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMCJ9.signature_refresh_67890"
 
@@ -463,7 +475,7 @@ class JwtSecurityAndRbacAuditTest {
                 .build()
         }
 
-        val storage = SecureTokenStorage(context, prefsFileName = "test_repo_tokens_${System.nanoTime()}")
+        val storage = SecureTokenStorage.createForUnitTest(context, prefsFileName = "test_repo_tokens_${System.nanoTime()}")
         val dataStore = DataStoreManager(context, secureTokenStorage = storage, allowDevModeOverrides = false)
         dataStore.setLoggedInUserId(20L)
         dataStore.setAuthTokens("valid_prod_access_jwt", "valid_prod_refresh_jwt")
@@ -551,7 +563,7 @@ class JwtSecurityAndRbacAuditTest {
 
     @Test
     fun bannerScheduleFlowReactsToTimeTransitionsForScheduledAndExpiredBanners() = runBlocking {
-        val storage = SecureTokenStorage(context, prefsFileName = "test_banner_tokens_${System.nanoTime()}")
+        val storage = SecureTokenStorage.createForUnitTest(context, prefsFileName = "test_banner_tokens_${System.nanoTime()}")
         val dataStore = DataStoreManager(context, secureTokenStorage = storage, allowDevModeOverrides = true)
         val pharmaRepo = PharmaRepositoryImpl(db = db, dataStoreManager = dataStore)
         val repo = WorkspaceRepositoryImpl(
@@ -597,5 +609,393 @@ class JwtSecurityAndRbacAuditTest {
         // After end time: expired banner auto-hides immediately
         repo.refreshBannerClock(tEnd + 5_000L)
         assertTrue(repo.getStockistActiveBannersFlow().first().isEmpty())
+    }
+
+    @Test
+    fun productionSecureTokenStorageFailsClosedWhenAndroidKeystoreIsUnavailable() {
+        val prefsName = "test_fail_closed_keystore_${System.nanoTime()}"
+        val productionStorage = SecureTokenStorage(context, prefsFileName = prefsName)
+        val err = runCatching {
+            productionStorage.saveTokens("jwt_access", "jwt_refresh")
+        }.exceptionOrNull()
+        assertTrue(
+            "Production SecureTokenStorage must fail closed with SecureTokenStorageException when Keystore is unavailable",
+            err is SecureTokenStorageException
+        )
+        assertFalse(productionStorage.hasEncryptedTokens())
+
+        // Corrupt ciphertext in test storage is scrubbed and fails closed to null
+        val testPrefs = "test_corrupt_tokens_${System.nanoTime()}"
+        val testStorage = SecureTokenStorage.createForUnitTest(context, prefsFileName = testPrefs)
+        context.getSharedPreferences(testPrefs, Context.MODE_PRIVATE)
+            .edit()
+            .putString("enc_access_token_v1", "not-valid-ciphertext")
+            .commit()
+        assertNull(testStorage.getAccessToken())
+        assertFalse(testStorage.hasEncryptedTokens())
+    }
+
+    @Test
+    fun failClosedStatusRoleOrganizationAndPermissionParsingRejectsMalformedValues() {
+        assertEquals(MedicineSubmissionStatus.UNKNOWN, MedicineSubmissionStatus.fromString(null))
+        assertEquals(MedicineSubmissionStatus.UNKNOWN, MedicineSubmissionStatus.fromString("GARBAGE_STATUS"))
+        assertEquals(CataloguePublicationStatus.UNKNOWN, CataloguePublicationStatus.fromString(null))
+        assertEquals(CataloguePublicationStatus.UNKNOWN, CataloguePublicationStatus.fromString("BROKEN"))
+        assertEquals(AccountStatus.UNKNOWN, AccountStatus.fromString(null))
+        assertEquals(AccountStatus.UNKNOWN, AccountStatus.fromString("INVALID_ACCOUNT_STATE"))
+        assertNull(UserRole.parseStrict(null))
+        assertNull(UserRole.parseStrict("SUPER_HACKER"))
+        assertEquals(UserRole.PHARMA_COMPANY, UserRole.parseStrict("PHARMA_COMPANY"))
+        assertEquals(
+            OrganizationType.UNKNOWN,
+            OrganizationType.fromString(null, fallbackRole = UserRole.STOCKIST, isProductionMode = true)
+        )
+        assertEquals(
+            OrganizationType.UNKNOWN,
+            OrganizationType.fromString("UNRECOGNIZED_ORG", fallbackRole = UserRole.MANUFACTURER, isProductionMode = true)
+        )
+
+        // Mixed valid + unknown permission tokens preserve valid permissions while recording unknown tokens (never defaulting)
+        val mixedState = RolePermissionMatrix.resolvePermissionState(
+            rawPermissions = listOf("PRODUCT_VIEW", "MALFORMED_PERMISSION_TOKEN"),
+            roles = setOf(UserRole.STOCKIST),
+            isProductionMode = true
+        )
+        assertEquals(PermissionResolutionStatus.CONFIRMED, mixedState.status)
+        assertEquals(setOf(PharmaPermission.PRODUCT_VIEW), mixedState.permissions)
+        assertEquals(setOf("MALFORMED_PERMISSION_TOKEN"), mixedState.unrecognizedTokens)
+
+        // Exclusively unknown permission tokens fail closed as INVALID with empty permissions
+        val onlyUnknownState = RolePermissionMatrix.resolvePermissionState(
+            rawPermissions = listOf("MALFORMED_PERMISSION_TOKEN"),
+            roles = setOf(UserRole.STOCKIST),
+            isProductionMode = true
+        )
+        assertEquals(PermissionResolutionStatus.INVALID, onlyUnknownState.status)
+        assertTrue(onlyUnknownState.permissions.isEmpty())
+        assertEquals(setOf("MALFORMED_PERMISSION_TOKEN"), onlyUnknownState.unrecognizedTokens)
+
+        // Unknown approval/catalogue statuses must NEVER be discoverable by Stockists
+        assertFalse(
+            AccessControlPolicy.isMedicineDiscoverableByStockist(
+                MedicineSubmissionStatus.UNKNOWN,
+                CataloguePublicationStatus.ACTIVE,
+                true
+            )
+        )
+        assertFalse(
+            AccessControlPolicy.isMedicineDiscoverableByStockist(
+                MedicineSubmissionStatus.APPROVED,
+                CataloguePublicationStatus.UNKNOWN,
+                true
+            )
+        )
+    }
+
+    @Test
+    fun jwtAuthenticatorPreservesSessionOnTransientErrorsExpiresOnAuthRejectionAndBlocksStaleRefreshAfterLogout() {
+        val generation = AtomicLong(1L)
+        val tokenStore = object : TokenProvider {
+            @Volatile var access: String? = "expired_access"
+            @Volatile var refresh: String? = "valid_refresh"
+            override fun getAccessToken(): String? = access
+            override fun getRefreshToken(): String? = refresh
+            override fun getSessionGeneration(): Long = generation.get()
+            override fun updateTokens(accessToken: String?, refreshToken: String?) {
+                access = accessToken
+                if (!refreshToken.isNullOrBlank()) refresh = refreshToken
+            }
+            override fun clearTokens() {
+                access = null
+                refresh = null
+                generation.incrementAndGet()
+            }
+        }
+
+        val moshi = com.squareup.moshi.Moshi.Builder()
+            .addLast(com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory())
+            .build()
+        val expiredEvents = CopyOnWriteArrayList<String>()
+
+        fun make401(token: String = "expired_access"): Response {
+            val req = Request.Builder()
+                .url("https://api.pharmaos.example/api/v1/orders")
+                .header("Authorization", "Bearer $token")
+                .build()
+            return Response.Builder()
+                .request(req).protocol(Protocol.HTTP_1_1).code(401).message("Unauthorized")
+                .body("""{"message":"Expired"}""".toResponseBody("application/json".toMediaType()))
+                .build()
+        }
+
+        // 1. Transient IOException preserves tokens and does NOT expire session
+        val ioAuthenticator = JwtTokenAuthenticator(
+            tokenProvider = tokenStore,
+            refreshHttpClient = okhttp3.OkHttpClient.Builder()
+                .addInterceptor(Interceptor { throw IOException("Socket timeout") })
+                .build(),
+            moshi = moshi,
+            baseUrlProvider = { "https://api.pharmaos.example" },
+            onSessionExpired = { expiredEvents.add(it) }
+        )
+        assertNull(ioAuthenticator.authenticate(null, make401()))
+        assertEquals("expired_access", tokenStore.getAccessToken())
+        assertEquals("valid_refresh", tokenStore.getRefreshToken())
+        assertTrue("Transient IOException must NOT emit sessionExpired", expiredEvents.isEmpty())
+
+        // 2. Transient HTTP 503 preserves tokens and does NOT expire session
+        val outageAuthenticator = JwtTokenAuthenticator(
+            tokenProvider = tokenStore,
+            refreshHttpClient = okhttp3.OkHttpClient.Builder()
+                .addInterceptor(Interceptor { chain ->
+                    Response.Builder()
+                        .request(chain.request()).protocol(Protocol.HTTP_1_1).code(503).message("Unavailable")
+                        .body("""{"message":"Backend restarting"}""".toResponseBody("application/json".toMediaType()))
+                        .build()
+                })
+                .build(),
+            moshi = moshi,
+            baseUrlProvider = { "https://api.pharmaos.example" },
+            onSessionExpired = { expiredEvents.add(it) }
+        )
+        assertNull(outageAuthenticator.authenticate(null, make401()))
+        assertEquals("expired_access", tokenStore.getAccessToken())
+        assertEquals("valid_refresh", tokenStore.getRefreshToken())
+        assertTrue("HTTP 503 must NOT emit sessionExpired", expiredEvents.isEmpty())
+
+        // 3. Session logout/account switch mid-refresh discards rotated tokens via sessionGeneration
+        val raceAuthenticator = JwtTokenAuthenticator(
+            tokenProvider = tokenStore,
+            refreshHttpClient = okhttp3.OkHttpClient.Builder()
+                .addInterceptor(Interceptor { chain ->
+                    // Simulate user logging out while refresh call is in flight
+                    tokenStore.clearTokens()
+                    val body = """{"success":true,"data":{"accessToken":"stale_rotated","refreshToken":"stale_ref"}}"""
+                    Response.Builder()
+                        .request(chain.request()).protocol(Protocol.HTTP_1_1).code(200).message("OK")
+                        .body(body.toResponseBody("application/json".toMediaType()))
+                        .build()
+                })
+                .build(),
+            moshi = moshi,
+            baseUrlProvider = { "https://api.pharmaos.example" },
+            onSessionExpired = { expiredEvents.add(it) }
+        )
+        assertNull(raceAuthenticator.authenticate(null, make401()))
+        assertNull("Stale in-flight refresh must NEVER restore logged-out access token", tokenStore.getAccessToken())
+        assertNull("Stale in-flight refresh must NEVER restore logged-out refresh token", tokenStore.getRefreshToken())
+        assertTrue("Intentional logout mid-refresh must NOT fire spurious sessionExpired", expiredEvents.isEmpty())
+
+        // 4. Genuine 401 refresh rejection clears tokens and fires onSessionExpired
+        tokenStore.updateTokens("expired_access_2", "revoked_refresh")
+        val revokedAuthenticator = JwtTokenAuthenticator(
+            tokenProvider = tokenStore,
+            refreshHttpClient = okhttp3.OkHttpClient.Builder()
+                .addInterceptor(Interceptor { chain ->
+                    Response.Builder()
+                        .request(chain.request()).protocol(Protocol.HTTP_1_1).code(401).message("Unauthorized")
+                        .body("""{"message":"Refresh token revoked"}""".toResponseBody("application/json".toMediaType()))
+                        .build()
+                })
+                .build(),
+            moshi = moshi,
+            baseUrlProvider = { "https://api.pharmaos.example" },
+            onSessionExpired = { expiredEvents.add(it) }
+        )
+        assertNull(revokedAuthenticator.authenticate(null, make401("expired_access_2")))
+        assertNull("401 refresh rejection must clear access token", tokenStore.getAccessToken())
+        assertNull("401 refresh rejection must clear refresh token", tokenStore.getRefreshToken())
+        assertEquals(1, expiredEvents.size)
+    }
+
+    @Test
+    fun syncActiveWorkspaceReportsPartialFailureAndSyncCompanyCatalogueValidatesOwnershipAndReconciles() = runBlocking {
+        var failMasterData = false
+        val cleanCataloguePayload = """
+            {"success":true,"data":[
+              {
+                "id":901,"name":"Valid Approved Med","brand":"CardioValid","saltComposition":"Atorvastatin",
+                "strength":"40mg","dosageForm":"Tablet","therapeuticCategory":"Cardiology",
+                "manufacturerName":"Bharat Bio-Pharma","packSize":"10 Tabs","hsnCode":"30049099",
+                "gstRatePercent":12.0,"storageCondition":"ROOM_TEMPERATURE","isRx":true,"isActive":true,
+                "createdBy":30,"organizationId":200,"approvalStatus":"APPROVED","catalogueStatus":"ACTIVE"
+              }
+            ]}
+        """.trimIndent()
+        val dirtyCataloguePayload = """
+            {"success":true,"data":[
+              {
+                "id":901,"name":"Valid Approved Med","brand":"CardioValid","saltComposition":"Atorvastatin",
+                "strength":"40mg","dosageForm":"Tablet","therapeuticCategory":"Cardiology",
+                "manufacturerName":"Bharat Bio-Pharma","packSize":"10 Tabs","hsnCode":"30049099",
+                "gstRatePercent":12.0,"storageCondition":"ROOM_TEMPERATURE","isRx":true,"isActive":true,
+                "createdBy":30,"organizationId":200,"approvalStatus":"APPROVED","catalogueStatus":"ACTIVE"
+              },
+              {
+                "id":902,"name":"Missing Org Med","brand":"NoOrg","saltComposition":"Salt",
+                "strength":"10mg","dosageForm":"Tablet","therapeuticCategory":"General",
+                "manufacturerName":"Unknown","packSize":"10 Tabs","hsnCode":"30049099",
+                "gstRatePercent":12.0,"storageCondition":"ROOM_TEMPERATURE","isRx":false,"isActive":true,
+                "createdBy":30,"approvalStatus":"APPROVED","catalogueStatus":"ACTIVE"
+              },
+              {
+                "id":903,"name":"Foreign Org Med","brand":"Foreign","saltComposition":"Salt",
+                "strength":"10mg","dosageForm":"Tablet","therapeuticCategory":"General",
+                "manufacturerName":"Other Corp","packSize":"10 Tabs","hsnCode":"30049099",
+                "gstRatePercent":12.0,"storageCondition":"ROOM_TEMPERATURE","isRx":false,"isActive":true,
+                "createdBy":99,"organizationId":999,"approvalStatus":"APPROVED","catalogueStatus":"ACTIVE"
+              },
+              {
+                "id":904,"name":"Unknown Status Med","brand":"UnknownStatus","saltComposition":"Salt",
+                "strength":"10mg","dosageForm":"Tablet","therapeuticCategory":"General",
+                "manufacturerName":"Bharat Bio-Pharma","packSize":"10 Tabs","hsnCode":"30049099",
+                "gstRatePercent":12.0,"storageCondition":"ROOM_TEMPERATURE","isRx":false,"isActive":true,
+                "createdBy":30,"organizationId":200,"approvalStatus":"GARBAGE","catalogueStatus":"ACTIVE"
+              }
+            ]}
+        """.trimIndent()
+        var cataloguePayload = cleanCataloguePayload
+
+        val mockInterceptor = Interceptor { chain ->
+            val req = chain.request()
+            val path = req.url.encodedPath
+            when {
+                path.endsWith("/api/v1/auth/context") -> {
+                    val body = """
+                        {"success":true,"data":{
+                          "user":{
+                            "id":30,"fullName":"Dr. Ananya","businessName":"Bharat Bio-Pharma",
+                            "email":"company@bharatbio.com","phone":"9876543230","address":"Hyderabad",
+                            "role":"PHARMA_COMPANY","status":"ACTIVE",
+                            "organizationId":200,"organizationType":"PHARMACEUTICAL_ORGANIZATION",
+                            "organizationName":"Bharat Bio-Pharma",
+                            "roles":["PHARMA_COMPANY"],
+                            "permissions":["PRODUCT_VIEW","MEDICINE_APPROVE","MEDICINE_REJECT","MEDICINE_CATALOGUE_MANAGE","COMPOSITION_MANAGE","DOSAGE_FORM_MANAGE","BRAND_MANAGE"]
+                          },
+                          "organization":{
+                            "id":200,"name":"Bharat Bio-Pharma","type":"PHARMACEUTICAL_ORGANIZATION","active":true
+                          },
+                          "roles":["PHARMA_COMPANY"],
+                          "permissions":["PRODUCT_VIEW","MEDICINE_APPROVE","MEDICINE_REJECT","MEDICINE_CATALOGUE_MANAGE","COMPOSITION_MANAGE","DOSAGE_FORM_MANAGE","BRAND_MANAGE"],
+                          "authorizedWorkspaces":["COMPANY"]
+                        }}
+                    """.trimIndent()
+                    Response.Builder().request(req).protocol(Protocol.HTTP_1_1).code(200).message("OK")
+                        .body(body.toResponseBody("application/json".toMediaType())).build()
+                }
+                path.endsWith("/api/v1/company/catalogue") -> {
+                    Response.Builder().request(req).protocol(Protocol.HTTP_1_1).code(200).message("OK")
+                        .body(cataloguePayload.toResponseBody("application/json".toMediaType())).build()
+                }
+                path.endsWith("/api/v1/company/master-data") && failMasterData -> {
+                    Response.Builder().request(req).protocol(Protocol.HTTP_1_1).code(500).message("Server Error")
+                        .body("""{"message":"Master data DB offline"}""".toResponseBody("application/json".toMediaType())).build()
+                }
+                else -> {
+                    Response.Builder().request(req).protocol(Protocol.HTTP_1_1).code(200).message("OK")
+                        .body("""{"success":true,"data":[]}""".toResponseBody("application/json".toMediaType())).build()
+                }
+            }
+        }
+
+        val storage = SecureTokenStorage.createForUnitTest(context, prefsFileName = "test_sync_tokens_${System.nanoTime()}")
+        val dataStore = DataStoreManager(context, secureTokenStorage = storage, allowDevModeOverrides = false)
+        dataStore.setLoggedInUserId(30L)
+        dataStore.setAuthTokens("valid_company_jwt", "valid_company_refresh")
+        dataStore.setActiveWorkspace(WorkspaceType.COMPANY)
+
+        db.userDao().insertUser(
+            UserEntity(
+                id = 30L, fullName = "Dr. Ananya", businessName = "Bharat Bio-Pharma",
+                email = "company@bharatbio.com", phone = "9876543230", gstin = null,
+                address = "Hyderabad", passwordHash = "", passwordSalt = "",
+                role = UserRole.PHARMA_COMPANY.name, status = AccountStatus.ACTIVE.name,
+                organizationId = 200L, organizationType = OrganizationType.PHARMACEUTICAL_ORGANIZATION.name,
+                organizationName = "Bharat Bio-Pharma", assignedRolesCsv = UserRole.PHARMA_COMPANY.name,
+                permissionsCsv = PharmaPermission.toCsv(RolePermissionMatrix.companyPermissions)
+            )
+        )
+        // Seed a stale product owned by org 200 that is no longer returned by backend
+        db.productDao().insertProduct(
+            ProductEntity(
+                id = 999L, name = "Stale Removed Med", brand = "Old", saltComposition = "Old",
+                strength = "5mg", dosageForm = "Tablet", therapeuticCategory = "General",
+                manufacturerName = "Bharat Bio-Pharma", packSize = "10", hsnCode = "30049099",
+                gstRatePercent = 12.0, storageCondition = "ROOM_TEMPERATURE", isRx = false,
+                isActive = true, createdBy = 30L, organizationId = 200L,
+                approvalStatus = MedicineSubmissionStatus.APPROVED.name,
+                catalogueStatus = CataloguePublicationStatus.ACTIVE.name
+            )
+        )
+
+        val networkModule = NetworkModule(
+            tokenProvider = dataStore,
+            initialBaseUrl = "https://api.pharmaos.example/",
+            extraInterceptors = listOf(mockInterceptor)
+        )
+        val pharmaRepo = PharmaRepositoryImpl(db = db, dataStoreManager = dataStore, networkModule = networkModule)
+        val repo = WorkspaceRepositoryImpl(
+            db = db,
+            dataStoreManager = dataStore,
+            pharmaRepository = pharmaRepo,
+            remoteDataSource = WorkspaceRemoteDataSource(networkModule)
+        )
+
+        // 1. Healthy sync succeeds and reconciles removed stale product 999
+        val initialSync = repo.syncActiveWorkspace()
+        assertTrue(initialSync.isSuccess)
+        val healthyState = repo.workspaceSyncStateFlow.value
+        assertEquals(SyncHealthStatus.SUCCESS, healthyState.status)
+        assertNotNull(healthyState.lastSuccessfulSyncEpochMillis)
+        assertFalse(healthyState.isStaleCache)
+        assertEquals(listOf(901L), db.productDao().getProductsByOrganization(200L).map { it.id })
+        assertNull("Removed stale product 999 must be reconciled out", db.productDao().getProductById(999L))
+
+        // 2. Dirty catalogue payload rejects missing-org, foreign-org, and unknown-status records and surfaces failure
+        cataloguePayload = dirtyCataloguePayload
+        val dirtyCatalogueResult = repo.syncCompanyCatalogue()
+        assertTrue("syncCompanyCatalogue must surface skipped invalid records rather than silent success", dirtyCatalogueResult.isFailure)
+        assertEquals(listOf(901L), db.productDao().getProductsByOrganization(200L).map { it.id })
+        assertNull("Missing-org product 902 must be rejected", db.productDao().getProductById(902L))
+        assertNull("Foreign-org product 903 must be rejected", db.productDao().getProductById(903L))
+        assertNull("Unknown-status product 904 must be rejected", db.productDao().getProductById(904L))
+
+        // 3. Partial failure when a required step fails returns Result.failure and marks stale cache + retry
+        cataloguePayload = cleanCataloguePayload
+        failMasterData = true
+        val partialSync = repo.syncActiveWorkspace()
+        assertTrue("syncActiveWorkspace must NOT silently return success when a required step fails", partialSync.isFailure)
+        val failedState = repo.workspaceSyncStateFlow.value
+        assertEquals(SyncHealthStatus.PARTIAL_SUCCESS, failedState.status)
+        assertTrue(failedState.isStaleCache)
+        assertTrue(failedState.canRetry)
+        assertNotNull("Previous lastSuccessfulSyncEpochMillis must be preserved on partial failure", failedState.lastSuccessfulSyncEpochMillis)
+        assertTrue(failedState.failedSteps.any { it.stepName == "master_data" })
+
+        // 3. Clearing sensitive local session caches in production mode wipes ALL private Room tables
+        db.orderDao().insertOrder(
+            OrderEntity(
+                orderNumber = "ORD-PRIV-1", buyerId = 30L, supplierId = 200L, status = "PLACED",
+                subtotal = 100.0, gstAmount = 12.0, deliveryCharge = 0.0, totalAmount = 112.0,
+                deliveryAddress = "Mumbai", notes = ""
+            )
+        )
+        db.basketDao().insertBasket(BasketEntity(buyerId = 30L, name = "Private Basket", isSaved = false))
+        db.notificationDao().insertNotification(
+            NotificationEntity(recipientUserId = 30L, type = "ORDER", title = "Private", message = "Secret")
+        )
+        db.userAddressDao().insertAddress(
+            UserAddressEntity(
+                userId = 30L, addressName = "HQ", contactPerson = "Ananya", phone = "9876543230",
+                addressLine1 = "Plot 1", addressLine2 = "", city = "Hyderabad", state = "TS",
+                postalCode = "500001", country = "India", isDefault = true
+            )
+        )
+
+        repo.clearSensitiveLocalSessionCaches(previousUser = null)
+        assertTrue(db.productDao().getAllProducts().isEmpty())
+        assertTrue(db.orderDao().getOrdersForBuyerFlow(30L).first().isEmpty())
+        assertTrue(db.notificationDao().getNotificationsForUserFlow(30L).first().isEmpty())
+        assertTrue(db.userAddressDao().getAddressesForUserFlow(30L).first().isEmpty())
     }
 }

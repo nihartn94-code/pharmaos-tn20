@@ -38,7 +38,11 @@ import com.example.domain.model.StockistPurchasedInventoryItem
 import com.example.domain.model.UserRole
 
 fun OrganizationMemberEntity.toDomain(isProductionMode: Boolean = false): OrganizationMember {
-    val parsedRoles = RolePermissionMatrix.parseRolesCsv(rolesCsv, UserRole.MANUFACTURER)
+    val parsedRoles = RolePermissionMatrix.parseRolesCsv(
+        csv = rolesCsv,
+        fallback = if (isProductionMode) null else UserRole.MANUFACTURER,
+        isProductionMode = isProductionMode
+    )
     val rawTokens = permissionsCsv.split(",").map { it.trim() }.filter { it.isNotEmpty() }
     val resolution = RolePermissionMatrix.resolvePermissionState(
         roles = parsedRoles,
@@ -59,12 +63,26 @@ fun OrganizationMemberEntity.toDomain(isProductionMode: Boolean = false): Organi
 }
 
 fun OrganizationMemberDto.toEntity(isProductionMode: Boolean = true): OrganizationMemberEntity {
-    val parsedRoles = roles.map { UserRole.fromString(it) }.toSet().ifEmpty { setOf(UserRole.MANUFACTURER) }
-    val resolution = RolePermissionMatrix.resolvePermissionState(
-        roles = parsedRoles,
-        rawPermissions = permissions,
-        isProductionMode = isProductionMode
-    )
+    val strictRoles = roles.mapNotNull { UserRole.parseStrict(it) }.toSet()
+    val parsedRoles = if (strictRoles.isNotEmpty()) {
+        strictRoles
+    } else if (isProductionMode) {
+        emptySet()
+    } else {
+        setOf(UserRole.MANUFACTURER)
+    }
+    val resolution = if (isProductionMode && parsedRoles.isEmpty()) {
+        com.example.domain.model.PermissionResolution(
+            permissions = emptySet(),
+            status = com.example.domain.model.PermissionResolutionStatus.INVALID
+        )
+    } else {
+        RolePermissionMatrix.resolvePermissionState(
+            roles = parsedRoles,
+            rawPermissions = permissions,
+            isProductionMode = isProductionMode
+        )
+    }
     return OrganizationMemberEntity(
         id = id,
         organizationId = organizationId,
@@ -73,7 +91,7 @@ fun OrganizationMemberDto.toEntity(isProductionMode: Boolean = true): Organizati
         email = email,
         rolesCsv = RolePermissionMatrix.rolesToCsv(parsedRoles),
         permissionsCsv = PharmaPermission.toCsv(resolution.permissions),
-        isActive = isActive,
+        isActive = isActive && (!isProductionMode || parsedRoles.isNotEmpty()),
         joinedAtEpochMillis = joinedAtEpochMillis
     )
 }

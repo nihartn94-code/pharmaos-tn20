@@ -870,6 +870,20 @@ private class FakeProductDao : ProductDao {
             it.isActive && (it.name.lowercase().contains(q) || it.brand.lowercase().contains(q))
         })
     }
+
+    override suspend fun getProductsByOrganization(orgId: Long): List<ProductEntity> {
+        return items.filter { it.organizationId == orgId }
+    }
+
+    override suspend fun deleteProductsByOrganization(orgId: Long) {
+        items.removeAll { it.organizationId == orgId }
+    }
+
+    override suspend fun deleteProductsByIds(ids: List<Long>) {
+        if (ids.isEmpty()) return
+        val idSet = ids.toSet()
+        items.removeAll { it.id in idSet }
+    }
 }
 
 private class FakeProductInventoryDao : com.example.data.local.dao.ProductInventoryDao {

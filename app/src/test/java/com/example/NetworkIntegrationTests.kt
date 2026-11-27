@@ -478,6 +478,16 @@ private class MockTestProductDao : ProductDao {
         if (idx >= 0) items[idx] = items[idx].copy(isActive = isActive)
     }
     override fun searchProductsFlow(query: String): Flow<List<ProductEntity>> = flowOf(emptyList())
+    override suspend fun getProductsByOrganization(orgId: Long): List<ProductEntity> =
+        items.filter { it.organizationId == orgId }
+    override suspend fun deleteProductsByOrganization(orgId: Long) {
+        items.removeAll { it.organizationId == orgId }
+    }
+    override suspend fun deleteProductsByIds(ids: List<Long>) {
+        if (ids.isEmpty()) return
+        val idSet = ids.toSet()
+        items.removeAll { it.id in idSet }
+    }
 }
 
 private class MockTestProductInventoryDao : ProductInventoryDao {

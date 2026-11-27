@@ -104,6 +104,8 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.ui.components.StockistWorkspaceBottomBar
+import com.example.ui.components.WorkspaceSyncStatusBanner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import android.content.res.Configuration
 import androidx.compose.ui.tooling.preview.Preview
@@ -159,6 +161,7 @@ fun DashboardScreen(
         onAdjustStock = { sku, delta -> viewModel.adjustInventoryStock(sku, delta) },
         onReorderProduct = { item, qty -> viewModel.reorderProduct(item, qty) },
         onRefreshDashboard = { viewModel.refreshDashboard() },
+        onRetrySync = { viewModel.retryWorkspaceSync() },
         onSelectAlertFilter = { viewModel.selectAlertFilter(it) },
         onMarkAlertRead = { viewModel.markTradeAlertRead(it) },
         onLogout = { viewModel.logout(onLoggedOut) }
@@ -190,6 +193,7 @@ fun DashboardScreenContent(
     onAdjustStock: (String, Int) -> Unit = { _, _ -> },
     onReorderProduct: (ProductInventoryEntity, Int) -> Unit = { _, _ -> },
     onRefreshDashboard: () -> Unit = {},
+    onRetrySync: () -> Unit = onRefreshDashboard,
     onSelectAlertFilter: (TradeAlertSeverity?) -> Unit = {},
     onMarkAlertRead: (DashboardTradeAlert) -> Unit = {},
     onLogout: () -> Unit = {}
@@ -375,7 +379,7 @@ fun DashboardScreenContent(
                                 ) {
                                     Text(
                                         text = if (uiState.cartItemCount > 99) "99+" else "${uiState.cartItemCount}",
-                                        fontSize = 10.sp,
+                                        style = MaterialTheme.typography.labelSmall,
                                         modifier = Modifier.testTag("dashboard_cart_badge")
                                     )
                                 }
@@ -416,6 +420,10 @@ fun DashboardScreenContent(
                         .testTag("dashboard_main_scroll"),
                     verticalArrangement = Arrangement.spacedBy(16.dp)
                 ) {
+                    WorkspaceSyncStatusBanner(
+                        syncState = uiState.syncState,
+                        onRetry = onRetrySync
+                    )
                     // Greeting & Role Header
                     GreetingHeaderRow(
                         userName = uiState.currentUser?.fullName?.ifBlank { "Rohan Sharma" } ?: "Rohan Sharma",
@@ -946,10 +954,12 @@ private fun CategoryTile(
         Spacer(modifier = Modifier.height(6.dp))
         Text(
             text = item.title,
-            fontSize = 11.sp,
+            style = MaterialTheme.typography.labelSmall,
             fontWeight = FontWeight.Medium,
-            color = Color(0xFF334155),
-            textAlign = TextAlign.Center
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = TextAlign.Center,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis
         )
     }
 }
@@ -1042,10 +1052,10 @@ private fun DealCard(
 ) {
     Card(
         shape = RoundedCornerShape(14.dp),
-        colors = CardDefaults.cardColors(containerColor = Color.White),
-        border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFE2E8F0)),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
         modifier = Modifier
-            .width(150.dp)
+            .width(164.dp)
             .clickable { onClick() }
             .testTag(testTag)
     ) {
@@ -1058,7 +1068,7 @@ private fun DealCard(
                     .fillMaxWidth()
                     .height(78.dp)
                     .clip(RoundedCornerShape(10.dp))
-                    .background(Color(0xFFF8FAFC)),
+                    .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)),
                 contentAlignment = Alignment.Center
             ) {
                 Row(
@@ -1073,26 +1083,25 @@ private fun DealCard(
                         modifier = Modifier.size(52.dp, 44.dp)
                     ) {
                         Column(
-                            modifier = Modifier.padding(4.dp),
+                            modifier = Modifier.padding(5.dp),
                             verticalArrangement = Arrangement.SpaceBetween
                         ) {
                             Box(
                                 modifier = Modifier
-                                    .fillMaxWidth(0.7f)
-                                    .height(3.dp)
-                                    .background(accentColor, RoundedCornerShape(1.dp))
-                            )
-                            Text(
-                                text = name.split(" ").firstOrNull() ?: "",
-                                fontSize = 6.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = accentColor,
-                                maxLines = 1
+                                    .fillMaxWidth(0.75f)
+                                    .height(4.dp)
+                                    .background(accentColor, RoundedCornerShape(2.dp))
                             )
                             Box(
                                 modifier = Modifier
-                                    .fillMaxWidth(0.4f)
-                                    .height(2.dp)
+                                    .fillMaxWidth(0.9f)
+                                    .height(3.dp)
+                                    .background(accentColor.copy(alpha = 0.55f), RoundedCornerShape(2.dp))
+                            )
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth(0.45f)
+                                    .height(2.5.dp)
                                     .background(Color(0xFF94A3B8), RoundedCornerShape(1.dp))
                             )
                         }
@@ -1124,21 +1133,22 @@ private fun DealCard(
 
             Text(
                 text = name,
-                fontSize = 12.sp,
+                style = MaterialTheme.typography.labelLarge,
                 fontWeight = FontWeight.Bold,
-                color = Color(0xFF0F172A),
+                color = MaterialTheme.colorScheme.onSurface,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
             )
 
             Text(
                 text = company,
-                fontSize = 10.sp,
-                color = Color(0xFF64748B),
-                maxLines = 1
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
             )
 
-            Spacer(modifier = Modifier.height(4.dp))
+            Spacer(modifier = Modifier.height(6.dp))
 
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -1147,21 +1157,27 @@ private fun DealCard(
             ) {
                 Text(
                     text = price,
-                    fontSize = 12.sp,
+                    style = MaterialTheme.typography.labelLarge,
                     fontWeight = FontWeight.Bold,
-                    color = Color(0xFF0F172A)
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false)
                 )
 
+                Spacer(modifier = Modifier.width(4.dp))
+
                 Surface(
-                    shape = RoundedCornerShape(4.dp),
+                    shape = RoundedCornerShape(6.dp),
                     color = Color(0xFFDCFCE7)
                 ) {
                     Text(
                         text = discount,
-                        fontSize = 9.sp,
+                        style = MaterialTheme.typography.labelSmall,
                         fontWeight = FontWeight.Bold,
                         color = Color(0xFF15803D),
-                        modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
+                        maxLines = 1,
+                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
                     )
                 }
             }
@@ -1214,7 +1230,7 @@ private fun TrackOrdersBanner(
                 )
                 Text(
                     text = "Real-time updates, always.",
-                    fontSize = 11.5.sp,
+                    style = MaterialTheme.typography.bodySmall,
                     color = Color(0xFF64748B)
                 )
             }
@@ -1234,133 +1250,16 @@ private fun PharmaOSBottomBar(
     selectedTab: String,
     onSelectTab: (String) -> Unit
 ) {
-    Surface(
-        color = MaterialTheme.colorScheme.surface,
-        shadowElevation = 12.dp,
-        modifier = Modifier.fillMaxWidth()
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .navigationBarsPadding()
-                .padding(horizontal = 8.dp, vertical = 6.dp),
-            horizontalArrangement = Arrangement.SpaceAround,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            // 1. Home
-            BottomNavItem(
-                label = "Home",
-                icon = Icons.Default.Home,
-                selected = selectedTab == "home",
-                testTag = "dashboard_nav_home",
-                onClick = { onSelectTab("home") }
-            )
-
-            // 2. Explore
-            BottomNavItem(
-                label = "Explore",
-                icon = Icons.Default.Search,
-                selected = selectedTab == "explore",
-                testTag = "dashboard_nav_explore",
-                onClick = { onSelectTab("explore") }
-            )
-
-            // 3. Center Scanner Floating Action Button
-            Box(
-                modifier = Modifier
-                    .offset(y = (-10).dp)
-                    .size(54.dp)
-                    .shadow(8.dp, CircleShape)
-                    .clip(CircleShape)
-                    .background(Color(0xFF1E6FFE))
-                    .clickable { onSelectTab("scan") }
-                    .testTag("dashboard_nav_scan"),
-                contentAlignment = Alignment.Center
-            ) {
-                // Barcode/QR Scanning brackets icon
-                Canvas(modifier = Modifier.size(26.dp)) {
-                    val w = size.width
-                    val h = size.height
-                    val cornerLen = 7.dp.toPx()
-                    val strokeW = 2.5.dp.toPx()
-
-                    // Top-Left corner
-                    drawLine(Color.White, Offset(0f, 0f), Offset(cornerLen, 0f), strokeW, StrokeCap.Round)
-                    drawLine(Color.White, Offset(0f, 0f), Offset(0f, cornerLen), strokeW, StrokeCap.Round)
-
-                    // Top-Right corner
-                    drawLine(Color.White, Offset(w, 0f), Offset(w - cornerLen, 0f), strokeW, StrokeCap.Round)
-                    drawLine(Color.White, Offset(w, 0f), Offset(w, cornerLen), strokeW, StrokeCap.Round)
-
-                    // Bottom-Left corner
-                    drawLine(Color.White, Offset(0f, h), Offset(cornerLen, h), strokeW, StrokeCap.Round)
-                    drawLine(Color.White, Offset(0f, h), Offset(0f, h - cornerLen), strokeW, StrokeCap.Round)
-
-                    // Bottom-Right corner
-                    drawLine(Color.White, Offset(w, h), Offset(w - cornerLen, h), strokeW, StrokeCap.Round)
-                    drawLine(Color.White, Offset(w, h), Offset(w, h - cornerLen), strokeW, StrokeCap.Round)
-
-                    // Center scanner laser horizontal line
-                    drawLine(Color.White, Offset(w * 0.2f, h / 2), Offset(w * 0.8f, h / 2), strokeW, StrokeCap.Round)
-                }
-            }
-
-            // 4. Orders
-            BottomNavItem(
-                label = "Orders",
-                icon = Icons.Default.Inventory2,
-                selected = selectedTab == "orders",
-                testTag = "dashboard_nav_orders",
-                onClick = { onSelectTab("orders") }
-            )
-
-            // 5. Profile
-            BottomNavItem(
-                label = "Profile",
-                icon = Icons.Outlined.Person,
-                selected = selectedTab == "profile",
-                testTag = "dashboard_nav_profile",
-                onClick = { onSelectTab("profile") }
-            )
-        }
-    }
-}
-
-@Composable
-private fun BottomNavItem(
-    label: String,
-    icon: ImageVector,
-    selected: Boolean,
-    testTag: String,
-    onClick: () -> Unit
-) {
-    Column(
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center,
-        modifier = Modifier
-            .defaultMinSize(minWidth = 48.dp, minHeight = 48.dp)
-            .clip(RoundedCornerShape(12.dp))
-            .clickable { onClick() }
-            .padding(horizontal = 8.dp, vertical = 4.dp)
-            .testTag(testTag)
-    ) {
-        Icon(
-            imageVector = icon,
-            contentDescription = label,
-            tint = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.size(24.dp)
-        )
-        Spacer(modifier = Modifier.height(2.dp))
-        Text(
-            text = label,
-            style = MaterialTheme.typography.labelMedium,
-            fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
-            color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-            maxLines = 1,
-            softWrap = false,
-            overflow = TextOverflow.Ellipsis
-        )
-    }
+    StockistWorkspaceBottomBar(
+        selectedTab = selectedTab,
+        onSelectTab = onSelectTab,
+        homeTestTag = "dashboard_nav_home",
+        exploreTestTag = "dashboard_nav_explore",
+        scanTestTag = "dashboard_nav_scan",
+        ordersTestTag = "dashboard_nav_orders",
+        profileTestTag = "dashboard_nav_profile",
+        barTestTag = "stockist_dashboard_bottom_nav"
+    )
 }
 
 @Composable
@@ -1525,7 +1424,7 @@ private fun DashboardDrawerContent(
 
                             Text(
                                 text = currentUser?.id?.let { "ID: POS-${it + 89410}" } ?: "ID: POS-89412",
-                                fontSize = 11.sp,
+                                style = MaterialTheme.typography.labelSmall,
                                 fontWeight = FontWeight.Bold,
                                 color = Color(0xFF0284C7)
                             )
@@ -1580,7 +1479,7 @@ private fun DashboardDrawerContent(
                             )
                             Text(
                                 text = "Explore labs & medicines",
-                                fontSize = 11.5.sp,
+                                style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
@@ -1590,7 +1489,7 @@ private fun DashboardDrawerContent(
                         ) {
                             Text(
                                 text = "Explore",
-                                fontSize = 11.sp,
+                                style = MaterialTheme.typography.labelSmall,
                                 fontWeight = FontWeight.Bold,
                                 color = Color(0xFF059669),
                                 modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
@@ -1639,7 +1538,7 @@ private fun DashboardDrawerContent(
                     ) {
                         Text(
                             text = "$cartItemCount ${if (cartItemCount == 1) "item" else "items"}",
-                            fontSize = 11.sp,
+                            style = MaterialTheme.typography.labelSmall,
                             fontWeight = FontWeight.Bold,
                             color = Color.White,
                             modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
@@ -1736,7 +1635,7 @@ private fun DashboardDrawerContent(
                             ) {
                                 Text(
                                     text = "$stockistPurchasedInventoryCount",
-                                    fontSize = 11.sp,
+                                    style = MaterialTheme.typography.labelSmall,
                                     fontWeight = FontWeight.Bold,
                                     color = Color.White,
                                     modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
@@ -1783,7 +1682,7 @@ private fun DashboardDrawerContent(
                             )
                             Text(
                                 text = "Stock levels & critical flags",
-                                fontSize = 10.5.sp,
+                                style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
@@ -1793,7 +1692,7 @@ private fun DashboardDrawerContent(
                         ) {
                             Text(
                                 text = "LIVE",
-                                fontSize = 9.sp,
+                                style = MaterialTheme.typography.labelSmall,
                                 fontWeight = FontWeight.ExtraBold,
                                 color = Color.White,
                                 modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
@@ -1982,12 +1881,12 @@ private fun DashboardDrawerContent(
                 ) {
                     Text(
                         text = "PharmaOS v2.4.0 • Enterprise",
-                        fontSize = 11.sp,
+                        style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.outline
                     )
                     Text(
                         text = "Connected",
-                        fontSize = 11.sp,
+                        style = MaterialTheme.typography.labelSmall,
                         fontWeight = FontWeight.Bold,
                         color = Color(0xFF059669)
                     )
