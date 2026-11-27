@@ -735,10 +735,10 @@ private fun PipelineHeaderSection(
                     Spacer(modifier = Modifier.width(6.dp))
                     Text(
                         text = "DISPATCH ON SCHEDULE",
-                        fontSize = 9.5.sp,
+                        style = MaterialTheme.typography.labelSmall,
                         fontWeight = FontWeight.Bold,
                         color = Color(0xFF1D64EC),
-                        letterSpacing = 0.5.sp
+                        letterSpacing = 0.4.sp
                     )
                 }
             }

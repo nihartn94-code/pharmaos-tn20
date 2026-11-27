@@ -245,7 +245,7 @@ fun RecallScreen(
                             FilterChip(
                                 selected = selectedSeverity == s,
                                 onClick = { selectedSeverity = s },
-                                label = { Text(s.displayName, fontSize = 11.sp) }
+                                label = { Text(s.displayName, style = MaterialTheme.typography.labelMedium) }
                             )
                         }
                     }

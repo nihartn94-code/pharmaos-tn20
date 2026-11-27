@@ -82,6 +82,7 @@ interface PharmaRepository {
     suspend fun patchApiUserStatus(userId: Long, status: String): Result<Unit>
     suspend fun getFirstUserRegistrationCheck(): Boolean
     suspend fun ensureDefaultManufacturerUser(): UserEntity
+    suspend fun ensureDefaultStockistUser(): UserEntity
     suspend fun createManufacturerTestingUser(
         fullName: String = "Dr. Vikram Malhotra (VP Manufacturing)",
         businessName: String = "Bharat Bio-Pharma Formulations Pvt. Ltd.",
@@ -91,6 +92,15 @@ interface PharmaRepository {
         gstin: String = "27AAACB1234F1Z9",
         address: String = "Plant 1, Plot 88, MIDC Tarapur Industrial Area, Boisar, Palghar, Maharashtra 401506"
     ): UserEntity
+    suspend fun provisionAdminAccountForDev(
+        fullName: String,
+        businessName: String,
+        email: String,
+        phone: String,
+        password: String,
+        gstin: String? = null,
+        address: String = "PharmaOS Central Administration"
+    ): Result<AuthUser>
     suspend fun saveComplianceVerification(
         userId: Long,
         gstin: String,
@@ -109,8 +119,13 @@ interface PharmaRepository {
     // Onboarding & Initial Setup Persistence
     fun getOnboardingCompletedFlow(): Flow<Boolean>
     suspend fun isOnboardingCompleted(): Boolean
+    suspend fun isWelcomeCompleted(): Boolean
+    suspend fun setWelcomeCompleted(completed: Boolean)
+    suspend fun isAccountOnboardingCompleted(userId: Long): Boolean
+    suspend fun requiresComplianceForUser(user: AuthUser): Boolean
     suspend fun setOnboardingCompleted(completed: Boolean)
     suspend fun resolveLaunchDestination(): LaunchDestination
+    suspend fun resolveSessionRestoration(): SessionRestorationResult
 
     // Backend & Execution Mode Configuration
     fun getAuthExecutionModeFlow(): Flow<com.example.data.remote.config.AuthExecutionMode>
@@ -384,6 +399,21 @@ enum class LaunchDestination {
     LOGIN,
     COMPLIANCE_VERIFICATION,
     DASHBOARD
+}
+
+sealed class SessionRestorationResult {
+    data object Welcome : SessionRestorationResult()
+    data object Login : SessionRestorationResult()
+    data class ComplianceRequired(val user: AuthUser) : SessionRestorationResult()
+    data class AuthorizedWorkspace(val user: AuthUser) : SessionRestorationResult()
+    data class UnauthorizedAccount(
+        val user: AuthUser,
+        val reason: String
+    ) : SessionRestorationResult()
+    data class RecoverableError(
+        val title: String,
+        val message: String
+    ) : SessionRestorationResult()
 }
 
 class DuplicateBasketTemplateException(

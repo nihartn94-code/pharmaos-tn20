@@ -17,10 +17,12 @@ import com.example.domain.repository.DashboardKpis
 import com.example.domain.repository.PharmaRepository
 import com.example.domain.repository.RecallWithAffectedStock
 import com.example.ui.components.OrderTransactionUiModel
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
@@ -117,6 +119,10 @@ class DashboardViewModel(
     private val _uiState = MutableStateFlow(DashboardUiState())
     val uiState: StateFlow<DashboardUiState> = _uiState.asStateFlow()
 
+    // CRITICAL: Must be initialized BEFORE init {} launches observeStockistPromotionalFeed()
+    // so Dispatchers.Main.immediate never captures a null StateFlow inside combine().
+    private val bannerClockMillis = MutableStateFlow(System.currentTimeMillis())
+
     init {
         observeCurrentUser()
         loadDashboardData()
@@ -130,22 +136,55 @@ class DashboardViewModel(
         observeStockistPromotionalFeed()
     }
 
-    private val bannerClockMillis = MutableStateFlow(System.currentTimeMillis())
+    private fun handleObserverError(contextLabel: String, throwable: Throwable) {
+        if (throwable is CancellationException) throw throwable
+        _uiState.update { current ->
+            if (current.errorMessage == null) {
+                current.copy(errorMessage = throwable.message ?: "Unable to load $contextLabel.")
+            } else {
+                current
+            }
+        }
+    }
 
     private fun observeStockistPromotionalFeed() {
         val wsRepo = workspaceRepository ?: return
         viewModelScope.launch {
-            wsRepo.ensureWorkspaceSeededForLocalDev()
-            runCatching { wsRepo.syncStockistFeed() }
-            runCatching { wsRepo.syncStockistPurchasedInventory() }
+            try {
+                wsRepo.ensureWorkspaceSeededForLocalDev()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                handleObserverError("workspace data", e)
+            }
+            try {
+                wsRepo.syncStockistFeed()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                // Non-fatal: syncState exposes recoverable warning/retry banner
+            }
+            try {
+                wsRepo.syncStockistPurchasedInventory()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                // Non-fatal: empty/cached inventory remains safely displayed
+            }
         }
         // Periodic banner boundary clock so scheduled banners activate & expired banners auto-hide
         viewModelScope.launch {
-            while (isActive) {
-                delay(30_000L)
-                val now = System.currentTimeMillis()
-                bannerClockMillis.value = now
-                wsRepo.refreshBannerClock(now)
+            try {
+                while (isActive) {
+                    delay(30_000L)
+                    val now = System.currentTimeMillis()
+                    bannerClockMillis.value = now
+                    wsRepo.refreshBannerClock(now)
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                // Non-fatal periodic timer guard
             }
         }
         viewModelScope.launch {
@@ -159,20 +198,24 @@ class DashboardViewModel(
                     .filter { it.isEligibleForStockist(now) }
                     .sortedWith(compareBy<com.example.domain.model.OfferBanner> { it.priorityOrder }.thenByDescending { it.updatedAtEpochMillis })
                 Triple(eligibleNow, announcements, purchased.size)
-            }.collect { (banners, announcements, purchasedCount) ->
-                _uiState.update {
-                    it.copy(
-                        activeOfferBanners = banners,
-                        publishedAnnouncements = announcements,
-                        stockistPurchasedInventoryCount = purchasedCount
-                    )
-                }
             }
+                .catch { e -> handleObserverError("promotional feed", e) }
+                .collect { (banners, announcements, purchasedCount) ->
+                    _uiState.update {
+                        it.copy(
+                            activeOfferBanners = banners,
+                            publishedAnnouncements = announcements,
+                            stockistPurchasedInventoryCount = purchasedCount
+                        )
+                    }
+                }
         }
         viewModelScope.launch {
-            wsRepo.workspaceSyncStateFlow.collect { state ->
-                _uiState.update { it.copy(syncState = state) }
-            }
+            wsRepo.workspaceSyncStateFlow
+                .catch { e -> handleObserverError("workspace sync status", e) }
+                .collect { state ->
+                    _uiState.update { it.copy(syncState = state) }
+                }
         }
     }
 
@@ -180,7 +223,13 @@ class DashboardViewModel(
     fun retryWorkspaceSync() {
         val wsRepo = workspaceRepository ?: return
         viewModelScope.launch {
-            wsRepo.syncActiveWorkspace()
+            try {
+                wsRepo.syncActiveWorkspace()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                handleObserverError("workspace sync", e)
+            }
         }
     }
 
@@ -192,19 +241,21 @@ class DashboardViewModel(
 
     private fun observeCurrentUser() {
         viewModelScope.launch {
-            repository.getApiUsersMeFlow().collect { user ->
-                val authorized = user?.role?.canAccessRealTimeInventory == true
-                _uiState.update { current ->
-                    current.copy(
-                        currentUser = user,
-                        isRealTimeInventoryAuthorized = authorized,
-                        inventoryItems = if (authorized) current.inventoryItems else emptyList(),
-                        realTimeInventory = if (authorized) current.realTimeInventory else emptyList(),
-                        inventorySummary = if (authorized) current.inventorySummary else InventoryDashboardSummary(),
-                        shortageAlertsCount = if (authorized) current.shortageAlertsCount else 0
-                    )
+            repository.getApiUsersMeFlow()
+                .catch { e -> handleObserverError("account profile", e) }
+                .collect { user ->
+                    val authorized = user?.role?.canAccessRealTimeInventory == true
+                    _uiState.update { current ->
+                        current.copy(
+                            currentUser = user,
+                            isRealTimeInventoryAuthorized = authorized,
+                            inventoryItems = if (authorized) current.inventoryItems else emptyList(),
+                            realTimeInventory = if (authorized) current.realTimeInventory else emptyList(),
+                            inventorySummary = if (authorized) current.inventorySummary else InventoryDashboardSummary(),
+                            shortageAlertsCount = if (authorized) current.shortageAlertsCount else 0
+                        )
+                    }
                 }
-            }
         }
     }
 
@@ -228,6 +279,8 @@ class DashboardViewModel(
                         errorMessage = null
                     )
                 }
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 _uiState.update {
                     it.copy(
@@ -250,8 +303,8 @@ class DashboardViewModel(
                 }
                 bannerClockMillis.value = System.currentTimeMillis()
                 workspaceRepository?.let { ws ->
-                    runCatching { ws.syncStockistFeed() }
-                    runCatching { ws.syncStockistPurchasedInventory() }
+                    try { ws.syncStockistFeed() } catch (e: CancellationException) { throw e } catch (_: Exception) {}
+                    try { ws.syncStockistPurchasedInventory() } catch (e: CancellationException) { throw e } catch (_: Exception) {}
                 }
                 val kpis = repository.getDashboardStats()
                 _uiState.update {
@@ -262,6 +315,8 @@ class DashboardViewModel(
                         kpis = kpis
                     )
                 }
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 _uiState.update {
                     it.copy(
@@ -275,18 +330,22 @@ class DashboardViewModel(
 
     private fun observeNotifications() {
         viewModelScope.launch {
-            repository.getApiNotificationsUnreadCountFlow().collect { count ->
-                _uiState.update { it.copy(unreadNotificationsCount = count) }
-            }
+            repository.getApiNotificationsUnreadCountFlow()
+                .catch { e -> handleObserverError("notifications", e) }
+                .collect { count ->
+                    _uiState.update { it.copy(unreadNotificationsCount = count) }
+                }
         }
     }
 
     private fun observeBasket() {
         viewModelScope.launch {
-            repository.getApiBasketFlow().collect { basket ->
-                val count = basket.items.sumOf { it.quantity }
-                _uiState.update { it.copy(cartItemCount = count) }
-            }
+            repository.getApiBasketFlow()
+                .catch { e -> handleObserverError("procurement basket", e) }
+                .collect { basket ->
+                    val count = basket.items.sumOf { it.quantity }
+                    _uiState.update { it.copy(cartItemCount = count) }
+                }
         }
     }
 
@@ -298,15 +357,17 @@ class DashboardViewModel(
             ) { user, items ->
                 val authorized = user?.role?.canAccessRealTimeInventory == true
                 if (authorized) items else emptyList()
-            }.collect { items ->
-                val critical = items.count { it.currentStock <= it.reorderThreshold }
-                _uiState.update { current ->
-                    current.copy(
-                        inventoryItems = items,
-                        shortageAlertsCount = critical
-                    )
-                }
             }
+                .catch { e -> handleObserverError("inventory", e) }
+                .collect { items ->
+                    val critical = items.count { it.currentStock <= it.reorderThreshold }
+                    _uiState.update { current ->
+                        current.copy(
+                            inventoryItems = items,
+                            shortageAlertsCount = critical
+                        )
+                    }
+                }
         }
     }
 
@@ -319,33 +380,37 @@ class DashboardViewModel(
             ) { user, items, summary ->
                 val authorized = user?.role?.canAccessRealTimeInventory == true
                 if (authorized) items to summary else emptyList<InventoryStockItem>() to InventoryDashboardSummary()
-            }.collect { (items, summary) ->
-                _uiState.update { current ->
-                    current.copy(
-                        realTimeInventory = items,
-                        inventorySummary = summary
-                    )
-                }
             }
+                .catch { e -> handleObserverError("real-time inventory", e) }
+                .collect { (items, summary) ->
+                    _uiState.update { current ->
+                        current.copy(
+                            realTimeInventory = items,
+                            inventorySummary = summary
+                        )
+                    }
+                }
         }
     }
 
     private fun observeCatalogueSupply() {
         viewModelScope.launch {
-            repository.getApiProductsFlow().collect { products ->
-                val activeProducts = products.filter { it.isActive }
-                val totalOffers = activeProducts.sumOf { it.activeOfferCount }
-                val inStockCount = activeProducts.count { it.activeOfferCount > 0 }
-                _uiState.update {
-                    it.copy(
-                        catalogueSupplySummary = CatalogueSupplySummary(
-                            activeProductsCount = activeProducts.size,
-                            totalSupplierOffersCount = totalOffers,
-                            inStockCatalogueCount = inStockCount
+            repository.getApiProductsFlow()
+                .catch { e -> handleObserverError("medicine catalogue", e) }
+                .collect { products ->
+                    val activeProducts = products.filter { it.isActive }
+                    val totalOffers = activeProducts.sumOf { it.activeOfferCount }
+                    val inStockCount = activeProducts.count { it.activeOfferCount > 0 }
+                    _uiState.update {
+                        it.copy(
+                            catalogueSupplySummary = CatalogueSupplySummary(
+                                activeProductsCount = activeProducts.size,
+                                totalSupplierOffersCount = totalOffers,
+                                inStockCatalogueCount = inStockCount
+                            )
                         )
-                    )
+                    }
                 }
-            }
         }
     }
 
@@ -356,14 +421,16 @@ class DashboardViewModel(
                 repository.getOrderHistoryTransactionsFlow()
             ) { orders, transactions ->
                 buildPendingOrdersSummary(orders) to transactions
-            }.collect { (summary, transactions) ->
-                _uiState.update {
-                    it.copy(
-                        pendingOrdersSummary = summary,
-                        recentOrderTransactions = transactions
-                    )
-                }
             }
+                .catch { e -> handleObserverError("orders", e) }
+                .collect { (summary, transactions) ->
+                    _uiState.update {
+                        it.copy(
+                            pendingOrdersSummary = summary,
+                            recentOrderTransactions = transactions
+                        )
+                    }
+                }
         }
     }
 
@@ -383,9 +450,11 @@ class DashboardViewModel(
                     recalls = recalls,
                     authorizedInventoryItems = if (authorized) realTimeItems else emptyList()
                 )
-            }.collect { alerts ->
-                _uiState.update { it.copy(activeTradeAlerts = alerts) }
             }
+                .catch { e -> handleObserverError("trade alerts", e) }
+                .collect { alerts ->
+                    _uiState.update { it.copy(activeTradeAlerts = alerts) }
+                }
         }
     }
 
@@ -558,7 +627,13 @@ class DashboardViewModel(
     fun markTradeAlertRead(alert: DashboardTradeAlert) {
         val notifId = alert.notificationId ?: return
         viewModelScope.launch {
-            repository.patchApiNotificationRead(notifId)
+            try {
+                repository.patchApiNotificationRead(notifId)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                handleObserverError("notification status", e)
+            }
         }
     }
 
@@ -570,18 +645,30 @@ class DashboardViewModel(
             return
         }
         viewModelScope.launch {
-            val item = repository.getProductInventoryBySku(sku) ?: return@launch
-            val newStock = (item.currentStock + delta).coerceAtLeast(0)
-            repository.updateProductInventoryStock(sku, newStock)
+            try {
+                val item = repository.getProductInventoryBySku(sku) ?: return@launch
+                val newStock = (item.currentStock + delta).coerceAtLeast(0)
+                repository.updateProductInventoryStock(sku, newStock)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                handleObserverError("inventory update", e)
+            }
         }
     }
 
     fun reorderProduct(item: ProductInventoryEntity, quantity: Int) {
         viewModelScope.launch {
-            val productId = item.productId ?: 1L
-            repository.quickRestockToBasket(productId, quantity)
-            _uiState.update {
-                it.copy(reorderSuccessMessage = "Reorder placed: $quantity units of ${item.productName} added to basket.")
+            try {
+                val productId = item.productId ?: return@launch
+                repository.quickRestockToBasket(productId, quantity)
+                _uiState.update {
+                    it.copy(reorderSuccessMessage = "Reorder placed: $quantity units of ${item.productName} added to basket.")
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                handleObserverError("reorder", e)
             }
         }
     }
@@ -590,10 +677,16 @@ class DashboardViewModel(
         _uiState.update { it.copy(reorderSuccessMessage = null) }
     }
 
+    fun clearErrorMessage() {
+        _uiState.update { it.copy(errorMessage = null) }
+    }
+
     fun logout(onLoggedOut: () -> Unit) {
         viewModelScope.launch {
             try {
                 repository.logout()
+            } catch (e: CancellationException) {
+                throw e
             } catch (_: Exception) { }
             onLoggedOut()
         }

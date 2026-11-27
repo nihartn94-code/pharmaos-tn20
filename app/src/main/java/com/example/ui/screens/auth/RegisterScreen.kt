@@ -103,6 +103,7 @@ import com.example.data.remote.config.AuthExecutionMode
 import com.example.ui.components.BackendConfigDialog
 import com.example.ui.components.BackendStatusBar
 import com.example.ui.theme.PharmaOSTheme
+import com.example.domain.model.AuthUser
 import com.example.domain.model.UserRole
 import kotlinx.coroutines.launch
 
@@ -111,7 +112,7 @@ fun RegisterScreen(
     viewModel: AuthViewModel,
     onNavigateBack: () -> Unit,
     onNavigateToLogin: () -> Unit = onNavigateBack,
-    onRegisterSuccess: (UserRole) -> Unit
+    onRegisterSuccess: (AuthUser) -> Unit
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     RegisterScreenContent(
@@ -125,8 +126,8 @@ fun RegisterScreen(
                 email = email,
                 displayName = displayName,
                 role = role,
-                markOnboardingCompleted = (role == UserRole.ADMIN),
-                onSuccess = onSuccess
+                markOnboardingCompleted = false,
+                onSuccessWithUser = onSuccess
             )
         },
         onSelectAuthMode = { viewModel.setAuthExecutionMode(it) },
@@ -143,14 +144,14 @@ fun RegisterScreen(
 fun RegisterScreenContent(
     uiState: AuthUiState,
     onRoleSelected: (UserRole) -> Unit,
-    onRegister: (String, String, String, String, String?, String, String, String, UserRole, () -> Unit) -> Unit,
-    onGoogleSignIn: (String, String, UserRole, () -> Unit) -> Unit,
+    onRegister: (String, String, String, String, String?, String, String, String, UserRole, (AuthUser) -> Unit) -> Unit,
+    onGoogleSignIn: (String, String, UserRole, (AuthUser) -> Unit) -> Unit,
     onSelectAuthMode: (AuthExecutionMode) -> Unit = {},
     onConfigureBackendUrl: (String) -> Unit = {},
     onClearMessages: () -> Unit,
     onNavigateBack: () -> Unit,
     onNavigateToLogin: () -> Unit = onNavigateBack,
-    onRegisterSuccess: (UserRole) -> Unit
+    onRegisterSuccess: (AuthUser) -> Unit
 ) {
     val snackbarHostState = remember { SnackbarHostState() }
     val coroutineScope = rememberCoroutineScope()
@@ -179,11 +180,11 @@ fun RegisterScreenContent(
     var customGoogleName by remember { mutableStateOf("") }
     var isAddingCustomGoogleAccount by remember { mutableStateOf(false) }
 
-    // Synchronize initial role: if first user, automatically Admin; otherwise respect ViewModel selectedRole
+    // Standard B2B registration roles only (Stockist, Company, Manufacturer).
+    // Administrator provisioning is an explicitly authorized separate process.
     var selectedRole by remember {
         mutableStateOf(
-            if (uiState.isFirstUser) UserRole.ADMIN
-            else if (uiState.selectedRole != UserRole.ADMIN) uiState.selectedRole
+            if (uiState.selectedRole != UserRole.ADMIN) uiState.selectedRole
             else UserRole.STOCKIST
         )
     }
@@ -320,23 +321,6 @@ fun RegisterScreenContent(
                         color = Color(0xFF64748B),
                         lineHeight = 18.sp
                     )
-
-                    if (uiState.isFirstUser) {
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Surface(
-                            shape = RoundedCornerShape(20.dp),
-                            color = Color(0xFF0284C7).copy(alpha = 0.12f),
-                            border = BorderStroke(1.dp, Color(0xFF0284C7).copy(alpha = 0.35f))
-                        ) {
-                            Text(
-                                text = "🛡️ First Account: Master Administrator Setup",
-                                style = MaterialTheme.typography.labelSmall,
-                                fontWeight = FontWeight.SemiBold,
-                                color = Color(0xFF0369A1),
-                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
-                            )
-                        }
-                    }
                 }
 
                 Spacer(modifier = Modifier.width(12.dp))
@@ -401,21 +385,6 @@ fun RegisterScreenContent(
                             onRoleSelected(UserRole.MANUFACTURER)
                         }
                     )
-
-                    if (uiState.isFirstUser) {
-                        RegisterRoleTabItem(
-                            title = "Admin",
-                            icon = Icons.Default.AdminPanelSettings,
-                            isSelected = selectedRole == UserRole.ADMIN,
-                            modifier = Modifier
-                                .weight(1f)
-                                .testTag("register_role_admin"),
-                            onClick = {
-                                selectedRole = UserRole.ADMIN
-                                onRoleSelected(UserRole.ADMIN)
-                            }
-                        )
-                    }
                 }
             }
 
@@ -711,7 +680,7 @@ fun RegisterScreenContent(
                                                 password,
                                                 password,
                                                 selectedRole,
-                                                { onRegisterSuccess(selectedRole) }
+                                                { registeredUser -> onRegisterSuccess(registeredUser) }
                                             )
                                         }
                                     }
@@ -906,7 +875,7 @@ fun RegisterScreenContent(
                         password,
                         password,
                         selectedRole,
-                        { onRegisterSuccess(selectedRole) }
+                        { registeredUser -> onRegisterSuccess(registeredUser) }
                     )
                 },
                 enabled = !uiState.isLoading,
@@ -1294,9 +1263,9 @@ fun RegisterScreenContent(
                                             cleanEmail,
                                             cleanName,
                                             selectedRole,
-                                            {
+                                            { registeredUser ->
                                                 showGoogleAccountPicker = false
-                                                onRegisterSuccess(selectedRole)
+                                                onRegisterSuccess(registeredUser)
                                             }
                                         )
                                     }

@@ -6,6 +6,7 @@ import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
+import androidx.datastore.preferences.core.stringSetPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.example.BuildConfig
 import com.example.data.remote.config.ApiConfig
@@ -38,6 +39,8 @@ class DataStoreManager(
     companion object {
         private val KEY_LOGGED_IN_USER_ID = longPreferencesKey("logged_in_user_id")
         private val KEY_ONBOARDING_COMPLETED = booleanPreferencesKey("onboarding_completed")
+        private val KEY_WELCOME_COMPLETED = booleanPreferencesKey("welcome_completed")
+        private val KEY_COMPLETED_ONBOARDING_USER_IDS = stringSetPreferencesKey("completed_onboarding_user_ids")
         private val KEY_DARK_THEME = booleanPreferencesKey("is_dark_theme")
         private val KEY_CRITICAL_DEPLETION_THRESHOLD = intPreferencesKey("critical_depletion_threshold")
         private val KEY_AUTO_DEPLETION_NOTIFICATIONS_ENABLED = booleanPreferencesKey("auto_depletion_notifications_enabled")
@@ -131,9 +134,37 @@ class DataStoreManager(
         if (userId == null || userId <= 0) null else userId
     }
 
-    val isOnboardingCompletedFlow: Flow<Boolean> = context.dataStore.data.map { preferences ->
-        preferences[KEY_ONBOARDING_COMPLETED] ?: false
+    val isWelcomeCompletedFlow: Flow<Boolean> = context.dataStore.data.map { preferences ->
+        preferences[KEY_WELCOME_COMPLETED] ?: preferences[KEY_ONBOARDING_COMPLETED] ?: false
     }
+
+    val completedOnboardingUserIdsFlow: Flow<Set<Long>> = context.dataStore.data.map { preferences ->
+        preferences[KEY_COMPLETED_ONBOARDING_USER_IDS]
+            ?.mapNotNull { it.toLongOrNull() }
+            ?.toSet()
+            ?: emptySet()
+    }
+
+    /**
+     * Backward-compatible onboarding completion flow:
+     * - If a user is currently logged in, reflects that specific account's onboarding completion.
+     * - If logged out, reflects whether the installation has completed the Welcome/initial setup.
+     */
+    val isOnboardingCompletedFlow: Flow<Boolean> = context.dataStore.data.map { preferences ->
+        val loggedInId = preferences[KEY_LOGGED_IN_USER_ID]?.takeIf { it > 0L }
+        val welcomeDone = preferences[KEY_WELCOME_COMPLETED] ?: preferences[KEY_ONBOARDING_COMPLETED] ?: false
+        if (loggedInId != null) {
+            val completedIds = preferences[KEY_COMPLETED_ONBOARDING_USER_IDS]
+                ?.mapNotNull { it.toLongOrNull() }
+                ?.toSet()
+                ?: emptySet()
+            completedIds.contains(loggedInId)
+        } else {
+            welcomeDone
+        }
+    }
+
+    fun hasEncryptedTokenArtifacts(): Boolean = secureTokenStorage.hasEncryptedTokens()
 
     val accessTokenFlow: Flow<String?> = _accessTokenFlow.asStateFlow()
 
@@ -196,9 +227,40 @@ class DataStoreManager(
         }
     }
 
+    suspend fun setWelcomeCompleted(completed: Boolean) {
+        context.dataStore.edit { preferences ->
+            preferences[KEY_WELCOME_COMPLETED] = completed
+            preferences[KEY_ONBOARDING_COMPLETED] = completed
+        }
+    }
+
+    suspend fun setAccountOnboardingCompleted(userId: Long, completed: Boolean) {
+        if (userId <= 0L) return
+        context.dataStore.edit { preferences ->
+            val current = preferences[KEY_COMPLETED_ONBOARDING_USER_IDS].orEmpty().toMutableSet()
+            if (completed) {
+                current.add(userId.toString())
+                preferences[KEY_WELCOME_COMPLETED] = true
+                preferences[KEY_ONBOARDING_COMPLETED] = true
+            } else {
+                current.remove(userId.toString())
+            }
+            preferences[KEY_COMPLETED_ONBOARDING_USER_IDS] = current
+        }
+    }
+
     suspend fun setOnboardingCompleted(completed: Boolean) {
         context.dataStore.edit { preferences ->
+            preferences[KEY_WELCOME_COMPLETED] = completed
             preferences[KEY_ONBOARDING_COMPLETED] = completed
+            val loggedInId = preferences[KEY_LOGGED_IN_USER_ID]?.takeIf { it > 0L }
+            if (completed && loggedInId != null) {
+                val updated = preferences[KEY_COMPLETED_ONBOARDING_USER_IDS].orEmpty().toMutableSet()
+                updated.add(loggedInId.toString())
+                preferences[KEY_COMPLETED_ONBOARDING_USER_IDS] = updated
+            } else if (!completed) {
+                preferences.remove(KEY_COMPLETED_ONBOARDING_USER_IDS)
+            }
         }
     }
 
@@ -221,7 +283,9 @@ class DataStoreManager(
             preferences.remove(LEGACY_KEY_ACCESS_TOKEN)
             preferences.remove(LEGACY_KEY_REFRESH_TOKEN)
             preferences.remove(KEY_ACTIVE_WORKSPACE)
-            // Preserve KEY_ONBOARDING_COMPLETED on logout so returning users skip the Welcome Screen
+            // Preserve KEY_WELCOME_COMPLETED and KEY_COMPLETED_ONBOARDING_USER_IDS on logout
+            // so returning verified users skip Welcome & compliance while newly registered accounts
+            // still complete their own compliance verification.
         }
     }
 

@@ -99,6 +99,7 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import android.content.res.Configuration
 import androidx.compose.ui.tooling.preview.Preview
+import com.example.BuildConfig
 import com.example.data.remote.config.AuthExecutionMode
 import com.example.ui.components.BackendConfigDialog
 import com.example.ui.components.BackendStatusBar
@@ -121,6 +122,7 @@ fun LoginScreen(
         onSelectAuthMode = { viewModel.setAuthExecutionMode(it) },
         onConfigureBackendUrl = { viewModel.configureBackendUrl(it) },
         onClearMessages = { viewModel.clearMessages() },
+        onClearDiagnostics = { viewModel.clearDiagnosticLogs() },
         onNavigateToRegister = onNavigateToRegister,
         onLoginSuccess = onLoginSuccess
     )
@@ -136,6 +138,7 @@ fun LoginScreenContent(
     onSelectAuthMode: (AuthExecutionMode) -> Unit = {},
     onConfigureBackendUrl: (String) -> Unit = {},
     onClearMessages: () -> Unit,
+    onClearDiagnostics: () -> Unit = {},
     onNavigateToRegister: () -> Unit,
     onLoginSuccess: () -> Unit
 ) {
@@ -147,15 +150,25 @@ fun LoginScreenContent(
     var passwordVisible by remember { mutableStateOf(false) }
     var showForgotPasswordDialog by remember { mutableStateOf(false) }
     var showBackendConfigDialog by remember { mutableStateOf(false) }
+    var showDiagnosticsDialog by remember { mutableStateOf(false) }
     var forgotIdentifier by remember { mutableStateOf("") }
     var showGoogleAccountPicker by remember { mutableStateOf(false) }
     var customGoogleEmail by remember { mutableStateOf("") }
     var customGoogleName by remember { mutableStateOf("") }
     var isAddingCustomGoogleAccount by remember { mutableStateOf(false) }
 
+    var inlineErrorMessage by remember { mutableStateOf<String?>(null) }
+
     val selectedRole = uiState.selectedRole
 
+    LaunchedEffect(selectedRole, uiState.authExecutionMode) {
+        inlineErrorMessage = null
+    }
+
     LaunchedEffect(uiState.errorMessage, uiState.successMessage) {
+        if (uiState.errorMessage != null) {
+            inlineErrorMessage = uiState.errorMessage
+        }
         val msg = uiState.errorMessage ?: uiState.successMessage
         if (msg != null) {
             snackbarHostState.showSnackbar(msg)
@@ -397,11 +410,7 @@ fun LoginScreenContent(
                         UserRole.STOCKIST -> "Stockist Portal: Source medicines at lowest PTR, run basket optimizer & manage credit ledger."
                         UserRole.PHARMA_COMPANY -> "Company Portal: List brand medicines, configure trade schemes & track distribution."
                         UserRole.MANUFACTURER -> "Manufacturer Portal: Bulk production batches, dispatch logistics & trade offers."
-                        UserRole.ADMIN -> if (uiState.isFirstUser) {
-                            "Master Admin: First account created on this device automatically becomes Master Administrator."
-                        } else {
-                            "Administrator Portal: System governance, platform users, safety recalls & compliance audit."
-                        }
+                        UserRole.ADMIN -> "Administrator Portal: System governance, platform users, safety recalls & compliance audit."
                     }
                     Text(
                         text = roleDescription,
@@ -426,6 +435,135 @@ fun LoginScreenContent(
                         .fillMaxWidth()
                         .padding(20.dp)
                 ) {
+                    // Unconfigured Backend HTTP Notice with 1-tap Switch to Local Dev Mode (Debug builds)
+                    if (uiState.authExecutionMode == AuthExecutionMode.PRODUCTION_BACKEND_HTTP && !uiState.isBackendConfigured) {
+                        Surface(
+                            shape = RoundedCornerShape(12.dp),
+                            color = Color(0xFFFFFBEB),
+                            border = BorderStroke(1.dp, Color(0xFFFDE68A)),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(bottom = 14.dp)
+                                .testTag("login_unconfigured_backend_banner")
+                        ) {
+                            Column(modifier = Modifier.padding(12.dp)) {
+                                Text(
+                                    text = "Live Backend Server Not Configured",
+                                    style = MaterialTheme.typography.labelLarge,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color(0xFF92400E)
+                                )
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Text(
+                                    text = "Configure your Spring Boot server URL or switch to Development Local Mode to sign in offline as ${selectedRole.displayName}.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = Color(0xFF78350F)
+                                )
+                                Spacer(modifier = Modifier.height(10.dp))
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    if (BuildConfig.DEBUG) {
+                                        Button(
+                                            onClick = {
+                                                inlineErrorMessage = null
+                                                onSelectAuthMode(AuthExecutionMode.DEVELOPMENT_LOCAL_MODE)
+                                            },
+                                            shape = RoundedCornerShape(10.dp),
+                                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFD97706)),
+                                            modifier = Modifier
+                                                .weight(1f)
+                                                .testTag("login_switch_local_dev_button")
+                                        ) {
+                                            Text(
+                                                text = "Use Local Dev Mode",
+                                                style = MaterialTheme.typography.labelMedium,
+                                                fontWeight = FontWeight.Bold,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis
+                                            )
+                                        }
+                                    }
+                                    OutlinedButton(
+                                        onClick = { showBackendConfigDialog = true },
+                                        shape = RoundedCornerShape(10.dp),
+                                        border = BorderStroke(1.dp, Color(0xFFD97706)),
+                                        modifier = Modifier.weight(1f)
+                                    ) {
+                                        Text(
+                                            text = "Configure URL",
+                                            style = MaterialTheme.typography.labelMedium,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = Color(0xFF92400E),
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // Persistent Inline Error Banner with AuthenticationState & ErrorCode diagnostics trigger
+                    AnimatedVisibility(
+                        visible = inlineErrorMessage != null,
+                        enter = fadeIn(),
+                        exit = fadeOut()
+                    ) {
+                        Surface(
+                            shape = RoundedCornerShape(12.dp),
+                            color = Color(0xFFFEF2F2),
+                            border = BorderStroke(1.dp, Color(0xFFFECACA)),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(bottom = 14.dp)
+                                .testTag("login_inline_error_banner")
+                        ) {
+                            Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
+                                Text(
+                                    text = inlineErrorMessage.orEmpty(),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    fontWeight = FontWeight.Medium,
+                                    color = Color(0xFFB91C1C)
+                                )
+                                val errorCode = uiState.lastErrorCode
+                                if (errorCode != null || uiState.diagnosticEntries.isNotEmpty()) {
+                                    Spacer(modifier = Modifier.height(6.dp))
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Text(
+                                            text = "State: ${uiState.authenticationState.shortLabel}" +
+                                                (errorCode?.let { " • ${it.code}" }.orEmpty()),
+                                            style = MaterialTheme.typography.labelSmall,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = Color(0xFF991B1B),
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                            modifier = Modifier.weight(1f)
+                                        )
+                                        if (BuildConfig.DEBUG) {
+                                            Spacer(modifier = Modifier.width(8.dp))
+                                            Text(
+                                                text = "Diagnostics",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                fontWeight = FontWeight.Bold,
+                                                color = Color(0xFF2563EB),
+                                                modifier = Modifier
+                                                    .clickable { showDiagnosticsDialog = true }
+                                                    .padding(horizontal = 4.dp, vertical = 2.dp)
+                                                    .testTag("login_diagnostics_toggle")
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
                     // Quick Testing Instance Autofill Banner (Development Local Mode only)
                     if (uiState.authExecutionMode == AuthExecutionMode.DEVELOPMENT_LOCAL_MODE &&
                         (selectedRole == UserRole.MANUFACTURER || selectedRole == UserRole.PHARMA_COMPANY || selectedRole == UserRole.STOCKIST)
@@ -591,7 +729,10 @@ fun LoginScreenContent(
                             // Text Input
                             OutlinedTextField(
                                 value = identifier,
-                                onValueChange = { identifier = it },
+                                onValueChange = {
+                                    identifier = it
+                                    inlineErrorMessage = null
+                                },
                                 placeholder = {
                                     Text(
                                         text = "Enter your number or email",
@@ -627,7 +768,10 @@ fun LoginScreenContent(
                     ) {
                         OutlinedTextField(
                             value = password,
-                            onValueChange = { password = it },
+                            onValueChange = {
+                                password = it
+                                inlineErrorMessage = null
+                            },
                             placeholder = {
                                 Text(
                                     text = "Password",
@@ -818,7 +962,7 @@ fun LoginScreenContent(
                         )
                         Spacer(modifier = Modifier.width(4.dp))
                         Text(
-                            text = if (uiState.isFirstUser) "Register (First is Admin)" else "Sign up",
+                            text = "Sign up",
                             fontSize = 13.5.sp,
                             fontWeight = FontWeight.Bold,
                             color = Color(0xFF2563EB),
@@ -877,7 +1021,22 @@ fun LoginScreenContent(
                         Spacer(modifier = Modifier.height(10.dp))
 
                         if (matchingUsers.isEmpty()) {
-                            if (selectedRole == UserRole.MANUFACTURER) {
+                            if (selectedRole == UserRole.MANUFACTURER || selectedRole == UserRole.STOCKIST || selectedRole == UserRole.PHARMA_COMPANY) {
+                                val fallbackEmail = when (selectedRole) {
+                                    UserRole.MANUFACTURER -> "manufacturer@pharmaos.com"
+                                    UserRole.PHARMA_COMPANY -> "company@pharmaos.com"
+                                    else -> "stockist@pharmaos.com"
+                                }
+                                val fallbackTitle = when (selectedRole) {
+                                    UserRole.MANUFACTURER -> "Bharat Bio-Pharma (Manufacturer)"
+                                    UserRole.PHARMA_COMPANY -> "Bharat Bio-Pharma (Company)"
+                                    else -> "Apex Pharma Distributors (Stockist)"
+                                }
+                                val fallbackSub = when (selectedRole) {
+                                    UserRole.MANUFACTURER -> "manufacturer@pharmaos.com • Ph: 9876543220"
+                                    UserRole.PHARMA_COMPANY -> "company@pharmaos.com • Ph: 9876543221"
+                                    else -> "stockist@pharmaos.com • Ph: 9876543210"
+                                }
                                 Surface(
                                     shape = RoundedCornerShape(10.dp),
                                     color = Color.White,
@@ -886,8 +1045,9 @@ fun LoginScreenContent(
                                         .fillMaxWidth()
                                         .padding(vertical = 4.dp)
                                         .clickable {
-                                            identifier = "manufacturer@pharmaos.com"
+                                            identifier = fallbackEmail
                                             password = "Password@123"
+                                            inlineErrorMessage = null
                                         }
                                 ) {
                                     Row(
@@ -901,7 +1061,7 @@ fun LoginScreenContent(
                                         ) {
                                             Box(contentAlignment = Alignment.Center) {
                                                 Icon(
-                                                    imageVector = Icons.Default.Business,
+                                                    imageVector = if (selectedRole == UserRole.STOCKIST) Icons.Default.Person else Icons.Default.Business,
                                                     contentDescription = null,
                                                     modifier = Modifier.size(18.dp),
                                                     tint = Color(0xFF047857)
@@ -911,13 +1071,13 @@ fun LoginScreenContent(
                                         Spacer(modifier = Modifier.width(10.dp))
                                         Column(modifier = Modifier.weight(1f)) {
                                             Text(
-                                                text = "Bharat Bio-Pharma (Manufacturer)",
+                                                text = fallbackTitle,
                                                 fontSize = 13.sp,
                                                 fontWeight = FontWeight.Bold,
                                                 color = Color(0xFF0F172A)
                                             )
                                             Text(
-                                                text = "manufacturer@pharmaos.com • Ph: 9876543220",
+                                                text = fallbackSub,
                                                 style = MaterialTheme.typography.bodySmall,
                                                 color = Color(0xFF64748B),
                                                 maxLines = 2,
@@ -1094,6 +1254,90 @@ fun LoginScreenContent(
             onDismiss = { showBackendConfigDialog = false },
             onSelectMode = onSelectAuthMode,
             onSaveBaseUrl = onConfigureBackendUrl
+        )
+    }
+
+    if (showDiagnosticsDialog) {
+        AlertDialog(
+            onDismissRequest = { showDiagnosticsDialog = false },
+            modifier = Modifier.testTag("login_diagnostics_dialog"),
+            title = {
+                Text(
+                    text = "Login Diagnostics",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold
+                )
+            },
+            text = {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 320.dp)
+                        .verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text(
+                        text = "AuthenticationState: ${uiState.authenticationState.shortLabel}",
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    uiState.lastErrorCode?.let { code ->
+                        Text(
+                            text = "Last Error Code: ${code.code} (${code.name})",
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            color = Color(0xFFB91C1C)
+                        )
+                    }
+                    HorizontalDivider()
+                    if (uiState.diagnosticEntries.isEmpty()) {
+                        Text(
+                            text = "No authentication events recorded yet.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    } else {
+                        uiState.diagnosticEntries.asReversed().forEach { entry ->
+                            Surface(
+                                shape = RoundedCornerShape(8.dp),
+                                color = Color(0xFFF8FAFC),
+                                border = BorderStroke(1.dp, Color(0xFFE2E8F0)),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Column(modifier = Modifier.padding(8.dp)) {
+                                    val codeTag = entry.errorCode?.let { " • ${it.code}" }.orEmpty()
+                                    val httpTag = entry.httpStatusCode?.let { " (HTTP $it)" }.orEmpty()
+                                    Text(
+                                        text = "${entry.attemptId} • ${entry.stateName}$codeTag$httpTag",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        fontWeight = FontWeight.Bold,
+                                        color = if (entry.errorCode != null) Color(0xFFB91C1C) else Color(0xFF0F172A)
+                                    )
+                                    Spacer(modifier = Modifier.height(2.dp))
+                                    Text(
+                                        text = entry.detail,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = Color(0xFF475569)
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showDiagnosticsDialog = false }) {
+                    Text("Close")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = {
+                    onClearDiagnostics()
+                }) {
+                    Text("Clear Logs")
+                }
+            }
         )
     }
 

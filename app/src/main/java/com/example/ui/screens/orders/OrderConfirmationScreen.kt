@@ -128,7 +128,7 @@ fun OrderConfirmationScreen(
                         ) {
                             Text(
                                 text = "VERIFIED",
-                                fontSize = 11.sp,
+                                style = MaterialTheme.typography.labelSmall,
                                 fontWeight = FontWeight.Bold,
                                 color = Color(0xFF1D4ED8),
                                 modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
@@ -197,7 +197,7 @@ fun OrderConfirmationScreen(
                         Spacer(modifier = Modifier.width(6.dp))
                         Text(
                             text = "GST E-Invoice dispatched to registered corporate email",
-                            fontSize = 11.sp,
+                            style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }

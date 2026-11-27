@@ -547,7 +547,7 @@ internal fun ActiveFiltersSummaryRow(
             ) {
                 Text(
                     text = strength,
-                    fontSize = 11.5.sp,
+                    style = MaterialTheme.typography.labelMedium,
                     fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
                     color = if (isSelected) Color.White else Color(0xFF334155)
                 )
@@ -578,7 +578,7 @@ private fun RemovableFilterPill(
         ) {
             Text(
                 text = label,
-                fontSize = 11.5.sp,
+                style = MaterialTheme.typography.labelMedium,
                 fontWeight = FontWeight.SemiBold,
                 color = Color(0xFF1E40AF)
             )

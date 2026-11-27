@@ -3,6 +3,7 @@ package com.example.data.repository
 import androidx.room.withTransaction
 import com.example.data.local.AppDatabase
 import com.example.data.local.DataStoreManager
+import com.example.data.local.SecureTokenStorageException
 import com.example.data.local.entity.BasketEntity
 import com.example.data.local.entity.BasketItemEntity
 import com.example.data.local.entity.BatchEntity
@@ -12,6 +13,8 @@ import com.example.data.local.entity.NotificationEntity
 import com.example.data.local.entity.OrderEntity
 import com.example.data.local.entity.OrderItemEntity
 import com.example.data.local.entity.OrderStatusHistoryEntity
+import com.example.data.local.entity.OrganizationEntity
+import com.example.data.local.entity.OrganizationMemberEntity
 import com.example.data.local.entity.ProductEntity
 import com.example.data.local.entity.ProductInventoryEntity
 import com.example.data.local.entity.ProofOfDeliveryEntity
@@ -83,6 +86,7 @@ import com.example.domain.repository.OrderDetailsWithHistory
 import com.example.domain.repository.PharmaRepository
 import com.example.domain.repository.RecallWithAffectedStock
 import com.example.domain.repository.ReturnWithDetails
+import com.example.domain.repository.SessionRestorationResult
 import com.example.domain.repository.SupplierSubtotal
 import com.example.domain.usecase.CalculateTrustScoreUseCase
 import com.example.domain.usecase.EvaluateShortageRiskUseCase
@@ -91,6 +95,7 @@ import com.example.domain.usecase.ProductQuotationUseCase
 import com.example.domain.usecase.TaxInvoiceBuilder
 import com.example.util.Formatters
 import com.example.util.PasswordHasher
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
@@ -241,7 +246,7 @@ class PharmaRepositoryImpl(
                 is NetworkResult.Success -> {
                     val payload = result.data
                     val authUserCandidate = payload.user.toAuthUser(isProductionMode = true)
-                    if (expectedRole != null && authUserCandidate.role != expectedRole) {
+                    if (expectedRole != null && authUserCandidate.role != expectedRole && !authUserCandidate.assignedRoles.contains(expectedRole)) {
                         dataStoreManager.clearAuthSession()
                         return Result.failure(
                             IllegalArgumentException("This account is registered as '${authUserCandidate.role.displayName}'. Please switch to the ${authUserCandidate.role.displayName} login tab.")
@@ -265,12 +270,36 @@ class PharmaRepositoryImpl(
                         remoteSupplierDirectory.value = emptyMap()
                         latestCommittedBasket.value = null
                     }
-                    dataStoreManager.setAuthTokens(payload.accessToken, payload.refreshToken)
-                    val cachedUserId = upsertCachedUser(payload.user.toUserEntityCache(isProductionMode = true))
-                    dataStoreManager.setLoggedInUserId(cachedUserId)
-                    val authUser = authUserCandidate.copy(id = cachedUserId)
-                    dataStoreManager.setOnboardingCompleted(true)
-                    Result.success(authUser)
+                    try {
+                        dataStoreManager.setAuthTokens(payload.accessToken, payload.refreshToken)
+                        val cachedUserId = upsertCachedUser(payload.user.toUserEntityCache(isProductionMode = true))
+                        dataStoreManager.setLoggedInUserId(cachedUserId)
+                        dataStoreManager.setWelcomeCompleted(true)
+                        val authUser = authUserCandidate.copy(id = cachedUserId)
+                        val remote = pharmaRemoteDataSource
+                        if (authUser.role == UserRole.ADMIN) {
+                            dataStoreManager.setAccountOnboardingCompleted(cachedUserId, true)
+                        } else if (remote != null && isBackendConfigured()) {
+                            val complianceRes = runCatching { remote.fetchComplianceVerification(cachedUserId) }.getOrNull()
+                            if (complianceRes is NetworkResult.Success) {
+                                complianceDao.insertOrUpdateCompliance(complianceRes.data.toEntity())
+                                dataStoreManager.setAccountOnboardingCompleted(cachedUserId, true)
+                            } else if (complianceDao.getComplianceByUserId(cachedUserId) != null) {
+                                dataStoreManager.setAccountOnboardingCompleted(cachedUserId, true)
+                            }
+                        }
+                        Result.success(authUser)
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        runCatching { dataStoreManager.clearAuthSession() }
+                        Result.failure(
+                            IllegalStateException(
+                                "Sign-in verified, but secure local session setup failed (${e.message ?: "storage error"}). Please try signing in again.",
+                                e
+                            )
+                        )
+                    }
                 }
                 else -> Result.failure(result.toException())
             }
@@ -284,33 +313,50 @@ class PharmaRepositoryImpl(
         expectedRole: UserRole?
     ): Result<AuthUser> {
         val trimmed = email.trim()
+        val normalizedPhoneDigits = trimmed
+            .removePrefix("+91")
+            .replace(" ", "")
+            .replace("-", "")
+        val isPhoneLike = normalizedPhoneDigits.matches("^\\d{10}$".toRegex())
+
         var user = userDao.getUserByIdentifier(trimmed)
             ?: userDao.getUserByEmail(trimmed.lowercase())
+            ?: if (isPhoneLike) {
+                userDao.getUserByIdentifier(normalizedPhoneDigits)
+                    ?: userDao.getUserByIdentifier("+91$normalizedPhoneDigits")
+            } else {
+                null
+            }
 
         // Development Local Mode only: auto-provision testing manufacturer account
         if (user == null && (
             trimmed.equals("manufacturer@pharmaos.com", ignoreCase = true) ||
-            trimmed == "9876543220" ||
-            trimmed.contains("manufacturer", ignoreCase = true) ||
-            expectedRole == UserRole.MANUFACTURER
+            normalizedPhoneDigits == "9876543220" ||
+            trimmed.contains("manufacturer", ignoreCase = true)
         )) {
             user = ensureDefaultManufacturerUser()
         }
 
-        // Development Local Mode only: fallback for stockist default account
+        // Development Local Mode only: auto-provision testing stockist account
         if (user == null && (
+            trimmed.equals("stockist@pharmaos.com", ignoreCase = true) ||
             trimmed.equals("rohan.sharma@apexpharma.com", ignoreCase = true) ||
-            trimmed == "+919876543210" ||
-            expectedRole == UserRole.STOCKIST
+            normalizedPhoneDigits == "9876543210" ||
+            trimmed.contains("stockist", ignoreCase = true)
         )) {
-            user = ensureDefaultStockistUser()
+            user = ensureDefaultStockistUser(setAsLoggedIn = false)
         }
 
         if (user == null) {
             return Result.failure(IllegalArgumentException("No account registered with '$trimmed'."))
         }
 
-        if (expectedRole != null && user.role != expectedRole.name) {
+        val assignedRoles = com.example.domain.model.RolePermissionMatrix.parseRolesCsv(
+            csv = user.assignedRolesCsv,
+            fallback = UserRole.parseStrict(user.role),
+            isProductionMode = false
+        )
+        if (expectedRole != null && user.role != expectedRole.name && !assignedRoles.contains(expectedRole)) {
             val actualRoleName = try { UserRole.valueOf(user.role).displayName } catch (_: Exception) { user.role }
             return Result.failure(IllegalArgumentException("This account is registered as '$actualRoleName'. Please switch to the $actualRoleName login page."))
         }
@@ -319,30 +365,30 @@ class PharmaRepositoryImpl(
             return Result.failure(IllegalStateException("This account is currently suspended. Please contact administrator."))
         }
 
-        val isValid = PasswordHasher.verifyPassword(password, user.passwordHash, user.passwordSalt)
-            || (user.role == UserRole.MANUFACTURER.name && (password == "Password@123" || password == "PharmaPass123"))
+        val isSeededDevTestAccount =
+            user.email.equals("manufacturer@pharmaos.com", ignoreCase = true) ||
+                user.email.equals("stockist@pharmaos.com", ignoreCase = true) ||
+                user.email.equals("rohan.sharma@apexpharma.com", ignoreCase = true) ||
+                user.email.equals("company@pharmaos.com", ignoreCase = true) ||
+                user.email.equals("dual.lead@pharmaos.com", ignoreCase = true)
+
+        val isValid = PasswordHasher.verifyPassword(password, user.passwordHash, user.passwordSalt) ||
+            (isSeededDevTestAccount && (
+                password == "Password@123" ||
+                    (user.role == UserRole.MANUFACTURER.name && password == "PharmaPass123") ||
+                    (user.role == UserRole.STOCKIST.name && password == "Stockist@123")
+                ))
         if (!isValid) {
             return Result.failure(IllegalArgumentException("Incorrect password entered."))
         }
 
         dataStoreManager.setLoggedInUserId(user.id)
-        dataStoreManager.setOnboardingCompleted(true)
-        val role = try { UserRole.valueOf(user.role) } catch (_: Exception) { UserRole.STOCKIST }
-        val status = try { AccountStatus.valueOf(user.status) } catch (_: Exception) { AccountStatus.ACTIVE }
-
-        return Result.success(
-            AuthUser(
-                id = user.id,
-                fullName = user.fullName,
-                businessName = user.businessName,
-                email = user.email,
-                phone = user.phone,
-                gstin = user.gstin,
-                address = user.address,
-                role = role,
-                status = status
-            )
-        )
+        dataStoreManager.setWelcomeCompleted(true)
+        val hasCompliance = complianceDao.getComplianceByUserId(user.id) != null
+        if (isSeededDevTestAccount || user.role == UserRole.ADMIN.name || hasCompliance) {
+            dataStoreManager.setAccountOnboardingCompleted(user.id, true)
+        }
+        return Result.success(user.toDomainAuthUser(isProductionMode = false))
     }
 
     override suspend fun postApiAuthGoogle(
@@ -379,25 +425,10 @@ class PharmaRepositoryImpl(
                 return Result.failure(IllegalStateException("This account is currently suspended. Please contact administrator."))
             }
             dataStoreManager.setLoggedInUserId(existing.id)
-            val existingRole = try { UserRole.valueOf(existing.role) } catch (_: Exception) { UserRole.STOCKIST }
-            val status = try { AccountStatus.valueOf(existing.status) } catch (_: Exception) { AccountStatus.ACTIVE }
-            return Result.success(
-                AuthUser(
-                    id = existing.id,
-                    fullName = existing.fullName,
-                    businessName = existing.businessName,
-                    email = existing.email,
-                    phone = existing.phone,
-                    gstin = existing.gstin,
-                    address = existing.address,
-                    role = existingRole,
-                    status = status
-                )
-            )
+            return Result.success(existing.toDomainAuthUser(isProductionMode = false))
         }
 
-        val userCount = userDao.getUserCount()
-        val effectiveRole = if (userCount == 0) UserRole.ADMIN else role
+        val effectiveRole = role
         val derivedHandle = trimmedEmail.substringBefore("@").replace(".", " ").replace("_", " ").split(" ")
             .filter { it.isNotBlank() }
             .joinToString(" ") { it.replaceFirstChar { c -> c.uppercase() } }
@@ -409,6 +440,12 @@ class PharmaRepositoryImpl(
             UserRole.STOCKIST -> "$safeName Pharma Distributors"
         }
 
+        val defaultOrgType = com.example.domain.model.OrganizationType.fromString(
+            raw = null,
+            fallbackRole = effectiveRole,
+            isProductionMode = false
+        )
+        val defaultPerms = com.example.domain.model.RolePermissionMatrix.defaultPermissionsFor(effectiveRole)
         val hashResult = PasswordHasher.hashPassword("GoogleAuth_${System.currentTimeMillis()}")
         val entity = UserEntity(
             fullName = safeName,
@@ -420,7 +457,11 @@ class PharmaRepositoryImpl(
             passwordHash = hashResult.hashHex,
             passwordSalt = hashResult.saltHex,
             role = effectiveRole.name,
-            status = AccountStatus.ACTIVE.name
+            status = AccountStatus.ACTIVE.name,
+            organizationType = defaultOrgType.name,
+            organizationName = enterpriseName,
+            assignedRolesCsv = effectiveRole.name,
+            permissionsCsv = com.example.domain.model.PharmaPermission.toCsv(defaultPerms)
         )
 
         val id = userDao.insertUser(entity)
@@ -437,19 +478,7 @@ class PharmaRepositoryImpl(
             )
         }
 
-        return Result.success(
-            AuthUser(
-                id = id,
-                fullName = entity.fullName,
-                businessName = entity.businessName,
-                email = entity.email,
-                phone = entity.phone,
-                gstin = entity.gstin,
-                address = entity.address,
-                role = effectiveRole,
-                status = AccountStatus.ACTIVE
-            )
-        )
+        return Result.success(entity.copy(id = id).toDomainAuthUser(isProductionMode = false))
     }
 
     override suspend fun postApiAuthRegister(
@@ -462,40 +491,105 @@ class PharmaRepositoryImpl(
         password: String,
         role: UserRole
     ): Result<AuthUser> {
+        if (role == UserRole.ADMIN) {
+            return Result.failure(
+                SecurityException("Administrator accounts cannot be self-registered. Contact platform administration.")
+            )
+        }
+        val cleanFullName = fullName.trim()
+        val cleanBusiness = businessName.trim()
+        val cleanEmail = email.trim().lowercase()
+        val cleanPhone = phone.trim().removePrefix("+91").replace(" ", "").replace("-", "")
+        val cleanAddress = address.trim().ifBlank { "Licensed B2B Commercial Premises" }
+        val cleanGstin = gstin?.trim()?.uppercase()?.ifBlank { null }
+
+        if (cleanFullName.isBlank() || cleanBusiness.isBlank() || cleanEmail.isBlank() || cleanPhone.isBlank() || password.length < 8) {
+            return Result.failure(IllegalArgumentException("Please provide valid registration details and a password of at least 8 characters."))
+        }
+
         if (isProductionHttpMode()) {
-            if (role == UserRole.ADMIN) {
-                return Result.failure(
-                    SecurityException("Administrator accounts cannot be self-registered. Contact platform administration.")
-                )
-            }
             val remote = authRemoteDataSource
                 ?: return Result.failure(IllegalStateException("HTTP registration service is not initialized."))
             val request = RegisterRequestDto(
-                fullName = fullName.trim(),
-                businessName = businessName.trim(),
-                email = email.trim().lowercase(),
-                phone = phone.trim(),
-                gstin = gstin?.trim()?.ifBlank { null },
-                address = address.trim(),
+                fullName = cleanFullName,
+                businessName = cleanBusiness,
+                email = cleanEmail,
+                phone = cleanPhone,
+                gstin = cleanGstin,
+                address = cleanAddress,
                 password = password,
                 role = role.name
             )
-            return when (val result = remote.register(request)) {
-                is NetworkResult.Success -> {
-                    val payload = result.data
-                    dataStoreManager.setAuthTokens(payload.accessToken, payload.refreshToken)
-                    val cachedUserId = upsertCachedUser(payload.user.toUserEntityCache(isProductionMode = true), isProductionMode = true)
-                    dataStoreManager.setLoggedInUserId(cachedUserId)
-                    val registeredUser = payload.user.toAuthUser(isProductionMode = true).copy(id = cachedUserId)
-                    if (registeredUser.role == UserRole.ADMIN) {
-                        dataStoreManager.setOnboardingCompleted(true)
+            return try {
+                when (val result = remote.register(request)) {
+                    is NetworkResult.Success -> {
+                        val payload = result.data
+                        if (payload.accessToken.isBlank() || payload.user.id <= 0L) {
+                            return Result.failure(
+                                IllegalStateException("Registration response from server was incomplete. Please sign in or contact support.")
+                            )
+                        }
+                        val registeredCandidate = payload.user.toAuthUser(isProductionMode = true)
+                        try {
+                            val previousUserId = dataStoreManager.loggedInUserIdFlow.firstOrNull()
+                            if (previousUserId != null && previousUserId != payload.user.id) {
+                                db.withTransaction {
+                                    db.workspaceManagementDao().clearAllPrivateSessionCaches()
+                                }
+                                remoteSupplierDirectory.value = emptyMap()
+                                latestCommittedBasket.value = null
+                            }
+                            dataStoreManager.setAuthTokens(payload.accessToken, payload.refreshToken)
+                            val cachedUserId = upsertCachedUser(
+                                payload.user.toUserEntityCache(isProductionMode = true),
+                                isProductionMode = true
+                            )
+                            dataStoreManager.setLoggedInUserId(cachedUserId)
+                            dataStoreManager.setWelcomeCompleted(true)
+                            // Never mark compliance/onboarding completed for newly registered non-admin accounts.
+                            val registeredUser = registeredCandidate.copy(id = cachedUserId)
+                            if (registeredUser.role == UserRole.ADMIN) {
+                                dataStoreManager.setAccountOnboardingCompleted(cachedUserId, true)
+                            }
+                            Result.success(registeredUser)
+                        } catch (e: CancellationException) {
+                            throw e
+                        } catch (localErr: SecureTokenStorageException) {
+                            runCatching { dataStoreManager.clearAuthSession() }
+                            Result.failure(
+                                IllegalStateException(
+                                    "Your account was created on the server, but secure token encryption failed on this device. Please sign in without registering again.",
+                                    localErr
+                                )
+                            )
+                        } catch (localErr: Exception) {
+                            runCatching { dataStoreManager.clearAuthSession() }
+                            Result.failure(
+                                IllegalStateException(
+                                    "Your account was created on the server, but local session initialization failed (${localErr.message ?: "storage error"}). Please sign in without registering again.",
+                                    localErr
+                                )
+                            )
+                        }
                     }
-                    Result.success(registeredUser)
+                    else -> Result.failure(result.toException())
                 }
-                else -> Result.failure(result.toException())
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Result.failure(IllegalStateException(e.message ?: "Unable to complete registration.", e))
             }
         }
-        return registerLocallyDevMode(fullName, businessName, email, phone, gstin, address, password, role)
+        return registerLocallyDevMode(
+            fullName = cleanFullName,
+            businessName = cleanBusiness,
+            email = cleanEmail,
+            phone = cleanPhone,
+            gstin = cleanGstin,
+            address = cleanAddress,
+            password = password,
+            role = role
+        )
     }
 
     private suspend fun registerLocallyDevMode(
@@ -508,58 +602,211 @@ class PharmaRepositoryImpl(
         password: String,
         role: UserRole
     ): Result<AuthUser> {
-        val existing = userDao.getUserByEmail(email.trim().lowercase())
-        if (existing != null) {
-            return Result.failure(IllegalArgumentException("An account with email $email already exists."))
-        }
+        return try {
+            val normalizedEmail = email.trim().lowercase()
+            val normalizedPhone = phone.trim().removePrefix("+91").replace(" ", "").replace("-", "")
 
-        val userCount = userDao.getUserCount()
-        val effectiveRole = if (userCount == 0) UserRole.ADMIN else role
-
-        val hashResult = PasswordHasher.hashPassword(password)
-        val entity = UserEntity(
-            fullName = fullName.trim(),
-            businessName = businessName.trim(),
-            email = email.trim().lowercase(),
-            phone = phone.trim(),
-            gstin = gstin?.trim()?.ifBlank { null },
-            address = address.trim(),
-            passwordHash = hashResult.hashHex,
-            passwordSalt = hashResult.saltHex,
-            role = effectiveRole.name,
-            status = AccountStatus.ACTIVE.name
-        )
-
-        val id = userDao.insertUser(entity)
-        dataStoreManager.setLoggedInUserId(id)
-        if (effectiveRole == UserRole.ADMIN) {
-            dataStoreManager.setOnboardingCompleted(true)
-        }
-
-        if (effectiveRole.isSupplier) {
-            analyticsDao.insertOrUpdateSupplierSettings(
-                SupplierSettingsEntity(
-                    supplierId = id,
-                    deliveryCharge = 250.0,
-                    freeDeliveryThreshold = 5000.0,
-                    averageLeadTimeDays = 3.0
+            if (userDao.getUserByEmail(normalizedEmail) != null) {
+                return Result.failure(IllegalArgumentException("An account with email $normalizedEmail already exists."))
+            }
+            if (normalizedPhone.isNotBlank() && (
+                    userDao.getUserByIdentifier(normalizedPhone) != null ||
+                    userDao.getUserByIdentifier("+91$normalizedPhone") != null
                 )
+            ) {
+                return Result.failure(IllegalArgumentException("An account with mobile number $normalizedPhone already exists."))
+            }
+
+            // Never silently promote the first registered user to ADMIN.
+            val effectiveRole = role
+            val orgType = com.example.domain.model.OrganizationType.fromString(
+                raw = null,
+                fallbackRole = effectiveRole,
+                isProductionMode = false
+            )
+            val defaultPerms = com.example.domain.model.RolePermissionMatrix.defaultPermissionsFor(effectiveRole)
+            val permsCsv = com.example.domain.model.PharmaPermission.toCsv(defaultPerms)
+            val hashResult = PasswordHasher.hashPassword(password)
+            val workspaceDao = db.workspaceManagementDao()
+
+            val createdEntity = db.withTransaction {
+                // Preserve shared PHARMACEUTICAL_ORGANIZATION for Manufacturer & Company accounts;
+                // create distinct STOCKIST organization for Stockist accounts.
+                val resolvedOrg = if (orgType == com.example.domain.model.OrganizationType.PHARMACEUTICAL_ORGANIZATION) {
+                    val existingPharmaOrgs = workspaceDao.getOrganizationsByType(orgType.name)
+                    existingPharmaOrgs.firstOrNull { org ->
+                        org.name.equals(businessName.trim(), ignoreCase = true) ||
+                            (!gstin.isNullOrBlank() && org.gstin.equals(gstin.trim(), ignoreCase = true))
+                    } ?: run {
+                        val newOrg = OrganizationEntity(
+                            name = businessName.trim(),
+                            type = orgType.name,
+                            gstin = gstin?.trim()?.ifBlank { null },
+                            drugLicenseNumber = null,
+                            address = address.trim(),
+                            isActive = true
+                        )
+                        val orgId = workspaceDao.upsertOrganization(newOrg)
+                        newOrg.copy(id = orgId)
+                    }
+                } else {
+                    val newOrg = OrganizationEntity(
+                        name = businessName.trim(),
+                        type = orgType.name,
+                        gstin = gstin?.trim()?.ifBlank { null },
+                        drugLicenseNumber = null,
+                        address = address.trim(),
+                        isActive = true
+                    )
+                    val orgId = workspaceDao.upsertOrganization(newOrg)
+                    newOrg.copy(id = orgId)
+                }
+
+                val entity = UserEntity(
+                    fullName = fullName.trim(),
+                    businessName = businessName.trim(),
+                    email = normalizedEmail,
+                    phone = normalizedPhone,
+                    gstin = gstin?.trim()?.ifBlank { null },
+                    address = address.trim(),
+                    passwordHash = hashResult.hashHex,
+                    passwordSalt = hashResult.saltHex,
+                    role = effectiveRole.name,
+                    status = AccountStatus.ACTIVE.name,
+                    organizationId = resolvedOrg.id,
+                    organizationType = orgType.name,
+                    organizationName = resolvedOrg.name,
+                    assignedRolesCsv = effectiveRole.name,
+                    permissionsCsv = permsCsv
+                )
+
+                val insertedId = userDao.insertUser(entity)
+                workspaceDao.upsertMember(
+                    OrganizationMemberEntity(
+                        organizationId = resolvedOrg.id,
+                        userId = insertedId,
+                        fullName = fullName.trim(),
+                        email = normalizedEmail,
+                        rolesCsv = effectiveRole.name,
+                        permissionsCsv = permsCsv,
+                        isActive = true
+                    )
+                )
+
+                if (effectiveRole.isSupplier) {
+                    analyticsDao.insertOrUpdateSupplierSettings(
+                        SupplierSettingsEntity(
+                            supplierId = insertedId,
+                            deliveryCharge = 250.0,
+                            freeDeliveryThreshold = 5000.0,
+                            averageLeadTimeDays = 3.0
+                        )
+                    )
+                }
+
+                entity.copy(id = insertedId)
+            }
+
+            try {
+                dataStoreManager.setLoggedInUserId(createdEntity.id)
+                dataStoreManager.setWelcomeCompleted(true)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (sessionErr: Exception) {
+                runCatching { dataStoreManager.clearAuthSession() }
+                return Result.failure(
+                    IllegalStateException(
+                        "Account created locally, but session initialization failed (${sessionErr.message ?: "preferences error"}). Please sign in to continue.",
+                        sessionErr
+                    )
+                )
+            }
+
+            Result.success(createdEntity.toDomainAuthUser(isProductionMode = false))
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: android.database.sqlite.SQLiteConstraintException) {
+            Result.failure(IllegalArgumentException("An account with these credentials already exists.", e))
+        } catch (e: Exception) {
+            Result.failure(IllegalStateException(e.message ?: "Unable to complete account registration.", e))
+        }
+    }
+
+    override suspend fun provisionAdminAccountForDev(
+        fullName: String,
+        businessName: String,
+        email: String,
+        phone: String,
+        password: String,
+        gstin: String?,
+        address: String
+    ): Result<AuthUser> {
+        if (isProductionHttpMode()) {
+            return Result.failure(
+                SecurityException("Administrator provisioning is restricted to backend-authorized operations in production.")
             )
         }
-
-        return Result.success(
-            AuthUser(
-                id = id,
-                fullName = entity.fullName,
-                businessName = entity.businessName,
-                email = entity.email,
-                phone = entity.phone,
-                gstin = entity.gstin,
-                address = entity.address,
-                role = effectiveRole,
-                status = AccountStatus.ACTIVE
-            )
-        )
+        return try {
+            val normalizedEmail = email.trim().lowercase()
+            val normalizedPhone = phone.trim().removePrefix("+91").replace(" ", "").replace("-", "")
+            val existing = userDao.getUserByEmail(normalizedEmail)
+            if (existing != null) {
+                return Result.failure(IllegalArgumentException("An account with email $normalizedEmail already exists."))
+            }
+            val adminPerms = com.example.domain.model.RolePermissionMatrix.adminPermissions
+            val permsCsv = com.example.domain.model.PharmaPermission.toCsv(adminPerms)
+            val hashResult = PasswordHasher.hashPassword(password)
+            val workspaceDao = db.workspaceManagementDao()
+            val entity = db.withTransaction {
+                val orgId = workspaceDao.upsertOrganization(
+                    OrganizationEntity(
+                        name = businessName.trim(),
+                        type = com.example.domain.model.OrganizationType.PHARMACEUTICAL_ORGANIZATION.name,
+                        gstin = gstin?.trim()?.ifBlank { null },
+                        drugLicenseNumber = null,
+                        address = address.trim(),
+                        isActive = true
+                    )
+                )
+                val userEntity = UserEntity(
+                    fullName = fullName.trim(),
+                    businessName = businessName.trim(),
+                    email = normalizedEmail,
+                    phone = normalizedPhone,
+                    gstin = gstin?.trim()?.ifBlank { null },
+                    address = address.trim(),
+                    passwordHash = hashResult.hashHex,
+                    passwordSalt = hashResult.saltHex,
+                    role = UserRole.ADMIN.name,
+                    status = AccountStatus.ACTIVE.name,
+                    organizationId = orgId,
+                    organizationType = com.example.domain.model.OrganizationType.PHARMACEUTICAL_ORGANIZATION.name,
+                    organizationName = businessName.trim(),
+                    assignedRolesCsv = UserRole.ADMIN.name,
+                    permissionsCsv = permsCsv
+                )
+                val id = userDao.insertUser(userEntity)
+                workspaceDao.upsertMember(
+                    OrganizationMemberEntity(
+                        organizationId = orgId,
+                        userId = id,
+                        fullName = fullName.trim(),
+                        email = normalizedEmail,
+                        rolesCsv = UserRole.ADMIN.name,
+                        permissionsCsv = permsCsv,
+                        isActive = true
+                    )
+                )
+                userEntity.copy(id = id)
+            }
+            dataStoreManager.setLoggedInUserId(entity.id)
+            dataStoreManager.setAccountOnboardingCompleted(entity.id, true)
+            Result.success(entity.toDomainAuthUser(isProductionMode = false))
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
     }
 
     private fun UserEntity.toDomainAuthUser(isProductionMode: Boolean = false): AuthUser {
@@ -1262,30 +1509,76 @@ class PharmaRepositoryImpl(
         return ensureDefaultManufacturerUser()
     }
 
+    override suspend fun ensureDefaultStockistUser(): UserEntity {
+        return ensureDefaultStockistUser(setAsLoggedIn = false)
+    }
+
     private suspend fun ensureDefaultStockistUser(setAsLoggedIn: Boolean = false): UserEntity {
-        val existingStockist = userDao.getAllUsers().firstOrNull { it.role == UserRole.STOCKIST.name }
-        if (existingStockist != null) {
+        val existingPreferred = userDao.getUserByEmail("stockist@pharmaos.com")
+            ?: userDao.getAllUsers().firstOrNull { it.role == UserRole.STOCKIST.name }
+        if (existingPreferred != null) {
             if (setAsLoggedIn) {
-                dataStoreManager.setLoggedInUserId(existingStockist.id)
+                dataStoreManager.setLoggedInUserId(existingPreferred.id)
             }
-            return existingStockist
+            return existingPreferred
         }
-        val hash = PasswordHasher.hashPassword("Stockist@123")
+        val hash = PasswordHasher.hashPassword("Password@123")
         val newUser = UserEntity(
             fullName = "Rohan Sharma",
             businessName = "Apex Pharma Distributors",
-            email = "rohan.sharma@apexpharma.com",
-            phone = "+919876543210",
-            gstin = "27ABCDE1234F1Z5",
-            address = "Shop 12, Medical Market, Mumbai, MH",
+            email = "stockist@pharmaos.com",
+            phone = "9876543210",
+            gstin = "27AABCA9988K1Z2",
+            address = "Shop 12, Medical Market, Andheri East, Mumbai, MH",
             passwordHash = hash.hashHex,
             passwordSalt = hash.saltHex,
             role = UserRole.STOCKIST.name,
-            status = AccountStatus.ACTIVE.name
+            status = AccountStatus.ACTIVE.name,
+            emailVerified = true,
+            phoneVerified = true,
+            organizationId = 2001L,
+            organizationType = com.example.domain.model.OrganizationType.STOCKIST.name,
+            organizationName = "Apex Pharma Distributors",
+            assignedRolesCsv = UserRole.STOCKIST.name,
+            permissionsCsv = com.example.domain.model.PharmaPermission.toCsv(
+                com.example.domain.model.RolePermissionMatrix.stockistPermissions
+            )
         )
-        val id = userDao.insertUser(newUser)
-        if (setAsLoggedIn) {
-            dataStoreManager.setLoggedInUserId(id)
+        val id = try {
+            userDao.insertUser(newUser)
+        } catch (_: Exception) {
+            userDao.getUserByEmail("stockist@pharmaos.com")?.id
+                ?: userDao.getAllUsers().firstOrNull { it.role == UserRole.STOCKIST.name }?.id
+                ?: 0L
+        }
+        if (id > 0L) {
+            try {
+                if (complianceDao.getComplianceByUserId(id) == null) {
+                    complianceDao.insertOrUpdateCompliance(
+                        com.example.data.local.entity.ComplianceVerificationEntity(
+                            userId = id,
+                            gstin = "27AABCA9988K1Z2",
+                            isGstinVerified = true,
+                            drugLicenseNumber = "MH-MUM-20B-2026-4410",
+                            drugLicenseIssueDate = "01/01/2023",
+                            drugLicenseExpiryDate = "31/12/2028",
+                            drugLicenseDocUri = null,
+                            whoGmpCertificateNumber = null,
+                            whoGmpIssueDate = null,
+                            whoGmpExpiryDate = null,
+                            whoGmpDocUri = null,
+                            isWhoGmpApplicable = false,
+                            status = "VERIFIED",
+                            verifiedAtEpochMillis = System.currentTimeMillis()
+                        )
+                    )
+                }
+            } catch (_: Exception) {
+            }
+            if (setAsLoggedIn) {
+                dataStoreManager.setLoggedInUserId(id)
+                dataStoreManager.setAccountOnboardingCompleted(id, true)
+            }
         }
         return newUser.copy(id = id)
     }
@@ -1350,57 +1643,89 @@ class PharmaRepositoryImpl(
         whoGmpDocUri: String?,
         isWhoGmpApplicable: Boolean
     ): Result<Unit> {
+        if (userId <= 0L) {
+            return Result.failure(SecurityException("An authenticated account is required to submit compliance verification."))
+        }
+        val cleanGstin = gstin.trim().uppercase()
+        val cleanDlNumber = drugLicenseNumber.trim().uppercase()
+        val cleanDlIssue = drugLicenseIssueDate.trim()
+        val cleanDlExpiry = drugLicenseExpiryDate.trim()
+        if (!cleanGstin.matches("^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$".toRegex())) {
+            return Result.failure(IllegalArgumentException("Please enter a valid 15-character GSTIN."))
+        }
+        if (cleanDlNumber.isBlank()) {
+            return Result.failure(IllegalArgumentException("Drug License number is required."))
+        }
+        if (cleanDlIssue.isBlank() || cleanDlExpiry.isBlank()) {
+            return Result.failure(IllegalArgumentException("Drug License issue and expiry dates are required."))
+        }
+        val cleanGmpNumber = if (isWhoGmpApplicable) whoGmpCertificateNumber?.trim()?.uppercase()?.ifBlank { null } else null
+        val cleanGmpIssue = if (isWhoGmpApplicable) whoGmpIssueDate?.trim()?.ifBlank { null } else null
+        val cleanGmpExpiry = if (isWhoGmpApplicable) whoGmpExpiryDate?.trim()?.ifBlank { null } else null
+        if (isWhoGmpApplicable && (cleanGmpNumber == null || cleanGmpIssue == null || cleanGmpExpiry == null)) {
+            return Result.failure(IllegalArgumentException("WHO-GMP certificate number, issue date, and expiry date are required for manufacturers."))
+        }
+
         if (isProductionHttpMode()) {
             val remote = pharmaRemoteDataSource
                 ?: return Result.failure(IllegalStateException("Remote API is not initialized."))
             val dto = ComplianceVerificationDto(
                 userId = userId,
-                gstin = gstin,
-                isGstinVerified = true,
-                drugLicenseNumber = drugLicenseNumber,
-                drugLicenseIssueDate = drugLicenseIssueDate,
-                drugLicenseExpiryDate = drugLicenseExpiryDate,
-                drugLicenseDocUri = drugLicenseDocUri,
-                whoGmpCertificateNumber = whoGmpCertificateNumber,
-                whoGmpIssueDate = whoGmpIssueDate,
-                whoGmpExpiryDate = whoGmpExpiryDate,
-                whoGmpDocUri = whoGmpDocUri,
-                isWhoGmpApplicable = isWhoGmpApplicable
+                gstin = cleanGstin,
+                // Never fabricate GSTIN verification on the client in production; backend determines verification status.
+                isGstinVerified = false,
+                drugLicenseNumber = cleanDlNumber,
+                drugLicenseIssueDate = cleanDlIssue,
+                drugLicenseExpiryDate = cleanDlExpiry,
+                drugLicenseDocUri = drugLicenseDocUri?.takeIf { it.isNotBlank() },
+                whoGmpCertificateNumber = cleanGmpNumber,
+                whoGmpIssueDate = cleanGmpIssue,
+                whoGmpExpiryDate = cleanGmpExpiry,
+                whoGmpDocUri = if (isWhoGmpApplicable) whoGmpDocUri?.takeIf { it.isNotBlank() } else null,
+                isWhoGmpApplicable = isWhoGmpApplicable,
+                status = "SUBMITTED"
             )
-            return when (val res = remote.upsertComplianceVerification(dto)) {
-                is NetworkResult.Success -> {
-                    complianceDao.insertOrUpdateCompliance(res.data.toEntity())
-                    userDao.getUserById(userId)?.let { userDao.updateUser(it.copy(gstin = gstin)) }
-                    dataStoreManager.setOnboardingCompleted(true)
-                    Result.success(Unit)
+            return try {
+                when (val res = remote.upsertComplianceVerification(dto)) {
+                    is NetworkResult.Success -> {
+                        complianceDao.insertOrUpdateCompliance(res.data.toEntity())
+                        userDao.getUserById(userId)?.let { userDao.updateUser(it.copy(gstin = cleanGstin)) }
+                        dataStoreManager.setAccountOnboardingCompleted(userId, true)
+                        Result.success(Unit)
+                    }
+                    else -> Result.failure(res.toException())
                 }
-                else -> Result.failure(res.toException())
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Result.failure(e)
             }
         }
         return try {
+            val user = userDao.getUserById(userId)
+                ?: return Result.failure(IllegalStateException("Authenticated user account was not found."))
             val entity = com.example.data.local.entity.ComplianceVerificationEntity(
                 userId = userId,
-                gstin = gstin,
+                gstin = cleanGstin,
                 isGstinVerified = true,
-                drugLicenseNumber = drugLicenseNumber,
-                drugLicenseIssueDate = drugLicenseIssueDate,
-                drugLicenseExpiryDate = drugLicenseExpiryDate,
-                drugLicenseDocUri = drugLicenseDocUri,
-                whoGmpCertificateNumber = whoGmpCertificateNumber,
-                whoGmpIssueDate = whoGmpIssueDate,
-                whoGmpExpiryDate = whoGmpExpiryDate,
-                whoGmpDocUri = whoGmpDocUri,
+                drugLicenseNumber = cleanDlNumber,
+                drugLicenseIssueDate = cleanDlIssue,
+                drugLicenseExpiryDate = cleanDlExpiry,
+                drugLicenseDocUri = drugLicenseDocUri?.takeIf { it.isNotBlank() },
+                whoGmpCertificateNumber = cleanGmpNumber,
+                whoGmpIssueDate = cleanGmpIssue,
+                whoGmpExpiryDate = cleanGmpExpiry,
+                whoGmpDocUri = if (isWhoGmpApplicable) whoGmpDocUri?.takeIf { it.isNotBlank() } else null,
                 isWhoGmpApplicable = isWhoGmpApplicable,
                 status = "VERIFIED",
                 verifiedAtEpochMillis = System.currentTimeMillis()
             )
             complianceDao.insertOrUpdateCompliance(entity)
-            val user = userDao.getUserById(userId)
-            if (user != null) {
-                userDao.updateUser(user.copy(gstin = gstin))
-            }
-            dataStoreManager.setOnboardingCompleted(true)
+            userDao.updateUser(user.copy(gstin = cleanGstin))
+            dataStoreManager.setAccountOnboardingCompleted(userId, true)
             Result.success(Unit)
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             Result.failure(e)
         }
@@ -1414,18 +1739,99 @@ class PharmaRepositoryImpl(
 
     override suspend fun isOnboardingCompleted(): Boolean = dataStoreManager.isOnboardingCompletedFlow.first()
 
+    override suspend fun isWelcomeCompleted(): Boolean = dataStoreManager.isWelcomeCompletedFlow.first()
+
+    override suspend fun setWelcomeCompleted(completed: Boolean) {
+        dataStoreManager.setWelcomeCompleted(completed)
+    }
+
+    override suspend fun isAccountOnboardingCompleted(userId: Long): Boolean {
+        if (userId <= 0L) return false
+        val completedIds = dataStoreManager.completedOnboardingUserIdsFlow.first()
+        if (completedIds.contains(userId)) return true
+        val existingCompliance = runCatching { complianceDao.getComplianceByUserId(userId) }.getOrNull()
+        return existingCompliance != null
+    }
+
+    override suspend fun requiresComplianceForUser(user: AuthUser): Boolean {
+        if (user.role == UserRole.ADMIN) return false
+        return !isAccountOnboardingCompleted(user.id)
+    }
+
     override suspend fun setOnboardingCompleted(completed: Boolean) {
         dataStoreManager.setOnboardingCompleted(completed)
     }
 
+    override suspend fun resolveSessionRestoration(): SessionRestorationResult {
+        return try {
+            val isProd = isProductionHttpMode()
+            val savedUserId = dataStoreManager.loggedInUserIdFlow.firstOrNull()
+            val welcomeCompleted = dataStoreManager.isWelcomeCompletedFlow.first()
+
+            if (savedUserId == null || savedUserId <= 0L) {
+                return if (welcomeCompleted) {
+                    SessionRestorationResult.Login
+                } else {
+                    SessionRestorationResult.Welcome
+                }
+            }
+
+            if (isProd) {
+                val accessToken = runCatching { dataStoreManager.getAccessToken() }.getOrNull()
+                if (accessToken.isNullOrBlank()) {
+                    // Token missing or scrubbed due to Keystore invalidation/corruption — recover cleanly to Login without wiping app data
+                    dataStoreManager.clearAuthSession()
+                    return SessionRestorationResult.Login
+                }
+            }
+
+            val currentUser = getApiUsersMe()
+            if (currentUser == null) {
+                // Stale/orphaned userId in DataStore (e.g. account removed or cache missing while backend unreachable)
+                dataStoreManager.clearAuthSession()
+                return SessionRestorationResult.Login
+            }
+
+            if (currentUser.status != AccountStatus.ACTIVE) {
+                val reason = if (currentUser.status == AccountStatus.SUSPENDED) {
+                    "Your account is currently suspended. Contact your organization administrator for assistance."
+                } else {
+                    "Your account status could not be verified. Please contact your organization administrator or sign in again."
+                }
+                return SessionRestorationResult.UnauthorizedAccount(currentUser, reason)
+            }
+
+            if (currentUser.authorizedWorkspaces().isEmpty()) {
+                return SessionRestorationResult.UnauthorizedAccount(
+                    user = currentUser,
+                    reason = "Your account does not currently have an authorized workspace or confirmed organization permissions."
+                )
+            }
+
+            if (requiresComplianceForUser(currentUser)) {
+                return SessionRestorationResult.ComplianceRequired(currentUser)
+            }
+
+            SessionRestorationResult.AuthorizedWorkspace(currentUser)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            // Never auto-wipe user database or crash-loop on storage/migration/startup errors
+            SessionRestorationResult.RecoverableError(
+                title = "Session Restoration Failed",
+                message = e.message ?: "Unable to verify your saved session right now. Retry or return to Login."
+            )
+        }
+    }
+
     override suspend fun resolveLaunchDestination(): LaunchDestination {
-        val currentUser = getApiUsersMe()
-        val onboardingCompleted = isOnboardingCompleted()
-        return when {
-            currentUser != null && onboardingCompleted -> LaunchDestination.DASHBOARD
-            currentUser != null && !onboardingCompleted -> LaunchDestination.COMPLIANCE_VERIFICATION
-            onboardingCompleted -> LaunchDestination.LOGIN
-            else -> LaunchDestination.WELCOME
+        return when (resolveSessionRestoration()) {
+            SessionRestorationResult.Welcome -> LaunchDestination.WELCOME
+            SessionRestorationResult.Login -> LaunchDestination.LOGIN
+            is SessionRestorationResult.ComplianceRequired -> LaunchDestination.COMPLIANCE_VERIFICATION
+            is SessionRestorationResult.AuthorizedWorkspace -> LaunchDestination.DASHBOARD
+            is SessionRestorationResult.UnauthorizedAccount -> LaunchDestination.LOGIN
+            is SessionRestorationResult.RecoverableError -> LaunchDestination.LOGIN
         }
     }
 

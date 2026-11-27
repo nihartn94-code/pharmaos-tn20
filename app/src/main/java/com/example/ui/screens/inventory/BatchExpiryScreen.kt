@@ -172,8 +172,8 @@ fun BatchExpiryContent(
                         )
                         Spacer(modifier = Modifier.width(10.dp))
                         Column {
-                            Text("Real-Time Inventory Dashboard", fontWeight = FontWeight.Bold, fontSize = 13.sp)
-                            Text("View live Room stock levels, out-of-stock & critical alerts", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Text("Real-Time Inventory Dashboard", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleSmall)
+                            Text("View live Room stock levels, out-of-stock & critical alerts", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                     }
                     Icon(

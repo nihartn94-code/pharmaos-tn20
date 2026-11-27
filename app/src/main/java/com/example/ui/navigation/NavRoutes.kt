@@ -6,6 +6,7 @@ object NavRoutes {
     const val LOGIN = "login"
     const val REGISTER = "register"
     const val COMPLIANCE_VERIFICATION = "compliance_verification"
+    const val ACCOUNT_AUTHORIZATION = "account_authorization"
     const val DASHBOARD = "dashboard"
     const val MEDICINE_CATALOGUE = "medicine_catalogue"
     const val MEDICINE_CATALOGUE_ROUTE = "medicine_catalogue?focus={focus}&manufacturer={manufacturer}&query={query}"

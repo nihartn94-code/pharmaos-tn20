@@ -100,7 +100,8 @@ import java.util.Locale
 fun ComplianceVerificationScreen(
     viewModel: ComplianceViewModel,
     onNavigateBack: () -> Unit,
-    onVerificationComplete: () -> Unit
+    onVerificationComplete: () -> Unit,
+    onReturnToLogin: () -> Unit = onNavigateBack
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
@@ -214,69 +215,110 @@ fun ComplianceVerificationScreen(
                 }
             }
 
-            // Step Content based on current step
-            when (uiState.currentStep) {
-                1 -> ComplianceOverviewStep(
-                    onGetStarted = { viewModel.goToStep(2) }
-                )
-                2 -> GstinVerificationStep(
-                    uiState = uiState,
-                    onGstinChange = { viewModel.setGstin(it) },
-                    onVerifyGstin = {
-                        viewModel.verifyGstin(onSuccess = {
-                            viewModel.goToStep(3)
-                        })
-                    },
-                    onScanQr = {
-                        viewModel.scanGstinDemo()
+            if (uiState.isSessionLoaded && uiState.currentUser == null) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 24.dp, vertical = 32.dp)
+                        .testTag("compliance_unauthenticated_state"),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(16.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Info,
+                        contentDescription = "Session required",
+                        tint = Color(0xFFDC2626),
+                        modifier = Modifier.size(48.dp)
+                    )
+                    Text(
+                        text = "Sign In Required",
+                        style = MaterialTheme.typography.headlineSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = Color(0xFF0F172A),
+                        textAlign = TextAlign.Center
+                    )
+                    Text(
+                        text = "Your account session is not active. Please sign in to submit compliance verification details.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = Color(0xFF475569),
+                        textAlign = TextAlign.Center
+                    )
+                    Button(
+                        onClick = onReturnToLogin,
+                        shape = RoundedCornerShape(24.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2563EB)),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(50.dp)
+                            .testTag("compliance_return_to_login_button")
+                    ) {
+                        Text("Return to Login", fontWeight = FontWeight.Bold)
                     }
-                )
-                3 -> DrugLicenseStep(
-                    uiState = uiState,
-                    onNumberChange = {
-                        viewModel.updateDrugLicenseDetails(
-                            number = it,
-                            issueDate = uiState.drugLicenseIssueDate,
-                            expiryDate = uiState.drugLicenseExpiryDate
-                        )
-                    },
-                    onPickIssueDate = { activeDatePickerTarget = "drug_issue" },
-                    onPickExpiryDate = { activeDatePickerTarget = "drug_expiry" },
-                    onUploadDocument = {
-                        drugLicensePickerLauncher.launch(
-                            PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo)
-                        )
-                    },
-                    onSaveAndContinue = {
-                        if (uiState.drugLicenseNumber.isBlank()) {
-                            viewModel.updateDrugLicenseDetails("20B/MH/104928", "01/01/2023", "31/12/2027")
+                }
+            } else {
+                // Step Content based on current step
+                when (uiState.currentStep) {
+                    1 -> ComplianceOverviewStep(
+                        onGetStarted = { viewModel.goToStep(2) }
+                    )
+                    2 -> GstinVerificationStep(
+                        uiState = uiState,
+                        onGstinChange = { viewModel.setGstin(it) },
+                        onVerifyGstin = {
+                            viewModel.verifyGstin(onSuccess = {
+                                viewModel.goToStep(3)
+                            })
+                        },
+                        onScanQr = {
+                            viewModel.scanGstinDemo()
                         }
-                        viewModel.goToStep(4)
-                    }
-                )
-                4 -> WhoGmpCertificateStep(
-                    uiState = uiState,
-                    onToggleApplicable = { viewModel.setWhoGmpApplicable(it) },
-                    onNumberChange = {
-                        viewModel.updateWhoGmpDetails(
-                            number = it,
-                            issueDate = uiState.whoGmpIssueDate,
-                            expiryDate = uiState.whoGmpExpiryDate
-                        )
-                    },
-                    onPickIssueDate = { activeDatePickerTarget = "gmp_issue" },
-                    onPickExpiryDate = { activeDatePickerTarget = "gmp_expiry" },
-                    onUploadDocument = {
-                        whoGmpPickerLauncher.launch(
-                            PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo)
-                        )
-                    },
-                    onSaveAndContinue = {
-                        viewModel.submitCompliance(
-                            onSuccess = { showSuccessDialog = true }
-                        )
-                    }
-                )
+                    )
+                    3 -> DrugLicenseStep(
+                        uiState = uiState,
+                        onNumberChange = {
+                            viewModel.updateDrugLicenseDetails(
+                                number = it,
+                                issueDate = uiState.drugLicenseIssueDate,
+                                expiryDate = uiState.drugLicenseExpiryDate
+                            )
+                        },
+                        onPickIssueDate = { activeDatePickerTarget = "drug_issue" },
+                        onPickExpiryDate = { activeDatePickerTarget = "drug_expiry" },
+                        onUploadDocument = {
+                            drugLicensePickerLauncher.launch(
+                                PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo)
+                            )
+                        },
+                        onSaveAndContinue = {
+                            viewModel.validateDrugLicenseStep {
+                                viewModel.goToStep(4)
+                            }
+                        }
+                    )
+                    4 -> WhoGmpCertificateStep(
+                        uiState = uiState,
+                        onToggleApplicable = { viewModel.setWhoGmpApplicable(it) },
+                        onNumberChange = {
+                            viewModel.updateWhoGmpDetails(
+                                number = it,
+                                issueDate = uiState.whoGmpIssueDate,
+                                expiryDate = uiState.whoGmpExpiryDate
+                            )
+                        },
+                        onPickIssueDate = { activeDatePickerTarget = "gmp_issue" },
+                        onPickExpiryDate = { activeDatePickerTarget = "gmp_expiry" },
+                        onUploadDocument = {
+                            whoGmpPickerLauncher.launch(
+                                PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo)
+                            )
+                        },
+                        onSaveAndContinue = {
+                            viewModel.submitCompliance(
+                                onSuccess = { showSuccessDialog = true }
+                            )
+                        }
+                    )
+                }
             }
         }
     }
@@ -364,11 +406,14 @@ fun ComplianceVerificationScreen(
             text = {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     Text(
-                        text = "Your business credentials, GSTIN, Drug License, and regulatory certificates have been recorded. Automated compliance validation is complete.",
-                        fontSize = 13.5.sp,
+                        text = if (uiState.isDemoModeEnabled) {
+                            "Your business credentials, GSTIN, Drug License, and regulatory certificates have been recorded for local workspace testing."
+                        } else {
+                            "Your business credentials, GSTIN, Drug License, and regulatory certificates have been submitted for backend verification."
+                        },
+                        style = MaterialTheme.typography.bodyMedium,
                         color = Color(0xFF64748B),
-                        textAlign = TextAlign.Center,
-                        lineHeight = 18.sp
+                        textAlign = TextAlign.Center
                     )
                     Spacer(modifier = Modifier.height(12.dp))
                     Surface(
@@ -376,23 +421,27 @@ fun ComplianceVerificationScreen(
                         color = Color(0xFFF1F5F9),
                         modifier = Modifier.fillMaxWidth()
                     ) {
-                        Column(modifier = Modifier.padding(10.dp)) {
+                        Column(
+                            modifier = Modifier.padding(10.dp),
+                            verticalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            val gstinBadge = if (uiState.isGstinVerified) "Verified" else "Submitted"
                             Text(
-                                text = "✓ GSTIN: ${uiState.gstin.ifBlank { "27AAACA1234F1Z5" }} (Verified)",
-                                fontSize = 12.sp,
+                                text = "✓ GSTIN: ${uiState.gstin} ($gstinBadge)",
+                                style = MaterialTheme.typography.bodySmall,
                                 fontWeight = FontWeight.SemiBold,
                                 color = Color(0xFF0F172A)
                             )
                             Text(
-                                text = "✓ Drug License: ${uiState.drugLicenseNumber.ifBlank { "20B/MH/104928" }}",
-                                fontSize = 12.sp,
+                                text = "✓ Drug License: ${uiState.drugLicenseNumber}",
+                                style = MaterialTheme.typography.bodySmall,
                                 fontWeight = FontWeight.SemiBold,
                                 color = Color(0xFF0F172A)
                             )
-                            if (uiState.isWhoGmpApplicable) {
+                            if (uiState.isWhoGmpApplicable && uiState.whoGmpCertificateNumber.isNotBlank()) {
                                 Text(
-                                    text = "✓ WHO-GMP: ${uiState.whoGmpCertificateNumber.ifBlank { "WHO-GMP/MH/2022/884" }}",
-                                    fontSize = 12.sp,
+                                    text = "✓ WHO-GMP: ${uiState.whoGmpCertificateNumber}",
+                                    style = MaterialTheme.typography.bodySmall,
                                     fontWeight = FontWeight.SemiBold,
                                     color = Color(0xFF0F172A)
                                 )
@@ -630,31 +679,56 @@ private fun GstinVerificationStep(
             }
         }
 
-        // Verified details preview if verified
-        if (uiState.isGstinVerified) {
+        // Verified or format-validated details preview
+        if (uiState.isGstinVerified || uiState.isGstinFormatValid) {
             Spacer(modifier = Modifier.height(12.dp))
             Surface(
                 shape = RoundedCornerShape(12.dp),
-                color = Color(0xFFF0FDF4),
-                border = BorderStroke(1.dp, Color(0xFF86EFAC)),
+                color = if (uiState.isGstinVerified) Color(0xFFF0FDF4) else Color(0xFFEFF6FF),
+                border = BorderStroke(1.dp, if (uiState.isGstinVerified) Color(0xFF86EFAC) else Color(0xFF93C5FD)),
                 modifier = Modifier.fillMaxWidth()
             ) {
-                Column(modifier = Modifier.padding(12.dp)) {
+                Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Default.CheckCircle, contentDescription = null, tint = Color(0xFF16A34A), modifier = Modifier.size(18.dp))
+                        Icon(
+                            imageVector = if (uiState.isGstinVerified) Icons.Default.CheckCircle else Icons.Default.Info,
+                            contentDescription = null,
+                            tint = if (uiState.isGstinVerified) Color(0xFF16A34A) else Color(0xFF2563EB),
+                            modifier = Modifier.size(18.dp)
+                        )
                         Spacer(modifier = Modifier.width(6.dp))
-                        Text("GSTIN Verified • Active Regular Taxpayer", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Color(0xFF15803D))
+                        Text(
+                            text = if (uiState.isGstinVerified) {
+                                "GSTIN Validated (Development Local Mode)"
+                            } else {
+                                "GSTIN Format Valid • Pending Backend Verification"
+                            },
+                            style = MaterialTheme.typography.labelLarge,
+                            fontWeight = FontWeight.Bold,
+                            color = if (uiState.isGstinVerified) Color(0xFF15803D) else Color(0xFF1D4ED8)
+                        )
                     }
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text("Legal Name: ${uiState.verifiedEntityName ?: "Apex Pharma Enterprises"}", fontSize = 12.sp, color = Color(0xFF166534))
-                    Text("State: ${uiState.verifiedState ?: "Maharashtra (Code 27)"}", fontSize = 11.5.sp, color = Color(0xFF166534))
+                    uiState.verifiedEntityName?.let { entityName ->
+                        Text(
+                            text = "Registered Entity: $entityName",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = if (uiState.isGstinVerified) Color(0xFF166534) else Color(0xFF1E3A8A)
+                        )
+                    }
+                    uiState.verifiedState?.let { stateLabel ->
+                        Text(
+                            text = "State: $stateLabel",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = if (uiState.isGstinVerified) Color(0xFF166534) else Color(0xFF1E3A8A)
+                        )
+                    }
                 }
             }
         }
 
         Spacer(modifier = Modifier.height(28.dp))
 
-        // Verify GSTIN Button
+        // Verify / Continue GSTIN Button
         Button(
             onClick = onVerifyGstin,
             enabled = !uiState.isVerifyingGstin,
@@ -671,8 +745,8 @@ private fun GstinVerificationStep(
             } else {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
-                        text = if (uiState.isGstinVerified) "Continue to Drug License" else "Verify GSTIN",
-                        fontSize = 15.sp,
+                        text = if (uiState.isGstinFormatValid) "Continue to Drug License" else "Validate GSTIN",
+                        style = MaterialTheme.typography.labelLarge,
                         fontWeight = FontWeight.Bold,
                         color = Color.White
                     )
@@ -682,45 +756,47 @@ private fun GstinVerificationStep(
             }
         }
 
-        Spacer(modifier = Modifier.height(18.dp))
+        if (uiState.isDemoModeEnabled) {
+            Spacer(modifier = Modifier.height(18.dp))
 
-        // "─── OR ───"
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            HorizontalDivider(modifier = Modifier.weight(1f), thickness = 1.dp, color = Color(0xFFE2E8F0))
-            Text(text = "  OR  ", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = Color(0xFF94A3B8))
-            HorizontalDivider(modifier = Modifier.weight(1f), thickness = 1.dp, color = Color(0xFFE2E8F0))
-        }
+            // "─── OR ───"
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                HorizontalDivider(modifier = Modifier.weight(1f), thickness = 1.dp, color = Color(0xFFE2E8F0))
+                Text(text = "  OR  ", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold, color = Color(0xFF94A3B8))
+                HorizontalDivider(modifier = Modifier.weight(1f), thickness = 1.dp, color = Color(0xFFE2E8F0))
+            }
 
-        Spacer(modifier = Modifier.height(18.dp))
+            Spacer(modifier = Modifier.height(18.dp))
 
-        // Scan GSTIN QR Button
-        OutlinedButton(
-            onClick = onScanQr,
-            shape = RoundedCornerShape(26.dp),
-            border = BorderStroke(1.dp, Color(0xFF2563EB)),
-            colors = ButtonDefaults.outlinedButtonColors(containerColor = Color.White),
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(50.dp)
-                .testTag("compliance_scan_qr_button")
-        ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(
-                    imageVector = Icons.Default.QrCodeScanner,
-                    contentDescription = null,
-                    tint = Color(0xFF2563EB),
-                    modifier = Modifier.size(18.dp)
-                )
-                Spacer(modifier = Modifier.width(8.dp))
-                Text(
-                    text = "Scan GSTIN QR",
-                    fontSize = 14.5.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    color = Color(0xFF2563EB)
-                )
+            // Development Local Mode Sample GSTIN Autofill Button
+            OutlinedButton(
+                onClick = onScanQr,
+                shape = RoundedCornerShape(26.dp),
+                border = BorderStroke(1.dp, Color(0xFF2563EB)),
+                colors = ButtonDefaults.outlinedButtonColors(containerColor = Color.White),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(50.dp)
+                    .testTag("compliance_scan_qr_button")
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        imageVector = Icons.Default.QrCodeScanner,
+                        contentDescription = null,
+                        tint = Color(0xFF2563EB),
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "Fill Sample GSTIN (Dev Mode)",
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = FontWeight.SemiBold,
+                        color = Color(0xFF2563EB)
+                    )
+                }
             }
         }
 
@@ -1260,7 +1336,11 @@ private fun DashedUploadBox(
                     Text(text = "browse", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = Color(0xFF2563EB))
                 }
                 Spacer(modifier = Modifier.height(2.dp))
-                Text(text = "PDF, JPG, PNG (Max 5MB)", fontSize = 11.sp, color = Color(0xFF94A3B8))
+                Text(
+                    text = "PDF, JPG, PNG (Max 5MB)",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Color(0xFF64748B)
+                )
             }
         }
     }

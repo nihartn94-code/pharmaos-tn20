@@ -29,6 +29,7 @@ import androidx.compose.material.icons.filled.VerifiedUser
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
@@ -145,9 +146,9 @@ fun WelcomeScreen(
                             }
                             Text(
                                 text = "CONNECT • TRADE • GROW",
-                                fontSize = 9.5.sp,
+                                style = MaterialTheme.typography.labelSmall,
                                 fontWeight = FontWeight.SemiBold,
-                                letterSpacing = 1.2.sp,
+                                letterSpacing = 1.sp,
                                 color = Color(0xFF64748B)
                             )
                         }

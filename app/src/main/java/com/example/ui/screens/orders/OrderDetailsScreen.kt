@@ -568,7 +568,7 @@ private fun TaxInvoiceSection(
                                 invoice.isBackendAuthoritative -> "Backend Verified"
                                 else -> "Eligible"
                             },
-                            fontSize = 11.sp,
+                            style = MaterialTheme.typography.labelSmall,
                             fontWeight = FontWeight.Bold,
                             color = if (invoice.isEligible) Color(0xFF15803D) else Color(0xFF475569),
                             modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
@@ -725,7 +725,7 @@ private fun TaxInvoiceSection(
                                 Spacer(modifier = Modifier.width(8.dp))
                                 Text(
                                     text = "Missing billing details (not fabricated): ${invoice.missingFields.joinToString(", ")}",
-                                    fontSize = 11.sp,
+                                    style = MaterialTheme.typography.bodySmall,
                                     color = Color(0xFF92400E)
                                 )
                             }
@@ -736,7 +736,7 @@ private fun TaxInvoiceSection(
                         Spacer(modifier = Modifier.height(8.dp))
                         Text(
                             text = "Downloaded: $lastSavedPath",
-                            fontSize = 11.sp,
+                            style = MaterialTheme.typography.bodySmall,
                             color = Color(0xFF15803D),
                             fontWeight = FontWeight.Medium
                         )

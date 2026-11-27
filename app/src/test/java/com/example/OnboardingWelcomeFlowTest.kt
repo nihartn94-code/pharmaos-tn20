@@ -114,16 +114,15 @@ class OnboardingWelcomeFlowTest {
 
     @Test
     fun firstTimeRegistration_adminSetupCompleted_persistsAndRoutesToDashboardOnRestart() = runBlocking {
-        // First registered user becomes Master Admin and completes initial setup immediately
-        val adminRes = repository.postApiAuthRegister(
+        // Explicit Admin provisioning (separate from ordinary B2B self-registration) completes setup
+        val adminRes = repository.provisionAdminAccountForDev(
             fullName = "Asha Patel",
             businessName = "Asha Pharma Admin",
             email = "asha.admin@pharmaos.com",
             phone = "9876500001",
             gstin = "27AAAAA0000A1Z5",
             address = "Mumbai, MH",
-            password = "Password@123",
-            role = UserRole.ADMIN
+            password = "Password@123"
         )
         assertTrue(adminRes.isSuccess)
         assertTrue(repository.isOnboardingCompleted())
@@ -138,20 +137,7 @@ class OnboardingWelcomeFlowTest {
 
     @Test
     fun nonAdminRegistration_completesSetupAtCompliance_andNeverRedirectsToWelcome() = runBlocking {
-        // Seed an admin first so second registration keeps STOCKIST role
-        repository.postApiAuthRegister(
-            fullName = "Master Admin",
-            businessName = "PharmaOS HQ",
-            email = "admin@pharmaos.com",
-            phone = "9876500000",
-            gstin = "27AAAAA0000A1Z5",
-            address = "Mumbai",
-            password = "Password@123",
-            role = UserRole.ADMIN
-        )
-        // Simulate fresh non-admin user before onboarding completion
-        repository.logout()
-        repository.setOnboardingCompleted(false)
+        // Fresh installation before onboarding completion starts at Welcome
         assertEquals(LaunchDestination.WELCOME, repository.resolveLaunchDestination())
 
         // Non-admin registers -> pending compliance verification
@@ -195,16 +181,15 @@ class OnboardingWelcomeFlowTest {
 
     @Test
     fun logout_preservesOnboardingStatus_andRoutesToLoginThenDashboardOnReturningUser() = runBlocking {
-        // Complete setup & login
-        repository.postApiAuthRegister(
+        // Complete setup & login via explicitly provisioned Admin account
+        repository.provisionAdminAccountForDev(
             fullName = "Asha Patel",
             businessName = "Asha Pharma Admin",
             email = "returning@pharmaos.com",
             phone = "9876500003",
             gstin = "27AAAAA0000A1Z5",
             address = "Mumbai",
-            password = "Password@123",
-            role = UserRole.ADMIN
+            password = "Password@123"
         )
         assertTrue(repository.isOnboardingCompleted())
         assertEquals(LaunchDestination.DASHBOARD, repository.resolveLaunchDestination())
@@ -287,5 +272,56 @@ class OnboardingWelcomeFlowTest {
         composeTestRule.onNodeWithText("Track Your Orders").performScrollTo()
         composeTestRule.onNodeWithText("Top Deals").assertIsDisplayed()
         composeTestRule.onNodeWithTag("dashboard_deal_paracetamol").performScrollTo().assertIsDisplayed()
+    }
+
+    @Test
+    fun stockistLogin_localDevCredentialsPhoneFormatsAndGoogleSignIn_succeedWithAuthorizedWorkspace() = runBlocking {
+        // 1. Default Stockist autofill credentials (stockist@pharmaos.com + Password@123) succeed even on a fresh DB
+        val autofillLogin = repository.postApiAuthLogin(
+            email = "stockist@pharmaos.com",
+            password = "Password@123",
+            expectedRole = UserRole.STOCKIST
+        )
+        assertTrue("Expected Stockist autofill login to succeed, got: ${autofillLogin.exceptionOrNull()}", autofillLogin.isSuccess)
+        val stockistUser = autofillLogin.getOrThrow()
+        assertEquals(UserRole.STOCKIST, stockistUser.role)
+        assertTrue(stockistUser.authorizedWorkspaces().contains(com.example.domain.model.WorkspaceType.STOCKIST))
+
+        // 2. Both 10-digit phone and +91 prefixed phone match the Stockist account
+        val tenDigitPhoneLogin = repository.postApiAuthLogin(
+            email = "9876543210",
+            password = "Password@123",
+            expectedRole = UserRole.STOCKIST
+        )
+        assertTrue("Expected 10-digit phone Stockist login to succeed", tenDigitPhoneLogin.isSuccess)
+
+        val prefixedPhoneLogin = repository.postApiAuthLogin(
+            email = "+919876543210",
+            password = "Password@123",
+            expectedRole = UserRole.STOCKIST
+        )
+        assertTrue("Expected +91 phone Stockist login to succeed", prefixedPhoneLogin.isSuccess)
+
+        // 3. Unknown email on Stockist tab returns clear "No account registered" error instead of password mismatch
+        val unknownLogin = repository.postApiAuthLogin(
+            email = "unregistered.buyer@example.com",
+            password = "Password@123",
+            expectedRole = UserRole.STOCKIST
+        )
+        assertTrue(unknownLogin.isFailure)
+        assertTrue(
+            unknownLogin.exceptionOrNull()?.message?.contains("No account registered", ignoreCase = true) == true
+        )
+
+        // 4. Google sign-in as Stockist preserves STOCKIST role and authorizes STOCKIST workspace
+        val googleRes = repository.postApiAuthGoogle(
+            email = "fresh.stockist@gmail.com",
+            displayName = "Fresh Stockist",
+            role = UserRole.STOCKIST
+        )
+        assertTrue(googleRes.isSuccess)
+        val googleUser = googleRes.getOrThrow()
+        assertEquals(UserRole.STOCKIST, googleUser.role)
+        assertTrue(googleUser.authorizedWorkspaces().contains(com.example.domain.model.WorkspaceType.STOCKIST))
     }
 }

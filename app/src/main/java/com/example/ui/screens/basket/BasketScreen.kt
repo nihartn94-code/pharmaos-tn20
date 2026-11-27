@@ -174,7 +174,10 @@ fun BasketScreen(
                                     .align(Alignment.TopEnd)
                                     .padding(top = 4.dp, end = 4.dp)
                             ) {
-                                Text("${uiState.savedBaskets.size}", fontSize = 9.sp)
+                                Text(
+                                    text = "${uiState.savedBaskets.size}",
+                                    style = MaterialTheme.typography.labelSmall
+                                )
                             }
                         }
                     }

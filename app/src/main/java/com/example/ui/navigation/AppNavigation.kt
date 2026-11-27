@@ -1,21 +1,43 @@
 package com.example.ui.navigation
 
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ErrorOutline
+import androidx.compose.material.icons.filled.GppMaybe
 import androidx.compose.material.icons.filled.Medication
+import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
 import android.widget.Toast
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -27,7 +49,8 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.example.PharmaApplication
-import com.example.domain.repository.LaunchDestination
+import com.example.domain.model.AuthUser
+import com.example.domain.repository.SessionRestorationResult
 import com.example.ui.PharmaViewModelFactory
 import com.example.ui.screens.auth.AuthViewModel
 import com.example.ui.screens.auth.LoginScreen
@@ -104,13 +127,13 @@ fun AppNavigation() {
     val navController = rememberNavController()
     val coroutineScope = rememberCoroutineScope()
 
-    suspend fun resolveAuthorizedRootRoute(): String {
-        val user = app.repository.getApiUsersMeFlow().firstOrNull()
+    suspend fun resolveAuthorizedRootRoute(preferredUser: AuthUser? = null): String {
+        val user = preferredUser ?: app.repository.getApiUsersMeFlow().firstOrNull()
         if (user == null) return NavRoutes.LOGIN
         val authorized = user.authorizedWorkspaces()
         if (authorized.isEmpty()) {
-            // Fail closed: never route an unconfirmed, suspended, or unauthorized account into a workspace
-            return NavRoutes.LOGIN
+            // Fail closed: show dedicated account authorization screen instead of bouncing or entering unauthorized workspace
+            return NavRoutes.ACCOUNT_AUTHORIZATION
         }
         val savedWorkspace = app.workspaceRepository.getActiveWorkspaceFlow().firstOrNull()
         val effectiveWorkspace = if (savedWorkspace != null && authorized.contains(savedWorkspace)) {
@@ -121,9 +144,9 @@ fun AppNavigation() {
         return NavRoutes.rootRouteForWorkspace(effectiveWorkspace)
     }
 
-    fun navigateToAuthorizedRoot() {
+    fun navigateToAuthorizedRoot(preferredUser: AuthUser? = null) {
         coroutineScope.launch {
-            val target = resolveAuthorizedRootRoute()
+            val target = resolveAuthorizedRootRoute(preferredUser)
             navController.navigate(target) {
                 popUpTo(0) { inclusive = true }
                 launchSingleTop = true
@@ -135,6 +158,7 @@ fun AppNavigation() {
         coroutineScope.launch {
             runCatching {
                 val previousUser = app.repository.getApiUsersMeFlow().firstOrNull()
+                app.repository.logout()
                 app.workspaceRepository.clearSensitiveLocalSessionCaches(previousUser = previousUser)
             }
             navController.navigate(NavRoutes.LOGIN) {
@@ -166,16 +190,24 @@ fun AppNavigation() {
         }
     }
 
-    // Foreground resume lifecycle sync: refresh banner clock + re-validate /api/v1/auth/context + active workspace
+    // Foreground resume lifecycle sync: skip auth/splash routes so it never races initial session restoration
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
-                coroutineScope.launch {
-                    app.workspaceRepository.refreshBannerClock()
-                    val currentUser = app.repository.getApiUsersMeFlow().firstOrNull()
-                    if (currentUser != null) {
-                        runCatching { app.workspaceRepository.syncActiveWorkspace() }
+                val currentRoute = navController.currentBackStackEntry?.destination?.route
+                val isAuthOrStartupRoute = currentRoute == null ||
+                    currentRoute == NavRoutes.SPLASH ||
+                    currentRoute == NavRoutes.WELCOME ||
+                    currentRoute == NavRoutes.LOGIN ||
+                    currentRoute == NavRoutes.REGISTER
+                if (!isAuthOrStartupRoute) {
+                    coroutineScope.launch {
+                        runCatching { app.workspaceRepository.refreshBannerClock() }
+                        val currentUser = runCatching { app.repository.getApiUsersMeFlow().firstOrNull() }.getOrNull()
+                        if (currentUser != null && currentUser.authorizedWorkspaces().isNotEmpty()) {
+                            runCatching { app.workspaceRepository.syncActiveWorkspace() }
+                        }
                     }
                 }
             }
@@ -190,36 +222,138 @@ fun AppNavigation() {
         navController = navController,
         startDestination = NavRoutes.SPLASH
     ) {
-        // Splash
+        // Splash & Safe Session Restoration (never auto-wipes database or crash-loops)
         composable(NavRoutes.SPLASH) {
-            LaunchedEffect(Unit) {
-                val targetRoute = when (app.repository.resolveLaunchDestination()) {
-                    LaunchDestination.DASHBOARD -> {
-                        runCatching { app.workspaceRepository.syncActiveWorkspace() }
-                        resolveAuthorizedRootRoute()
-                    }
-                    LaunchDestination.COMPLIANCE_VERIFICATION -> NavRoutes.COMPLIANCE_VERIFICATION
-                    LaunchDestination.LOGIN -> NavRoutes.LOGIN
-                    LaunchDestination.WELCOME -> NavRoutes.WELCOME
+            var retryTrigger by remember { mutableIntStateOf(0) }
+            var recoverableError by remember { mutableStateOf<SessionRestorationResult.RecoverableError?>(null) }
+
+            LaunchedEffect(retryTrigger) {
+                recoverableError = null
+                val restorationResult = try {
+                    app.repository.resolveSessionRestoration()
+                } catch (ce: kotlinx.coroutines.CancellationException) {
+                    throw ce
+                } catch (err: Throwable) {
+                    SessionRestorationResult.RecoverableError(
+                        title = "Unable to Restore Session",
+                        message = err.message ?: "PharmaOS encountered a startup error while restoring your session."
+                    )
                 }
-                navController.navigate(targetRoute) {
-                    popUpTo(NavRoutes.SPLASH) { inclusive = true }
+
+                when (restorationResult) {
+                    is SessionRestorationResult.Welcome -> {
+                        navController.navigate(NavRoutes.WELCOME) {
+                            popUpTo(NavRoutes.SPLASH) { inclusive = true }
+                            launchSingleTop = true
+                        }
+                    }
+                    is SessionRestorationResult.Login -> {
+                        navController.navigate(NavRoutes.LOGIN) {
+                            popUpTo(NavRoutes.SPLASH) { inclusive = true }
+                            launchSingleTop = true
+                        }
+                    }
+                    is SessionRestorationResult.ComplianceRequired -> {
+                        navController.navigate(NavRoutes.COMPLIANCE_VERIFICATION) {
+                            popUpTo(NavRoutes.SPLASH) { inclusive = true }
+                            launchSingleTop = true
+                        }
+                    }
+                    is SessionRestorationResult.UnauthorizedAccount -> {
+                        navController.navigate(NavRoutes.ACCOUNT_AUTHORIZATION) {
+                            popUpTo(NavRoutes.SPLASH) { inclusive = true }
+                            launchSingleTop = true
+                        }
+                    }
+                    is SessionRestorationResult.AuthorizedWorkspace -> {
+                        runCatching { app.workspaceRepository.syncActiveWorkspace() }
+                        val latestUser = runCatching { app.repository.getApiUsersMe() }.getOrNull() ?: restorationResult.user
+                        val targetRoute = if (latestUser.authorizedWorkspaces().isEmpty()) {
+                            NavRoutes.ACCOUNT_AUTHORIZATION
+                        } else if (app.repository.requiresComplianceForUser(latestUser)) {
+                            NavRoutes.COMPLIANCE_VERIFICATION
+                        } else {
+                            resolveAuthorizedRootRoute(latestUser)
+                        }
+                        navController.navigate(targetRoute) {
+                            popUpTo(NavRoutes.SPLASH) { inclusive = true }
+                            launchSingleTop = true
+                        }
+                    }
+                    is SessionRestorationResult.RecoverableError -> {
+                        recoverableError = restorationResult
+                    }
                 }
             }
-            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
+
+            val currentError = recoverableError
+            if (currentError != null) {
+                StartupSessionRecoveryScreen(
+                    title = currentError.title,
+                    message = currentError.message,
+                    onRetry = { retryTrigger++ },
+                    onReturnToLogin = { performFullLogout() }
+                )
+            } else {
+                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
+                }
             }
         }
 
-        // First-time Welcome Screen (shown only before initial account setup is completed)
+        // Dedicated Account Authorization Screen (shown when authenticated user has no authorized workspaces)
+        composable(NavRoutes.ACCOUNT_AUTHORIZATION) {
+            var currentUser by remember { mutableStateOf<AuthUser?>(null) }
+            var isChecking by remember { mutableStateOf(false) }
+
+            LaunchedEffect(Unit) {
+                currentUser = runCatching { app.repository.getApiUsersMe() }.getOrNull()
+            }
+
+            AccountAuthorizationRequiredScreen(
+                user = currentUser,
+                isChecking = isChecking,
+                onRetryVerification = {
+                    coroutineScope.launch {
+                        isChecking = true
+                        runCatching { app.workspaceRepository.syncActiveWorkspace() }
+                        val refreshed = runCatching { app.repository.getApiUsersMe() }.getOrNull()
+                        currentUser = refreshed
+                        isChecking = false
+                        if (refreshed != null && refreshed.authorizedWorkspaces().isNotEmpty()) {
+                            val target = if (app.repository.requiresComplianceForUser(refreshed)) {
+                                NavRoutes.COMPLIANCE_VERIFICATION
+                            } else {
+                                resolveAuthorizedRootRoute(refreshed)
+                            }
+                            navController.navigate(target) {
+                                popUpTo(0) { inclusive = true }
+                                launchSingleTop = true
+                            }
+                        } else {
+                            Toast.makeText(
+                                context,
+                                "Workspace permissions are still pending confirmation for this account.",
+                                Toast.LENGTH_LONG
+                            ).show()
+                        }
+                    }
+                },
+                onSignOut = { performFullLogout() }
+            )
+        }
+
+        // First-time Welcome Screen (shown only before initial installation welcome is completed)
         composable(NavRoutes.WELCOME) {
             WelcomeScreen(
                 onGetStarted = {
+                    coroutineScope.launch { runCatching { app.repository.setWelcomeCompleted(true) } }
                     navController.navigate(NavRoutes.REGISTER) {
                         launchSingleTop = true
                     }
                 },
                 onSignIn = {
+                    coroutineScope.launch { runCatching { app.repository.setWelcomeCompleted(true) } }
                     navController.navigate(NavRoutes.LOGIN) {
                         launchSingleTop = true
                     }
@@ -239,9 +373,47 @@ fun AppNavigation() {
                 },
                 onLoginSuccess = {
                     coroutineScope.launch {
-                        runCatching { app.workspaceRepository.syncActiveWorkspace() }
+                        val preSyncUser = app.repository.getApiUsersMeFlow().firstOrNull()
+                        com.example.ui.screens.auth.LoginDiagnosticLogger.shared.recordWorkspaceSyncStarted(
+                            user = preSyncUser
+                        )
+                        val syncRes = runCatching { app.workspaceRepository.syncActiveWorkspace() }
+                        syncRes.exceptionOrNull()?.let { syncErr ->
+                            com.example.ui.screens.auth.LoginDiagnosticLogger.shared.recordWorkspaceSyncFailure(
+                                targetRole = preSyncUser?.role ?: com.example.domain.model.UserRole.STOCKIST,
+                                throwable = syncErr
+                            )
+                        }
+                        syncRes.getOrNull()?.exceptionOrNull()?.let { innerErr ->
+                            com.example.ui.screens.auth.LoginDiagnosticLogger.shared.recordWorkspaceSyncFailure(
+                                targetRole = preSyncUser?.role ?: com.example.domain.model.UserRole.STOCKIST,
+                                throwable = innerErr
+                            )
+                        }
+                        val postSyncUser = app.repository.getApiUsersMeFlow().firstOrNull()
+                        val target = when {
+                            postSyncUser == null -> NavRoutes.LOGIN
+                            postSyncUser.authorizedWorkspaces().isEmpty() -> NavRoutes.ACCOUNT_AUTHORIZATION
+                            app.repository.requiresComplianceForUser(postSyncUser) -> NavRoutes.COMPLIANCE_VERIFICATION
+                            else -> resolveAuthorizedRootRoute(postSyncUser)
+                        }
+                        com.example.ui.screens.auth.LoginDiagnosticLogger.shared.recordWorkspaceRouteResolved(
+                            user = postSyncUser,
+                            routedDestination = target
+                        )
+                        if (target == NavRoutes.LOGIN) {
+                            Toast.makeText(
+                                context,
+                                "Unable to verify session for this account. Check Login Diagnostics or try again.",
+                                Toast.LENGTH_LONG
+                            ).show()
+                        } else {
+                            navController.navigate(target) {
+                                popUpTo(0) { inclusive = true }
+                                launchSingleTop = true
+                            }
+                        }
                     }
-                    navigateToAuthorizedRoot()
                 }
             )
         }
@@ -256,12 +428,20 @@ fun AppNavigation() {
                         launchSingleTop = true
                     }
                 },
-                onRegisterSuccess = { role ->
-                    if (role == com.example.domain.model.UserRole.ADMIN) {
-                        navigateToAuthorizedRoot()
-                    } else {
-                        navController.navigate(NavRoutes.COMPLIANCE_VERIFICATION) {
+                onRegisterSuccess = { registeredUser ->
+                    coroutineScope.launch {
+                        val confirmedUser = runCatching { app.repository.getApiUsersMe() }.getOrNull() ?: registeredUser
+                        val target = when {
+                            confirmedUser.authorizedWorkspaces().isEmpty() -> NavRoutes.ACCOUNT_AUTHORIZATION
+                            app.repository.requiresComplianceForUser(confirmedUser) -> NavRoutes.COMPLIANCE_VERIFICATION
+                            else -> {
+                                runCatching { app.workspaceRepository.syncActiveWorkspace() }
+                                resolveAuthorizedRootRoute(confirmedUser)
+                            }
+                        }
+                        navController.navigate(target) {
                             popUpTo(0) { inclusive = true }
+                            launchSingleTop = true
                         }
                     }
                 }
@@ -276,12 +456,21 @@ fun AppNavigation() {
                     if (navController.previousBackStackEntry != null) {
                         navController.popBackStack()
                     } else {
-                        navigateToAuthorizedRoot()
+                        performFullLogout()
                     }
                 },
                 onVerificationComplete = {
-                    navigateToAuthorizedRoot()
-                }
+                    coroutineScope.launch {
+                        runCatching { app.workspaceRepository.syncActiveWorkspace() }
+                        val latestUser = runCatching { app.repository.getApiUsersMe() }.getOrNull()
+                        val target = resolveAuthorizedRootRoute(latestUser)
+                        navController.navigate(target) {
+                            popUpTo(0) { inclusive = true }
+                            launchSingleTop = true
+                        }
+                    }
+                },
+                onReturnToLogin = { performFullLogout() }
             )
         }
 

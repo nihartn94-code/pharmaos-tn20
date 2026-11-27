@@ -847,8 +847,8 @@ fun CatalogueProductCard(
                         val mrpVal = product.minMrp ?: (ptrVal * 1.15)
                         Text(
                             text = "₹${String.format(Locale.US, "%.2f", mrpVal)}",
+                            style = MaterialTheme.typography.bodySmall,
                             color = Color(0xFF94A3B8),
-                            fontSize = 11.5.sp,
                             textDecoration = TextDecoration.LineThrough
                         )
                     }
